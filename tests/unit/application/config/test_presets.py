@@ -31,7 +31,6 @@ class TestConfigPreset:
         """All optional fields should default to None."""
         preset = ConfigPreset(name="test")
         assert preset.search_limit is None
-        assert preset.enable_hybrid_search is None
         assert preset.search_score_threshold is None
         assert preset.fusion_rrf_k is None
         assert preset.overfetch_multiplier is None
@@ -51,7 +50,6 @@ class TestConfigPreset:
         preset = ConfigPreset(
             name="custom",
             search_limit=10,
-            enable_hybrid_search=True,
             search_score_threshold=0.5,
             fusion_rrf_k=60,
             overfetch_multiplier=3,
@@ -68,7 +66,6 @@ class TestConfigPreset:
         )
         assert preset.name == "custom"
         assert preset.search_limit == 10
-        assert preset.enable_hybrid_search is True
         assert preset.search_score_threshold == 0.5
         assert preset.fusion_rrf_k == 60
         assert preset.overfetch_multiplier == 3
@@ -97,7 +94,6 @@ class TestPresetConstants:
         """SIMPLE_PRESET should have low-resource settings."""
         assert SIMPLE_PRESET.name == "simple"
         assert SIMPLE_PRESET.search_limit == 3
-        assert SIMPLE_PRESET.enable_hybrid_search is False
         assert SIMPLE_PRESET.reranker_engine == "none"
         assert SIMPLE_PRESET.enable_recency_boost is False
         assert SIMPLE_PRESET.enable_smart_replace is False
@@ -110,8 +106,6 @@ class TestPresetConstants:
     def test_balanced_preset_all_none(self):
         """BALANCED_PRESET should leave all optional fields as None."""
         assert BALANCED_PRESET.name == "balanced"
-        assert BALANCED_PRESET.enable_hybrid_search is True
-        # All others should be None (defer to defaults)
         assert BALANCED_PRESET.search_limit is None
         assert BALANCED_PRESET.search_score_threshold is None
         assert BALANCED_PRESET.fusion_rrf_k is None
@@ -131,7 +125,6 @@ class TestPresetConstants:
         """PERFORMANCE_PRESET should favor speed."""
         assert PERFORMANCE_PRESET.name == "performance"
         assert PERFORMANCE_PRESET.search_limit == 10
-        assert PERFORMANCE_PRESET.enable_hybrid_search is True
         assert PERFORMANCE_PRESET.search_score_threshold == 0.3
         assert PERFORMANCE_PRESET.fusion_rrf_k == 40
         assert PERFORMANCE_PRESET.overfetch_multiplier == 2
@@ -148,7 +141,6 @@ class TestPresetConstants:
         """QUALITY_PRESET should favor accuracy."""
         assert QUALITY_PRESET.name == "quality"
         assert QUALITY_PRESET.search_limit == 5
-        assert QUALITY_PRESET.enable_hybrid_search is True
         assert QUALITY_PRESET.search_score_threshold == 0.7
         assert QUALITY_PRESET.fusion_rrf_k == 80
         assert QUALITY_PRESET.overfetch_multiplier == 5
@@ -245,7 +237,6 @@ class TestApplyPresetToEnv:
         """Remove preset-related env vars before each test."""
         env_keys = [
             "SEARCH_LIMIT",
-            "ENABLE_HYBRID_SEARCH",
             "SEARCH_SCORE_THRESHOLD",
             "FUSION_RRF_K",
             "OVERFETCH_MULTIPLIER",
@@ -268,7 +259,6 @@ class TestApplyPresetToEnv:
         apply_preset_to_env(SIMPLE_PRESET)
 
         assert os.environ["SEARCH_LIMIT"] == "3"
-        assert os.environ["ENABLE_HYBRID_SEARCH"] == "false"
         assert os.environ["RERANKER_ENGINE"] == "none"
         assert os.environ["ENABLE_RECENCY_BOOST"] == "false"
         assert os.environ["ENABLE_SMART_REPLACE"] == "false"
@@ -289,12 +279,9 @@ class TestApplyPresetToEnv:
         assert "RECENCY_DECAY_RATE" not in os.environ
         assert "SMART_REPLACE_THRESHOLD" not in os.environ
 
-    def test_balanced_preset_only_sets_hybrid_search(self):
-        """BALANCED_PRESET has only enable_hybrid_search=True; rest are None."""
+    def test_balanced_preset_sets_nothing(self):
         apply_preset_to_env(BALANCED_PRESET)
 
-        assert os.environ["ENABLE_HYBRID_SEARCH"] == "true"
-        # Everything else should remain unset
         assert "SEARCH_LIMIT" not in os.environ
         assert "SEARCH_SCORE_THRESHOLD" not in os.environ
         assert "FUSION_RRF_K" not in os.environ
@@ -315,7 +302,6 @@ class TestApplyPresetToEnv:
         apply_preset_to_env(PERFORMANCE_PRESET)
 
         assert os.environ["SEARCH_LIMIT"] == "10"
-        assert os.environ["ENABLE_HYBRID_SEARCH"] == "true"
         assert os.environ["SEARCH_SCORE_THRESHOLD"] == "0.3"
         assert os.environ["FUSION_RRF_K"] == "40"
         assert os.environ["OVERFETCH_MULTIPLIER"] == "2"
@@ -333,7 +319,6 @@ class TestApplyPresetToEnv:
         apply_preset_to_env(QUALITY_PRESET)
 
         assert os.environ["SEARCH_LIMIT"] == "5"
-        assert os.environ["ENABLE_HYBRID_SEARCH"] == "true"
         assert os.environ["SEARCH_SCORE_THRESHOLD"] == "0.7"
         assert os.environ["FUSION_RRF_K"] == "80"
         assert os.environ["OVERFETCH_MULTIPLIER"] == "5"
@@ -364,7 +349,6 @@ class TestApplyPresetToEnv:
         apply_preset_to_env(preset)
 
         assert "SEARCH_LIMIT" not in os.environ
-        assert "ENABLE_HYBRID_SEARCH" not in os.environ
         assert "SEARCH_SCORE_THRESHOLD" not in os.environ
         assert "FUSION_RRF_K" not in os.environ
         assert "OVERFETCH_MULTIPLIER" not in os.environ
