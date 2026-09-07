@@ -7,7 +7,6 @@ files to prove convergence to one active replacement plus an audit row.
 
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import replace
 import tempfile
 from unittest.mock import patch
 
@@ -42,13 +41,13 @@ def _replacement() -> ReplacementInfo:
     )
 
 
-def _config(tmpdir: str, hybrid: bool) -> Config:
-    return replace(create_usearch_config(tmpdir), enable_hybrid_search=hybrid)
+def _config(tmpdir: str) -> Config:
+    return create_usearch_config(tmpdir)
 
 
 @contextmanager
-def _manager(tmpdir: str, *, hybrid: bool = True) -> Generator[MemoryManager]:
-    manager, _logger = create_memory_manager(_config(tmpdir, hybrid))
+def _manager(tmpdir: str) -> Generator[MemoryManager]:
+    manager, _logger = create_memory_manager(_config(tmpdir))
     try:
         yield manager
     finally:
@@ -221,10 +220,8 @@ def _crash_after_complete(_manager: MemoryManager) -> Generator[None]:
 async def _crash_and_reopen(
     tmpdir: str,
     inject: Injector,
-    *,
-    hybrid: bool = True,
 ) -> None:
-    config = _config(tmpdir, hybrid)
+    config = _config(tmpdir)
     first, _ = create_memory_manager(config)
     try:
         assert first.add_memories([OLD]) == 1
@@ -301,26 +298,6 @@ class TestReplacementRecoveryIntegration:
         with tempfile.TemporaryDirectory() as tmpdir:
             await _crash_and_reopen(tmpdir, _crash_after_complete)
 
-    async def test_disabled_hybrid_crash_after_transition(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            await _crash_and_reopen(tmpdir, _crash_after_transition, hybrid=False)
-
-    async def test_disabled_hybrid_crash_after_insert(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            await _crash_and_reopen(tmpdir, _crash_after_insert, hybrid=False)
-
-    async def test_disabled_hybrid_crash_before_usearch_save(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            await _crash_and_reopen(tmpdir, _crash_before_usearch_save, hybrid=False)
-
-    async def test_disabled_hybrid_normal_replacement(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _manager(tmpdir, hybrid=False) as manager:
-                assert manager._tantivy_engine is None
-                assert manager.add_memories([OLD]) == 1
-                await _replace(manager)
-                _assert_converged(manager)
-
     async def test_live_reconcile_after_failed_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             with _manager(tmpdir) as manager:
@@ -339,7 +316,7 @@ class TestReplacementRecoveryIntegration:
         old_a = "Convention A is stale"
         old_b = "Convention B is stale"
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = _config(tmpdir, True)
+            config = _config(tmpdir)
             first, _ = create_memory_manager(config)
             try:
                 assert first.add_memories([old_a, old_b]) == 2
