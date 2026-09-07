@@ -50,7 +50,6 @@ def create_test_config(workspace_id: str = "test-thread-safety") -> Config:
         embedding_model="mock-model",
         embedding_dims=128,
         qwen_embedding_dims=128,
-        enable_hybrid_search=False,  # Disable for simpler tests
         search_limit=5,
         deduplicate_memories=True,
         enable_llm_infer=False,
