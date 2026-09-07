@@ -122,7 +122,6 @@ class EmbeddingConfigDict(TypedDict):
 class SearchConfigDict(TypedDict):
     search_limit: int
     remove_search_limit: int
-    enable_hybrid_search: bool
     tantivy_index_path_template: str
     overfetch_multiplier: int
     overfetch_adaptive: bool
@@ -260,7 +259,6 @@ class Config:
     remove_search_limit: int = 5
 
     # Hybrid search settings
-    enable_hybrid_search: bool = True
     tantivy_index_path_template: str = "indexes/{workspace_id}/tantivy"
     overfetch_multiplier: int = 3  # Base multiplier (Fetch N * search_limit)
     overfetch_adaptive: bool = True  # Enable adaptive overfetch based on index size
@@ -434,10 +432,6 @@ class Config:
             "remove_search_limit": _parse_env_int(
                 "REMOVE_SEARCH_LIMIT", "5", minimum=1
             ),
-            "enable_hybrid_search": os.environ.get(
-                "ENABLE_HYBRID_SEARCH", "true"
-            ).lower()
-            == "true",
             "tantivy_index_path_template": "indexes/{workspace_id}/tantivy",
             "overfetch_multiplier": _parse_env_int(
                 "OVERFETCH_MULTIPLIER", "3", minimum=1

@@ -102,7 +102,6 @@ class TestConfigDefaults:
         cfg = self._make_config()
         assert cfg.search_limit == 5
         assert cfg.remove_search_limit == 5
-        assert cfg.enable_hybrid_search is True
         assert cfg.overfetch_multiplier == 3
         assert cfg.overfetch_adaptive is True
         assert cfg.overfetch_min_multiplier == 1.5
@@ -388,10 +387,6 @@ class TestFromEnvironmentOverrides:
     def test_remove_search_limit_override(self, monkeypatch: pytest.MonkeyPatch):
         cfg = self._with_env(monkeypatch, REMOVE_SEARCH_LIMIT="20")
         assert cfg.remove_search_limit == 20
-
-    def test_enable_hybrid_search_false(self, monkeypatch: pytest.MonkeyPatch):
-        cfg = self._with_env(monkeypatch, ENABLE_HYBRID_SEARCH="false")
-        assert cfg.enable_hybrid_search is False
 
     def test_overfetch_multiplier_clamped(self, monkeypatch: pytest.MonkeyPatch):
         with pytest.raises(ConfigurationError, match="OVERFETCH_MULTIPLIER"):
@@ -827,8 +822,6 @@ class TestPresetIntegration:
             monkeypatch.setenv(k, v)
         monkeypatch.setenv("REFLECTLOG_PROFILE", "simple")
         cfg = Config.from_environment()
-        # Simple preset disables hybrid search
-        assert cfg.enable_hybrid_search is False
         assert cfg.reranker_engine == "none"
 
     def test_no_preset_uses_defaults(self, monkeypatch: pytest.MonkeyPatch):
@@ -837,7 +830,6 @@ class TestPresetIntegration:
         monkeypatch.delenv("REFLECTLOG_PROFILE", raising=False)
         # Ensure no leftover preset-applied env vars from prior test
         for var in (
-            "ENABLE_HYBRID_SEARCH",
             "SEARCH_LIMIT",
             "RERANKER_ENGINE",
             "ENABLE_RECENCY_BOOST",
@@ -848,7 +840,7 @@ class TestPresetIntegration:
         ):
             monkeypatch.delenv(var, raising=False)
         cfg = Config.from_environment()
-        assert cfg.enable_hybrid_search is True
+        assert cfg.reranker_engine == "cross_encoder"
 
 
 # ---------------------------------------------------------------------------
@@ -1018,7 +1010,6 @@ class TestTypedDictReturns:
         expected_keys = {
             "search_limit",
             "remove_search_limit",
-            "enable_hybrid_search",
             "tantivy_index_path_template",
             "overfetch_multiplier",
             "overfetch_adaptive",
