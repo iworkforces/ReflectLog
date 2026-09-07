@@ -117,7 +117,6 @@ def _make_context(
     query: str = "test query",
     limit: int = 5,
     overfetch_limit: int = 15,
-    enable_hybrid_search: bool = True,
     enable_rrf_fusion: bool = True,
     reranker_engine: str = "none",
     workspace_id: str = "test_project",
@@ -127,7 +126,6 @@ def _make_context(
         query=query,
         limit=limit,
         overfetch_limit=overfetch_limit,
-        enable_hybrid_search=enable_hybrid_search,
         enable_rrf_fusion=enable_rrf_fusion,
         reranker_engine=reranker_engine,
         workspace_id=workspace_id,
@@ -182,35 +180,19 @@ class TestSearchPipelineExecute:
         self,
         pipeline: SearchPipeline,
         mock_semantic_engine: MagicMock,
-        mock_logger: Mock,
+        mock_tantivy_engine: MagicMock,
     ) -> None:
         """execute() wraps unexpected exceptions in SearchError (lines 128-137)."""
         mock_semantic_engine.search.side_effect = RuntimeError("engine boom")
+        mock_tantivy_engine.search.side_effect = RuntimeError("engine boom")
 
-        ctx = _make_context(enable_hybrid_search=False)
+        ctx = _make_context()
 
         with pytest.raises(SearchError, match="Failed to execute search"):
             await pipeline.execute(ctx)
 
-        mock_logger.error.assert_called_once()
-
     @pytest.mark.asyncio
-    async def test_execute_semantic_only(
-        self, pipeline: SearchPipeline, mock_semantic_engine: MagicMock
-    ) -> None:
-        """Semantic-only search when hybrid is disabled."""
-        mock_semantic_engine.search.return_value = [
-            ("msg1", 0.9, "2025-01-01T00:00:00Z"),
-        ]
-        ctx = _make_context(enable_hybrid_search=False)
-
-        result = await pipeline.execute(ctx)
-
-        assert result.memories == ["msg1"]
-        assert result.tantivy_results == []
-
-    @pytest.mark.asyncio
-    async def test_execute_hybrid_search(
+    async def test_execute_queries_all_backends(
         self,
         pipeline: SearchPipeline,
         mock_semantic_engine: MagicMock,
@@ -224,7 +206,7 @@ class TestSearchPipelineExecute:
         mock_tantivy_engine.search.return_value = [("msg2", 0.8)]
         mock_fusion_engine.fuse.return_value = [("msg1", 0.5), ("msg2", 0.3)]
 
-        ctx = _make_context(enable_hybrid_search=True, enable_rrf_fusion=True)
+        ctx = _make_context(enable_rrf_fusion=True)
 
         result = await pipeline.execute(ctx)
 
@@ -241,7 +223,7 @@ class TestSearchTantivy:
     """Tests for _search_tantivy()."""
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_tantivy_is_none(
+    async def test_returns_empty_when_tantivy_is_unavailable(
         self,
         mock_config: Mock,
         mock_logger: Mock,
@@ -249,7 +231,6 @@ class TestSearchTantivy:
         mock_semantic_engine: MagicMock,
         mock_memory_manager: MagicMock,
     ) -> None:
-        """_search_tantivy() returns [] when tantivy_engine is None (line 295)."""
         pipeline = SearchPipeline(
             semantic_engine=mock_semantic_engine,
             tantivy_engine=None,
@@ -634,7 +615,7 @@ class TestHybridSearchIntegration:
         mock_fusion_engine.fuse.return_value = [("msg1", 0.05), ("msg2", 0.01)]
         mock_config.fusion_ranking_threshold = 0.5
 
-        ctx = _make_context(enable_hybrid_search=True, enable_rrf_fusion=True)
+        ctx = _make_context(enable_rrf_fusion=True)
         result = await pipeline.execute(ctx)
 
         assert result.memories == []
@@ -657,7 +638,7 @@ class TestHybridSearchIntegration:
         mock_fusion_engine.fuse.return_value = [("msg1", 0.5)]
         mock_config.fusion_ranking_threshold = 0.1
 
-        ctx = _make_context(enable_hybrid_search=True, enable_rrf_fusion=True)
+        ctx = _make_context(enable_rrf_fusion=True)
         result = await pipeline.execute(ctx)
 
         assert result.memories == ["msg1"]
@@ -683,7 +664,6 @@ class TestHybridSearchIntegration:
         mock_tantivy_engine.search.return_value = [("msg2", 0.8)]
 
         ctx = _make_context(
-            enable_hybrid_search=True,
             enable_rrf_fusion=False,
         )
         result = await pipeline.execute(ctx)
