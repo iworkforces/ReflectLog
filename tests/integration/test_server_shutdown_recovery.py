@@ -36,7 +36,6 @@ def test_lease_handoff_after_close() -> None:
             tantivy_index_path_template=os.path.join(
                 tmpdir, "{workspace_id}", "tantivy"
             ),
-            enable_hybrid_search=False,
             enable_smart_replace=False,
             llm_provider=LlmProvider.OPENAI,
             reranker_engine=RerankerEngine.NONE,
