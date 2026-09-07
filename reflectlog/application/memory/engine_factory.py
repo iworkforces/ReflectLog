@@ -34,10 +34,9 @@ class EngineFactoryResult:
     """Result of engine factory initialization."""
 
     semantic_engine: USearchEngine
-    tantivy_engine: TantivyEngine | None
+    tantivy_engine: TantivyEngine
     fusion_engine: FusionEngine
     reranker_engine: RerankerEngine
-    enable_hybrid_search: bool
 
 
 class EngineFactory:
@@ -78,7 +77,7 @@ class EngineFactory:
             config, logger, coordinator=coordinator
         )
 
-        # Create Tantivy full-text engine (if hybrid search enabled)
+        # Create Tantivy full-text engine
         tantivy_engine = self._create_tantivy_engine(
             config, logger, coordinator=coordinator
         )
@@ -91,7 +90,6 @@ class EngineFactory:
             tantivy_engine=tantivy_engine,
             fusion_engine=fusion_engine,
             reranker_engine=config.reranker_engine,
-            enable_hybrid_search=config.enable_hybrid_search,
         )
 
     def _create_semantic_engine(
@@ -159,19 +157,16 @@ class EngineFactory:
         config: Config,
         logger: IStructuredLogger | None,
         coordinator: IStorageCoordinator | None = None,
-    ) -> TantivyEngine | None:
-        """Create Tantivy full-text engine if hybrid search is enabled.
+    ) -> TantivyEngine:
+        """Create the Tantivy full-text engine.
 
         Args:
             config: Application configuration.
             logger: Structured logger instance.
 
         Returns:
-            TantivyEngine instance or None if hybrid search is disabled.
+            TantivyEngine instance.
         """
-        if not config.enable_hybrid_search:
-            return None
-
         tantivy_config = TantivyConfig(
             workspace_id=config.workspace_id,
             index_path=config.tantivy_index_path_template.format(
