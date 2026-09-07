@@ -313,7 +313,6 @@ class TestProtocolConformanceConfigAdapter:
             "workspace_id",
             # ISearchConfig
             "search_limit",
-            "enable_hybrid_search",
             "enable_rrf_fusion",
             "fusion_rrf_k",
             "fusion_threshold",
@@ -396,7 +395,6 @@ class TestProtocolConformanceConfigAdapter:
                 SearchConfigAdapter,
                 [
                     "search_limit",
-                    "enable_hybrid_search",
                     "enable_rrf_fusion",
                     "fusion_rrf_k",
                     "fusion_threshold",
