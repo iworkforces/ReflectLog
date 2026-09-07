@@ -100,10 +100,7 @@ class HealthCheckTool(BaseTool):
                         if self.config.eager_initialization
                         else HealthStatus.DEGRADED
                     )
-                if (
-                    self.config.enable_hybrid_search
-                    and tantivy_engine_status in expected_up
-                ):
+                if tantivy_engine_status in expected_up:
                     status = (
                         HealthStatus.UNHEALTHY
                         if self.config.eager_initialization
@@ -115,7 +112,8 @@ class HealthCheckTool(BaseTool):
                     "semantic_engine": semantic_engine_status,
                     "tantivy_engine": tantivy_engine_status,
                     "reranker_engine": self.config.reranker_engine,
-                    "hybrid_search_enabled": self.config.enable_hybrid_search,
+                    "hybrid_search_enabled": tantivy_engine_status
+                    != EngineReadiness.DISABLED,
                     "rrf_fusion_enabled": self.config.enable_rrf_fusion,
                     "recency_boost_enabled": self.config.enable_recency_boost,
                     "pending_intent_count": pending_count,
@@ -148,7 +146,8 @@ class HealthCheckTool(BaseTool):
                     "diagnostics": {
                         **engine_status,
                         "reranker_engine": self.config.reranker_engine,
-                        "hybrid_search_enabled": self.config.enable_hybrid_search,
+                        "hybrid_search_enabled": engine_status["tantivy_engine"]
+                        != EngineReadiness.DISABLED,
                     },
                 }
 
