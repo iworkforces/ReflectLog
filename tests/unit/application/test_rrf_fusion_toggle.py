@@ -110,7 +110,6 @@ class TestSearchPipelineWithRRFToggle:
         """Mock configuration with RRF fusion enabled."""
         config = Mock(spec=Config)
         config.workspace_id = "test_project"
-        config.enable_hybrid_search = True
         config.enable_rrf_fusion = True  # RRF enabled
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.index_base_path = "/tmp/test_indexes"
@@ -157,7 +156,6 @@ class TestSearchPipelineWithRRFToggle:
         """Mock configuration with RRF fusion disabled."""
         config = Mock(spec=Config)
         config.workspace_id = "test_project"
-        config.enable_hybrid_search = True
         config.enable_rrf_fusion = False  # RRF disabled
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.index_base_path = "/tmp/test_indexes"

@@ -238,11 +238,6 @@ class IMemoryManager(Protocol):
         """Workspace identifier."""
         ...
 
-    @property
-    def is_hybrid_search(self) -> bool:
-        """Whether hybrid search is enabled."""
-        ...
-
     async def add_memories_async(
         self,
         memories: list[str],

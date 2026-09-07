@@ -105,7 +105,6 @@ class AddTool(BaseTool):
                 f"({total_chars:,} total characters)",
                 memory_count=len(memories),
                 total_characters=total_chars,
-                hybrid_mode=self.config.enable_hybrid_search,
             )
 
             self.logger.info(

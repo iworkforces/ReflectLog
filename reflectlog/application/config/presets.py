@@ -28,7 +28,6 @@ class ConfigPreset:
 
     name: str
     search_limit: int | None = None
-    enable_hybrid_search: bool | None = None
     search_score_threshold: float | None = None
     fusion_rrf_k: int | None = None
     overfetch_multiplier: int | None = None
@@ -48,7 +47,6 @@ class ConfigPreset:
 SIMPLE_PRESET = ConfigPreset(
     name="simple",
     search_limit=3,
-    enable_hybrid_search=False,
     reranker_engine=RerankerEngine.NONE,
     enable_recency_boost=False,
     enable_smart_replace=False,
@@ -62,7 +60,6 @@ SIMPLE_PRESET = ConfigPreset(
 BALANCED_PRESET = ConfigPreset(
     name="balanced",
     search_limit=None,
-    enable_hybrid_search=True,
     search_score_threshold=None,
     fusion_rrf_k=None,
     overfetch_multiplier=None,
@@ -81,7 +78,6 @@ BALANCED_PRESET = ConfigPreset(
 PERFORMANCE_PRESET = ConfigPreset(
     name="performance",
     search_limit=10,
-    enable_hybrid_search=True,
     search_score_threshold=0.3,
     fusion_rrf_k=40,
     overfetch_multiplier=2,
@@ -98,7 +94,6 @@ PERFORMANCE_PRESET = ConfigPreset(
 QUALITY_PRESET = ConfigPreset(
     name="quality",
     search_limit=5,
-    enable_hybrid_search=True,
     search_score_threshold=0.7,
     fusion_rrf_k=80,
     overfetch_multiplier=5,
@@ -147,9 +142,6 @@ def apply_preset_to_env(preset: ConfigPreset) -> None:
     """
     if preset.search_limit is not None:
         os.environ["SEARCH_LIMIT"] = str(preset.search_limit)
-
-    if preset.enable_hybrid_search is not None:
-        os.environ["ENABLE_HYBRID_SEARCH"] = str(preset.enable_hybrid_search).lower()
 
     if preset.search_score_threshold is not None:
         os.environ["SEARCH_SCORE_THRESHOLD"] = str(preset.search_score_threshold)

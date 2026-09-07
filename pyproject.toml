@@ -18,19 +18,19 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
 ]
 dependencies = [
-    "fastmcp==4.0.2",
+    "fastmcp==4.0.3",
     "pydantic==2.14.0b1",
     "fastapi[standard]>=0.141.1",
     "uvicorn[standard]>=0.52.4",
     "asyncer>=0.0.18",
-    "anyio>=4.15.0",
+    "anyio>=4.15.1",
     "python-dotenv>=1.2.3",
     "dynaconf>=3.3.5",
     "mcp>=2.1.1",
     "uvloop>=0.22.1; sys_platform != 'win32'",
     "httptools>=0.8.0",
     "starlette>=1.6.0",
-    "openai>=3.7.0",
+    "openai>=3.8.0",
     "tiktoken>=0.14.0",
     "aiohttp>=3.14.3",
     "aiodns>=4.0.4",
@@ -73,7 +73,7 @@ packages = ["reflectlog"]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.16.5",
+    "ruff>=0.16.6",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",

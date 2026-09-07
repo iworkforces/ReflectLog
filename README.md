@@ -94,8 +94,6 @@ await remove(["I use FastAPI for APIs"])
 # Search Settings
 SEARCH_LIMIT=5                    # Max results per search
 RERANKER_ENGINE=cross_encoder     # cross_encoder or none
-ENABLE_HYBRID_SEARCH=true         # Enable full-text search
-
 # Memory Replacement
 ENABLE_SMART_REPLACE=true         # LLM-based memory replacement
 SMART_REPLACE_THRESHOLD=0.7       # Confidence threshold

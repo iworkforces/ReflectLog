@@ -552,12 +552,12 @@ class TestAddMemory:
         )
         mock_tantivy.add_batch.assert_called_once_with("test_project", ["new memory"])
 
-    def test_add_memory_without_tantivy(
+    def test_add_memory_with_unavailable_tantivy(
         self, mock_config: Config, mock_logger: LogCapture
     ):
-        """Add memory without Tantivy engine (semantic only)."""
-        mock_config = replace(mock_config, enable_hybrid_search=False)
         manager, mock_usearch, mock_tantivy = _make_manager(mock_config, mock_logger)
+        manager._tantivy_engine = None
+        manager._init_pipelines()
 
         result = manager.add_memories(["solo memory"])
         assert result == 1
@@ -847,11 +847,9 @@ class TestDeleteOperations:
             "test_project", "test memory", verify_exists=True
         )
 
-    def test_delete_by_memory_without_tantivy(
+    def test_delete_by_memory_with_unavailable_tantivy(
         self, mock_config: Config, mock_logger: LogCapture
     ):
-        """delete_by_memory works without Tantivy."""
-        mock_config = replace(mock_config, enable_hybrid_search=False)
         with (
             patch(f"{MODULE}.USearchEngine") as usearch_cls,
             patch(f"{MODULE}.LangchainQwenEmbeddings"),
@@ -862,6 +860,7 @@ class TestDeleteOperations:
             usearch_cls.return_value = mock_usearch
 
             manager = MemoryManager(mock_config, mock_logger.structured)
+            manager._tantivy_engine = None
             result = manager.delete_by_memory("test memory")
             assert result is True
             mock_usearch.delete.assert_called_once_with(memory_id="42")

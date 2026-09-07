@@ -134,11 +134,6 @@ class ConfigAdapter(IAppConfig):
         return self._config.search_limit
 
     @property
-    def enable_hybrid_search(self) -> bool:
-        """Enable combining semantic and full-text search."""
-        return self._config.enable_hybrid_search
-
-    @property
     def enable_rrf_fusion(self) -> bool:
         """Enable Reciprocal Rank Fusion for result ranking."""
         return self._config.enable_rrf_fusion
@@ -441,10 +436,6 @@ class SearchConfigAdapter(ISearchConfig):
     @property
     def search_limit(self) -> int:
         return self._config.search_limit
-
-    @property
-    def enable_hybrid_search(self) -> bool:
-        return self._config.enable_hybrid_search
 
     @property
     def enable_rrf_fusion(self) -> bool:

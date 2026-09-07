@@ -133,7 +133,6 @@ class MemoryManager:
 
         self._init_locks()
         self._coordinator = coordinator or self._create_coordinator()
-        self.is_hybrid_search = self.config.enable_hybrid_search
         try:
             self._init_semantic_engine()
             self._init_search_engine()
@@ -286,25 +285,23 @@ class MemoryManager:
         )
 
     def _init_search_engine(self) -> None:
-        """Create Tantivy full-text engine when hybrid search is enabled."""
-        self._tantivy_engine: TantivyEngine | None = None
-        if self.is_hybrid_search:
-            tantivy_config = TantivyConfig(
-                workspace_id=self.workspace_id,
-                index_path=self.config.tantivy_index_path_template.format(
-                    workspace_id=self.workspace_id
-                ).lower(),
-                normalize_scores=self.config.tantivy_normalize_scores,
-                soft_delete_enabled=self.config.tantivy_soft_delete_enabled,
-                compaction_threshold_ratio=self.config.tantivy_compaction_threshold_ratio,
-                compaction_max_tombstones=self.config.tantivy_compaction_max_tombstones,
-                tombstone_ttl_days=self.config.tantivy_tombstone_ttl_days,
-            )
-            self._tantivy_engine = TantivyEngine(
-                tantivy_config,
-                logger=self.logger,
-                coordinator=self._coordinator,
-            )
+        """Create the Tantivy full-text engine."""
+        tantivy_config = TantivyConfig(
+            workspace_id=self.workspace_id,
+            index_path=self.config.tantivy_index_path_template.format(
+                workspace_id=self.workspace_id
+            ).lower(),
+            normalize_scores=self.config.tantivy_normalize_scores,
+            soft_delete_enabled=self.config.tantivy_soft_delete_enabled,
+            compaction_threshold_ratio=self.config.tantivy_compaction_threshold_ratio,
+            compaction_max_tombstones=self.config.tantivy_compaction_max_tombstones,
+            tombstone_ttl_days=self.config.tantivy_tombstone_ttl_days,
+        )
+        self._tantivy_engine: TantivyEngine | None = TantivyEngine(
+            tantivy_config,
+            logger=self.logger,
+            coordinator=self._coordinator,
+        )
 
     def _init_fusion_engine(self) -> None:
         """Create fusion engine for hybrid ranking."""
@@ -447,7 +444,6 @@ class MemoryManager:
         self.logger.info(
             f"Initialized Hybrid MemoryManager [workspace_id={self.workspace_id}, "
             f"semantic_backend=usearch, "
-            f"hybrid_search={self.is_hybrid_search}, "
             f"embedding_model={self.config.embedding_model}, "
         )
         self.logger.info(
@@ -912,7 +908,6 @@ class MemoryManager:
             query=query,
             limit=limit,
             overfetch_limit=overfetch_limit,
-            enable_hybrid_search=self.is_hybrid_search,
             enable_rrf_fusion=self.config.enable_rrf_fusion,
             reranker_engine=self.config.reranker_engine,
             workspace_id=self.workspace_id,

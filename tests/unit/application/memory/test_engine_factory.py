@@ -4,7 +4,6 @@ Tests cover:
 - EngineFactory.create_engines: Full engine creation pipeline
 - EngineFactory._create_semantic_engine: USearch engine setup
 - EngineFactory._create_embedder: Embedder with/without caching
-- EngineFactory._create_tantivy_engine: Tantivy with/without hybrid search
 - EngineFactory._create_fusion_engine: Fusion engine creation
 - EngineFactoryResult: Dataclass structure
 - create_cross_encoder_reranker: CrossEncoder reranker factory
@@ -36,7 +35,6 @@ def mock_config() -> Mock:
     """Mock configuration with typical settings."""
     config = Mock(spec=Config)
     config.workspace_id = "test_project"
-    config.enable_hybrid_search = True
     config.tantivy_index_path_template = "indexes/{workspace_id}/tantivy"
     config.tantivy_normalize_scores = True
     config.tantivy_soft_delete_enabled = True
@@ -97,27 +95,12 @@ class TestEngineFactoryResult:
             tantivy_engine=tantivy,
             fusion_engine=fusion,
             reranker_engine=RerankerEngine.CROSS_ENCODER,
-            enable_hybrid_search=True,
         )
 
         assert result.semantic_engine is semantic
         assert result.tantivy_engine is tantivy
         assert result.fusion_engine is fusion
         assert result.reranker_engine == "cross_encoder"
-        assert result.enable_hybrid_search is True
-
-    def test_result_with_none_tantivy(self) -> None:
-        """Result should accept None tantivy engine."""
-        result = EngineFactoryResult(
-            semantic_engine=cast(USearchEngine, Mock()),
-            tantivy_engine=None,
-            fusion_engine=cast(FusionEngine, Mock()),
-            reranker_engine=RerankerEngine.NONE,
-            enable_hybrid_search=False,
-        )
-
-        assert result.tantivy_engine is None
-        assert result.enable_hybrid_search is False
 
 
 @pytest.mark.unit
@@ -141,7 +124,7 @@ class TestCreateEngines:
     @patch("reflectlog.application.memory.engine_factory.USearchConfig")
     @patch("reflectlog.application.memory.engine_factory.CachedEmbeddings")
     @patch("reflectlog.application.memory.engine_factory.LangchainQwenEmbeddings")
-    def test_create_engines_hybrid_enabled(
+    def test_create_engines_creates_all_engines(
         self,
         mock_embedder_cls: Mock,
         mock_cached_cls: Mock,
@@ -154,8 +137,6 @@ class TestCreateEngines:
         mock_logger: Mock,
         factory: EngineFactory,
     ) -> None:
-        """create_engines should create all engines when hybrid search enabled."""
-        mock_config.enable_hybrid_search = True
         mock_config.reranker_engine = "cross_encoder"
 
         result = factory.create_engines(mock_config, mock_logger)
@@ -165,31 +146,6 @@ class TestCreateEngines:
         assert result.tantivy_engine is mock_tantivy_cls.return_value
         assert result.fusion_engine is mock_create_fusion.return_value
         assert result.reranker_engine == "cross_encoder"
-        assert result.enable_hybrid_search is True
-
-    @patch("reflectlog.application.memory.engine_factory.create_fusion_engine")
-    @patch("reflectlog.application.memory.engine_factory.USearchEngine")
-    @patch("reflectlog.application.memory.engine_factory.USearchConfig")
-    @patch("reflectlog.application.memory.engine_factory.CachedEmbeddings")
-    @patch("reflectlog.application.memory.engine_factory.LangchainQwenEmbeddings")
-    def test_create_engines_hybrid_disabled(
-        self,
-        mock_embedder_cls: Mock,
-        mock_cached_cls: Mock,
-        mock_usearch_config_cls: Mock,
-        mock_usearch_cls: Mock,
-        mock_create_fusion: Mock,
-        mock_config: Mock,
-        mock_logger: Mock,
-        factory: EngineFactory,
-    ) -> None:
-        """create_engines should set tantivy_engine=None when hybrid disabled."""
-        mock_config.enable_hybrid_search = False
-
-        result = factory.create_engines(mock_config, mock_logger)
-
-        assert result.tantivy_engine is None
-        assert result.enable_hybrid_search is False
 
     @patch("reflectlog.application.memory.engine_factory.create_fusion_engine")
     @patch("reflectlog.application.memory.engine_factory.TantivyEngine")
@@ -410,7 +366,7 @@ class TestCreateTantivyEngine:
 
     @patch("reflectlog.application.memory.engine_factory.TantivyEngine")
     @patch("reflectlog.application.memory.engine_factory.TantivyConfig")
-    def test_hybrid_enabled_creates_tantivy(
+    def test_creates_tantivy(
         self,
         mock_tantivy_config_cls: Mock,
         mock_tantivy_cls: Mock,
@@ -418,8 +374,6 @@ class TestCreateTantivyEngine:
         mock_logger: Mock,
         factory: EngineFactory,
     ) -> None:
-        """Tantivy engine should be created when hybrid search is enabled."""
-        mock_config.enable_hybrid_search = True
         mock_config.workspace_id = "my_project"
         mock_config.tantivy_index_path_template = "indexes/{workspace_id}/tantivy"
         mock_config.tantivy_normalize_scores = True
@@ -442,19 +396,6 @@ class TestCreateTantivyEngine:
         )
         assert result is mock_tantivy_cls.return_value
 
-    def test_hybrid_disabled_returns_none(
-        self,
-        mock_config: Mock,
-        mock_logger: Mock,
-        factory: EngineFactory,
-    ) -> None:
-        """Should return None when hybrid search is disabled."""
-        mock_config.enable_hybrid_search = False
-
-        result = factory._create_tantivy_engine(mock_config, mock_logger)
-
-        assert result is None
-
     @patch("reflectlog.application.memory.engine_factory.TantivyEngine")
     @patch("reflectlog.application.memory.engine_factory.TantivyConfig")
     def test_index_path_lowercased(
@@ -466,7 +407,6 @@ class TestCreateTantivyEngine:
         factory: EngineFactory,
     ) -> None:
         """Tantivy index path should be lowercased."""
-        mock_config.enable_hybrid_search = True
         mock_config.workspace_id = "MyProject"
         mock_config.tantivy_index_path_template = "indexes/{workspace_id}/tantivy"
         mock_config.tantivy_normalize_scores = False
@@ -641,7 +581,6 @@ class TestEndToEnd:
         mock_logger: Mock,
     ) -> None:
         """Full pipeline should wire embedder -> USearch, Tantivy, Fusion correctly."""
-        mock_config.enable_hybrid_search = True
         mock_config.embedding_cache_enabled = True
         mock_config.reranker_engine = "cross_encoder"
 
@@ -663,23 +602,24 @@ class TestEndToEnd:
 
         # Verify result fields
         assert result.reranker_engine == "cross_encoder"
-        assert result.enable_hybrid_search is True
 
     @patch("reflectlog.application.memory.engine_factory.create_fusion_engine")
+    @patch("reflectlog.application.memory.engine_factory.TantivyEngine")
+    @patch("reflectlog.application.memory.engine_factory.TantivyConfig")
     @patch("reflectlog.application.memory.engine_factory.USearchEngine")
     @patch("reflectlog.application.memory.engine_factory.USearchConfig")
     @patch("reflectlog.application.memory.engine_factory.LangchainQwenEmbeddings")
-    def test_minimal_pipeline_semantic_only(
+    def test_pipeline_without_cache_or_reranker(
         self,
         mock_embedder_cls: Mock,
         mock_usearch_config_cls: Mock,
         mock_usearch_cls: Mock,
+        mock_tantivy_config_cls: Mock,
+        mock_tantivy_cls: Mock,
         mock_create_fusion: Mock,
         mock_config: Mock,
         mock_logger: Mock,
     ) -> None:
-        """Minimal pipeline with only semantic search (no hybrid, no cache)."""
-        mock_config.enable_hybrid_search = False
         mock_config.embedding_cache_enabled = False
         mock_config.reranker_engine = "none"
 
@@ -690,7 +630,5 @@ class TestEndToEnd:
         usearch_call = mock_usearch_cls.call_args
         assert usearch_call[1]["embedder"] is mock_embedder_cls.return_value
 
-        # Verify no tantivy
-        assert result.tantivy_engine is None
-        assert result.enable_hybrid_search is False
+        assert result.tantivy_engine is mock_tantivy_cls.return_value
         assert result.reranker_engine == "none"

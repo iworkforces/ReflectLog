@@ -62,7 +62,6 @@ def _make_context(
     query: str = "test query",
     limit: int = 5,
     overfetch_limit: int = 15,
-    enable_hybrid_search: bool = True,
     enable_rrf_fusion: bool = True,
     reranker_engine: str = "none",
     workspace_id: str = "test_project",
@@ -71,7 +70,6 @@ def _make_context(
         query=query,
         limit=limit,
         overfetch_limit=overfetch_limit,
-        enable_hybrid_search=enable_hybrid_search,
         enable_rrf_fusion=enable_rrf_fusion,
         reranker_engine=reranker_engine,
         workspace_id=workspace_id,
@@ -257,7 +255,6 @@ class TestCanonicalPipelineIdentity:
         """MemoryManager._init_pipelines() uses search_strategies.SearchPipeline."""
         config = MagicMock()
         config.workspace_id = "test_project"
-        config.enable_hybrid_search = True
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -288,7 +285,6 @@ class TestCanonicalPipelineIdentity:
         ready.is_ready.return_value = True
         config = MagicMock()
         config.workspace_id = "test_project"
-        config.enable_hybrid_search = True
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -334,7 +330,6 @@ class TestCanonicalPipelineIdentity:
         missing.is_ready = None
         config = MagicMock()
         config.workspace_id = "test_project"
-        config.enable_hybrid_search = True
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -373,21 +368,18 @@ class TestCanonicalPipelineIdentity:
 
 
 # ---------------------------------------------------------------------------
-# Semantic-only and hybrid behavior (migrated from old pipeline tests)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-class TestSemanticOnlyBehavior:
-    """Semantic-only path: empty, one result, exception, ordering."""
-
+class TestUnavailableTantivyBehavior:
     @pytest.mark.asyncio
     async def test_empty_results(self) -> None:
         semantic = MagicMock()
         semantic.search.return_value = []
         pipeline = _make_pipeline(semantic=semantic)
 
-        result = await pipeline.execute(_make_context(enable_hybrid_search=False))
+        result = await pipeline.execute(_make_context(enable_rrf_fusion=False))
 
         assert result.memories == []
         assert result.timestamp_map == {}
@@ -400,7 +392,7 @@ class TestSemanticOnlyBehavior:
         semantic.search.return_value = [("only", 0.9, _TS)]
         pipeline = _make_pipeline(semantic=semantic)
 
-        result = await pipeline.execute(_make_context(enable_hybrid_search=False))
+        result = await pipeline.execute(_make_context(enable_rrf_fusion=False))
 
         assert result.memories == ["only"]
         assert result.timestamp_map == {"only": _TS}
@@ -415,9 +407,7 @@ class TestSemanticOnlyBehavior:
         ]
         pipeline = _make_pipeline(semantic=semantic)
 
-        result = await pipeline.execute(
-            _make_context(enable_hybrid_search=False, limit=5)
-        )
+        result = await pipeline.execute(_make_context(limit=5, enable_rrf_fusion=False))
 
         assert result.memories == ["alpha", "beta"]
 
@@ -428,18 +418,7 @@ class TestSemanticOnlyBehavior:
         pipeline = _make_pipeline(semantic=semantic)
 
         with pytest.raises(SearchError, match="Failed to execute search"):
-            await pipeline.execute(_make_context(enable_hybrid_search=False))
-
-    @pytest.mark.asyncio
-    async def test_does_not_query_tantivy(self) -> None:
-        semantic = MagicMock()
-        semantic.search.return_value = [("hit", 0.8, _TS)]
-        tantivy = MagicMock()
-        pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy)
-
-        await pipeline.execute(_make_context(enable_hybrid_search=False))
-
-        tantivy.search.assert_not_called()
+            await pipeline.execute(_make_context())
 
 
 @pytest.mark.unit
@@ -635,7 +614,7 @@ class TestBackendFailureContracts:
         fusion.fuse.return_value = [("from-tantivy", 0.8)]
         pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy, fusion=fusion)
 
-        result = await pipeline.execute(_make_context(enable_hybrid_search=True))
+        result = await pipeline.execute(_make_context())
 
         assert result.memories == ["from-tantivy"]
         assert result.semantic_results == []
@@ -651,7 +630,7 @@ class TestBackendFailureContracts:
         fusion.fuse.return_value = [("ok", 0.9)]
         pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy, fusion=fusion)
 
-        result = await pipeline.execute(_make_context(enable_hybrid_search=True))
+        result = await pipeline.execute(_make_context())
 
         assert result.memories == ["ok"]
         assert result.tantivy_results == []
@@ -665,7 +644,7 @@ class TestBackendFailureContracts:
         pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy)
 
         with pytest.raises(SearchError, match="Failed to execute search"):
-            await pipeline.execute(_make_context(enable_hybrid_search=True))
+            await pipeline.execute(_make_context())
 
     @pytest.mark.asyncio
     async def test_tantivy_init_failure_falls_back_to_semantic(self) -> None:
@@ -678,7 +657,7 @@ class TestBackendFailureContracts:
         fusion.fuse.return_value = [("ok", 0.9)]
         pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy, fusion=fusion)
 
-        result = await pipeline.execute(_make_context(enable_hybrid_search=True))
+        result = await pipeline.execute(_make_context())
 
         assert result.memories == ["ok"]
         assert result.tantivy_results == []
@@ -696,7 +675,7 @@ class TestBackendFailureContracts:
         pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy)
 
         with pytest.raises(SearchError, match="Failed to execute search") as exc_info:
-            await pipeline.execute(_make_context(enable_hybrid_search=True))
+            await pipeline.execute(_make_context())
         assert exc_info.value.__cause__ is cause
 
     @pytest.mark.asyncio
@@ -712,16 +691,18 @@ class TestBackendFailureContracts:
         pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy)
 
         with pytest.raises(SearchError, match="Failed to execute search") as exc_info:
-            await pipeline.execute(_make_context(enable_hybrid_search=True))
+            await pipeline.execute(_make_context())
         assert exc_info.value.__cause__ is cause
 
-    async def test_semantic_error_and_tantivy_none_raises_search_error(self) -> None:
+    async def test_semantic_error_and_unavailable_tantivy_raises_search_error(
+        self,
+    ) -> None:
         semantic = MagicMock()
         semantic.search.side_effect = RuntimeError("embed fail")
         pipeline = _make_pipeline(semantic=semantic, tantivy=None)
 
         with pytest.raises(SearchError, match="Failed to execute search"):
-            await pipeline.execute(_make_context(enable_hybrid_search=True))
+            await pipeline.execute(_make_context())
 
     async def test_fts_hits_missing_from_sqlite_are_dropped(self) -> None:
         semantic = MagicMock()
@@ -734,7 +715,7 @@ class TestBackendFailureContracts:
         fusion.fuse.return_value = [("deleted text", 0.01)]
         pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy, fusion=fusion)
 
-        result = await pipeline.execute(_make_context(enable_hybrid_search=True))
+        result = await pipeline.execute(_make_context())
         assert result.tantivy_results == []
         fusion.fuse.assert_called_once_with([], [])
         assert result.memories == []
@@ -757,7 +738,7 @@ class TestBackendFailureContracts:
             config=_make_config(fusion_ranking_threshold=0.0),
         )
 
-        result = await pipeline.execute(_make_context(enable_hybrid_search=True))
+        result = await pipeline.execute(_make_context())
         assert result.tantivy_results == [("keep me", 4.0)]
         fusion.fuse.assert_called_once_with([("keep me", 0.9)], [("keep me", 4.0)])
         assert result.memories == ["keep me"]
@@ -776,7 +757,7 @@ class TestBackendFailureContracts:
         fusion.fuse.return_value = [("maybe live", 0.01)]
         pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy, fusion=fusion)
 
-        result = await pipeline.execute(_make_context(enable_hybrid_search=True))
+        result = await pipeline.execute(_make_context())
         assert result.tantivy_results == []
         fusion.fuse.assert_called_once_with([], [])
         assert result.memories == []
@@ -789,7 +770,7 @@ class TestBackendFailureContracts:
         pipeline = _make_pipeline(semantic=semantic, tantivy=tantivy)
 
         with pytest.raises(SearchError, match="Failed to execute search"):
-            await pipeline.execute(_make_context(enable_hybrid_search=True))
+            await pipeline.execute(_make_context())
 
     @pytest.mark.asyncio
     async def test_search_score_threshold_drops_weak_semantic_hits(self) -> None:
@@ -809,13 +790,13 @@ class TestBackendFailureContracts:
             semantic=semantic, tantivy=tantivy, fusion=fusion, config=config
         )
 
-        result = await pipeline.execute(_make_context(enable_hybrid_search=True))
+        result = await pipeline.execute(_make_context())
 
         assert result.memories == ["strong"]
         assert all(msg != "weak" for msg, _, _ in result.semantic_results)
 
     @pytest.mark.asyncio
-    async def test_tantivy_none_returns_empty(self) -> None:
+    async def test_unavailable_tantivy_returns_empty(self) -> None:
         pipeline = _make_pipeline(semantic=MagicMock(), tantivy=None)
         assert await pipeline._search_tantivy("q", 10, "proj") == ([], None)
 
@@ -952,7 +933,7 @@ class TestSearchResponsiveness:
     """Slow sync fakes must not stall the AnyIO/asyncio event loop."""
 
     @pytest.mark.asyncio
-    async def test_semantic_only_ticker_advances(self) -> None:
+    async def test_unavailable_tantivy_ticker_advances(self) -> None:
         entered = threading.Event()
         loop_progressed = threading.Event()
         loop_thread = threading.get_ident()
@@ -979,7 +960,7 @@ class TestSearchResponsiveness:
 
         ticker_task = asyncio.create_task(ticker())
         search_task = asyncio.create_task(
-            pipeline.execute(_make_context(enable_hybrid_search=False))
+            pipeline.execute(_make_context(enable_rrf_fusion=False))
         )
         result = await asyncio.wait_for(search_task, timeout=5)
         ticker_task.cancel()
@@ -1037,7 +1018,7 @@ class TestSearchResponsiveness:
 
         ticker_task = asyncio.create_task(ticker())
         result = await asyncio.wait_for(
-            pipeline.execute(_make_context(enable_hybrid_search=True)),
+            pipeline.execute(_make_context()),
             timeout=5,
         )
         ticker_task.cancel()
@@ -1116,7 +1097,7 @@ class TestSearchResponsiveness:
 
         ticker_task = asyncio.create_task(ticker())
         result = await asyncio.wait_for(
-            pipeline.execute(_make_context(enable_hybrid_search=True)),
+            pipeline.execute(_make_context()),
             timeout=5,
         )
         ticker_task.cancel()
@@ -1175,7 +1156,7 @@ class TestSearchResponsiveness:
 
         ticker_task = asyncio.create_task(ticker())
         result = await asyncio.wait_for(
-            pipeline.execute(_make_context(enable_hybrid_search=True)),
+            pipeline.execute(_make_context()),
             timeout=5,
         )
         ticker_task.cancel()
@@ -1199,9 +1180,7 @@ class TestSearchResponsiveness:
             finished=finished,
         )
         pipeline = _make_pipeline(semantic=backend)
-        search_task = asyncio.create_task(
-            pipeline.execute(_make_context(enable_hybrid_search=False))
-        )
+        search_task = asyncio.create_task(pipeline.execute(_make_context()))
         deadline = asyncio.get_running_loop().time() + _BACKEND_WAIT_TIMEOUT
         while not entered.is_set():
             if asyncio.get_running_loop().time() >= deadline:
@@ -1246,9 +1225,7 @@ class TestSearchResponsiveness:
             fusion=MagicMock(method="rrf", fuse=MagicMock(return_value=[("sem", 0.4)])),
             config=_make_config(fusion_ranking_threshold=0.0),
         )
-        search_task = asyncio.create_task(
-            pipeline.execute(_make_context(enable_hybrid_search=True))
-        )
+        search_task = asyncio.create_task(pipeline.execute(_make_context()))
         deadline = asyncio.get_running_loop().time() + _BACKEND_WAIT_TIMEOUT
         while not (semantic_entered.is_set() and tantivy_entered.is_set()):
             if asyncio.get_running_loop().time() >= deadline:
@@ -1314,7 +1291,6 @@ class TestSearchResponsiveness:
 
         config = MagicMock()
         config.workspace_id = "test_project"
-        config.enable_hybrid_search = True
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -1348,7 +1324,6 @@ class TestSearchResponsiveness:
         fusion.fuse.return_value = [("mem", 0.4)]
         manager._semantic_engine = cast(Any, semantic)
         manager._tantivy_engine = tantivy
-        manager.is_hybrid_search = True
         manager._search_pipeline = SearchPipeline(
             semantic_engine=cast(Any, semantic),
             tantivy_engine=tantivy,
@@ -1397,7 +1372,6 @@ class TestSearchResponsiveness:
 
         config = MagicMock()
         config.workspace_id = "test_project"
-        config.enable_hybrid_search = False
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -1433,7 +1407,6 @@ class TestSearchResponsiveness:
         fusion.fuse.return_value = [("mem", 0.4)]
         manager._semantic_engine = semantic
         manager._tantivy_engine = None
-        manager.is_hybrid_search = False
         manager._search_pipeline = SearchPipeline(
             semantic_engine=cast(Any, semantic),
             tantivy_engine=None,
@@ -1480,7 +1453,6 @@ class TestSearchResponsiveness:
     async def test_manager_search_recovery_initialization_error_aborts(self) -> None:
         config = MagicMock()
         config.workspace_id = "test_project"
-        config.enable_hybrid_search = False
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"

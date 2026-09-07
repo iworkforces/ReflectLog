@@ -75,11 +75,6 @@ class ISearchConfig(Protocol):
         ...
 
     @property
-    def enable_hybrid_search(self) -> bool:
-        """Enable combining semantic and full-text search."""
-        ...
-
-    @property
     def enable_rrf_fusion(self) -> bool:
         """Enable Reciprocal Rank Fusion for result ranking."""
         ...

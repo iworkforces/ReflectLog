@@ -66,7 +66,6 @@ def custom_config() -> Config:
         path="/custom-mcp",
         log_level="DEBUG",
         search_limit=20,
-        enable_hybrid_search=False,
         enable_rrf_fusion=False,
         fusion_rrf_k=30,
         fusion_ranking_threshold=0.5,
@@ -184,11 +183,6 @@ class TestConfigAdapter:
         """Default search_limit is 5."""
         adapter = ConfigAdapter(minimal_config)
         assert adapter.search_limit == 5
-
-    def test_enable_hybrid_search_default(self, minimal_config: Config) -> None:
-        """Default enable_hybrid_search is True."""
-        adapter = ConfigAdapter(minimal_config)
-        assert adapter.enable_hybrid_search is True
 
     def test_enable_rrf_fusion_default(self, minimal_config: Config) -> None:
         """Default enable_rrf_fusion is True."""
@@ -367,7 +361,6 @@ class TestConfigAdapter:
 
         # ISearchConfig
         assert adapter.search_limit == 20
-        assert adapter.enable_hybrid_search is False
         assert adapter.enable_rrf_fusion is False
         assert adapter.fusion_rrf_k == 30
         assert adapter.fusion_threshold == 0.5
@@ -498,11 +491,6 @@ class TestSearchConfigAdapter:
         adapter = SearchConfigAdapter(custom_config)
         assert adapter.search_limit == 20
 
-    def test_enable_hybrid_search(self, custom_config: Config) -> None:
-        """enable_hybrid_search delegates to Config."""
-        adapter = SearchConfigAdapter(custom_config)
-        assert adapter.enable_hybrid_search is False
-
     def test_enable_rrf_fusion(self, custom_config: Config) -> None:
         """enable_rrf_fusion delegates to Config."""
         adapter = SearchConfigAdapter(custom_config)
@@ -555,7 +543,6 @@ class TestSearchConfigAdapter:
         """All defaults match Config defaults."""
         adapter = SearchConfigAdapter(minimal_config)
         assert adapter.search_limit == 5
-        assert adapter.enable_hybrid_search is True
         assert adapter.enable_rrf_fusion is True
         assert adapter.fusion_rrf_k == 60
         assert adapter.fusion_threshold == 0.0

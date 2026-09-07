@@ -61,7 +61,6 @@ def create_usearch_config(temp_dir: str, project_suffix: str = "") -> Config:
         embedding_model="mock-model",
         embedding_dims=128,
         qwen_embedding_dims=128,
-        enable_hybrid_search=True,
         reranker_engine=RerankerEngine.NONE,
         tantivy_index_path_template=os.path.join(temp_dir, "{workspace_id}", "tantivy"),
         search_limit=5,

@@ -49,7 +49,6 @@ def manager(monkeypatch: MonkeyPatch):
     mgr._tantivy_engine = mock_tantivy_engine
     mgr.config = config
     mgr.workspace_id = config.workspace_id
-    mgr.is_hybrid_search = True
     mgr._lock = MagicMock()
     mgr._write_lock = MagicMock()
     mgr._search_pipeline = MagicMock()
