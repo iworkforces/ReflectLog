@@ -46,7 +46,6 @@ class SearchContext:
         query: The search query string.
         limit: Maximum number of results to return.
         overfetch_limit: Number of candidates to fetch for better fusion quality.
-        enable_hybrid_search: Whether Tantivy full-text search is enabled.
         enable_rrf_fusion: Whether RRF fusion is enabled (vs concatenation).
         reranker_engine: The reranker engine to use ("cross_encoder" or "none").
         workspace_id: Workspace identifier for logging.
@@ -55,7 +54,6 @@ class SearchContext:
     query: str
     limit: int
     overfetch_limit: int
-    enable_hybrid_search: bool
     enable_rrf_fusion: bool
     reranker_engine: RerankerEngine | str
     workspace_id: str
@@ -144,11 +142,6 @@ class SearchPipeline:
             work already running in a worker thread.
         """
         try:
-            # Handle non-hybrid search (semantic only)
-            if not context.enable_hybrid_search:
-                return await self._execute_semantic_only(context)
-
-            # Execute 4-step hybrid search pipeline
             return await self._execute_hybrid_search(context)
 
         except SearchError:
@@ -163,50 +156,6 @@ class SearchPipeline:
                 },
             )
             raise SearchError(f"Failed to execute search: {e}") from e
-
-    async def _execute_semantic_only(self, context: SearchContext) -> SearchResult:
-        """Execute semantic-only search (hybrid disabled)."""
-        self.logger.info(
-            "SEARCH MODE: Semantic only (hybrid disabled)",
-            extra={"mode": "semantic"},
-        )
-
-        # Offload the blocking USearch call so semantic-only search
-        # does not stall unrelated AnyIO/MCP work on the event loop.
-        # A task group waits for that worker if the caller cancels,
-        # matching hybrid search (asyncify alone does not).
-        soon_results = None
-        async with create_task_group() as tg:
-            fetch_limit = (
-                context.overfetch_limit
-                if context.reranker_engine == RerankerEngine.CROSS_ENCODER
-                else context.limit
-            )
-            soon_results = tg.soonify(self._search_semantic)(
-                context.query, fetch_limit, context.workspace_id
-            )
-        assert soon_results is not None
-        results, search_error = soon_results.value
-        if search_error is not None:
-            raise search_error
-        results = self._filter_semantic_threshold(results)
-
-        timestamp_map = {msg: created_at for msg, _, created_at in results}
-        contents = [msg for msg, _, _ in results]
-        timestamp_map = self._complete_timestamp_map(
-            timestamp_map, contents, context.workspace_id
-        )
-        paired = [(msg, score) for msg, score, _ in results]
-        if len(paired) > 1:
-            paired = await self._step4_reranking(context, paired, timestamp_map, 2)
-        memories = [msg for msg, _ in paired[: context.limit]]
-
-        return SearchResult(
-            memories=memories,
-            timestamp_map=timestamp_map,
-            semantic_results=results,
-            tantivy_results=[],
-        )
 
     async def _execute_hybrid_search(self, context: SearchContext) -> SearchResult:
         """Execute 4-step hybrid search pipeline."""
