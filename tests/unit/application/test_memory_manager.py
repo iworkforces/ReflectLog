@@ -40,10 +40,8 @@ def _wire_search_mocks(engine: MagicMock) -> None:
 
 @pytest.fixture
 def mock_config() -> Config:
-    """Mock configuration with hybrid search enabled."""
     config = Mock(spec=Config)
     config.workspace_id = "test_project"
-    config.enable_hybrid_search = True
     config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
     config.index_base_path = "/tmp/test_indexes"
     config.search_limit = 5
@@ -138,32 +136,6 @@ class TestHybridMemoryManager:
                     assert hasattr(manager, "_fusion_engine")
                     # TantivyEngine should be initialized with config
                     mock_tantivy.assert_called_once()
-
-    def test_initialization_without_hybrid_search(self, mock_config, mock_logger):
-        """Test initialization with hybrid search disabled."""
-        mock_config.enable_hybrid_search = False
-        with patch(
-            "reflectlog.application.memory.manager.USearchEngine"
-        ) as mock_usearch_class:
-            mock_usearch_class.return_value.add_batch.side_effect = (
-                lambda workspace_id, memories=None, infer=False, contents=None, vectors=None, **_kwargs: (
-                    contents if contents is not None else memories
-                )
-            )
-            mock_usearch_class.return_value.get_id_by_content.return_value = None
-            mock_usearch_class.return_value.embedder.embed_documents.side_effect = (
-                lambda texts: [[0.1] * 4 for _ in texts]
-            )
-            mock_usearch_class.return_value.memory_store.begin_add_intents.return_value = []
-            mock_usearch_class.return_value.memory_store.list_pending_transitions.return_value = []
-            with patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"):
-                with patch(
-                    "reflectlog.application.memory.manager.TantivyEngine"
-                ) as mock_tantivy:
-                    manager = MemoryManager(mock_config, mock_logger)
-                    # TantivyEngine should not be initialized
-                    mock_tantivy.assert_not_called()
-                    assert manager._tantivy_engine is None
 
     def test_add_memories(self, mock_config, mock_logger):
         """Test parallel indexing works with TantivyEngine."""
@@ -300,7 +272,7 @@ class TestHybridMemoryManager:
                     result = manager._has_exact_match("test message")
                     assert result is False
 
-    def test_exact_match_detection_fallback_uses_database_lookup(
+    def test_exact_match_detection_with_unavailable_tantivy_uses_database_lookup(
         self, mock_config, mock_logger
     ):
         """Test exact match detection fallback uses direct database lookup (Sprint 2.1).
@@ -308,39 +280,41 @@ class TestHybridMemoryManager:
         When Tantivy is not available, _has_exact_match() should use get_id_by_content()
         for O(log n) indexed lookup instead of semantic search with embedding API call.
         """
-        mock_config.enable_hybrid_search = False  # Disable Tantivy
-
         with patch(
             "reflectlog.application.memory.manager.USearchEngine"
         ) as mock_usearch_class:
             with patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"):
-                mock_usearch = MagicMock()
-                mock_usearch_class.return_value = mock_usearch
+                with patch("reflectlog.application.memory.manager.TantivyEngine"):
+                    mock_usearch = MagicMock()
+                    mock_usearch_class.return_value = mock_usearch
 
-                manager = MemoryManager(mock_config, mock_logger)
+                    manager = MemoryManager(mock_config, mock_logger)
+                    manager._tantivy_engine = None
 
-                # Test: Memory found via database lookup
-                mock_usearch.get_id_by_content.return_value = 42
-                result = manager._has_exact_match("test message")
-                assert result is True
-                mock_usearch.get_id_by_content.assert_called_with(
-                    mock_config.workspace_id, "test message"
-                )
+                    # Test: Memory found via database lookup
+                    mock_usearch.get_id_by_content.return_value = 42
+                    result = manager._has_exact_match("test message")
+                    assert result is True
+                    mock_usearch.get_id_by_content.assert_called_with(
+                        mock_config.workspace_id, "test message"
+                    )
 
-                # Test: Memory not found
-                mock_usearch.reset_mock()
-                mock_usearch.get_id_by_content.return_value = None
-                result = manager._has_exact_match("nonexistent")
-                assert result is False
-                mock_usearch.get_id_by_content.assert_called_with(
-                    mock_config.workspace_id, "nonexistent"
-                )
+                    # Test: Memory not found
+                    mock_usearch.reset_mock()
+                    mock_usearch.get_id_by_content.return_value = None
+                    result = manager._has_exact_match("nonexistent")
+                    assert result is False
+                    mock_usearch.get_id_by_content.assert_called_with(
+                        mock_config.workspace_id, "nonexistent"
+                    )
 
-                # Test: Error handling - should return False and allow add
-                mock_usearch.reset_mock()
-                mock_usearch.get_id_by_content.side_effect = RuntimeError("DB error")
-                result = manager._has_exact_match("error case")
-                assert result is False  # Should proceed without deduplication
+                    # Test: Error handling - should return False and allow add
+                    mock_usearch.reset_mock()
+                    mock_usearch.get_id_by_content.side_effect = RuntimeError(
+                        "DB error"
+                    )
+                    result = manager._has_exact_match("error case")
+                    assert result is False  # Should proceed without deduplication
 
     @pytest.mark.asyncio
     async def test_search_uses_rrf_fusion(self, mock_config, mock_logger):
@@ -1055,31 +1029,8 @@ class TestTimestampPropagation:
                     # Both memories should be in results
                     assert "Old memory" in results
                     assert "New memory" in results
-
-    @pytest.mark.asyncio
-    async def test_semantic_only_path_uses_timestamps(self, mock_config, mock_logger):
-        """When hybrid search is disabled, timestamps still come from USearch."""
-        mock_config.enable_hybrid_search = False  # Semantic-only path
-
-        with patch(
-            "reflectlog.application.memory.manager.USearchEngine"
-        ) as mock_usearch_class:
-            with patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"):
-                with patch("reflectlog.application.memory.manager.TantivyEngine"):
-                    mock_usearch = MagicMock()
-                    _wire_search_mocks(mock_usearch)
-                    # 3-tuples with timestamps
-                    mock_usearch.search.return_value = [
-                        ("Semantic result", 0.95, "2024-06-15T08:00:00"),
-                    ]
-                    mock_usearch_class.return_value = mock_usearch
-
-                    manager = MemoryManager(mock_config, mock_logger)
-                    results = await manager.search("test")
-
-                    # Should return the semantic result
-                    assert results == ["Semantic result"]
                     mock_usearch.search.assert_called_once()
+                    mock_tantivy.search.assert_called_once()
 
 
 if __name__ == "__main__":
