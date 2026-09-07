@@ -298,14 +298,12 @@ class ConfigurationValidator:
 
     def validate_dependencies(
         self,
-        enable_hybrid_search: bool,
         enable_rrf_fusion: bool,
         reranker_engine: str,
     ) -> bool:
         """Validate logical dependencies between configuration options.
 
         Args:
-            enable_hybrid_search: Whether hybrid search is enabled
             enable_rrf_fusion: Whether RRF fusion is enabled
             reranker_engine: The reranker engine type
 
@@ -313,15 +311,6 @@ class ConfigurationValidator:
             True if all dependencies are valid, False otherwise
         """
         valid = True
-
-        # RRF fusion requires hybrid search (though we allow it for flexibility)
-        # if enable_rrf_fusion and not enable_hybrid_search:
-        #     self.add_error(
-        #         "ENABLE_RRF_FUSION",
-        #         enable_rrf_fusion,
-        #         "RRF fusion requires hybrid search to be enabled",
-        #     )
-        #     valid = False
 
         # Reranker requires at least one search engine
         # (this is always true since we always have semantic search)
@@ -722,7 +711,6 @@ def _validate_storage_config(
         config.min_memory_length, config.max_memory_length
     )
     _ = validator.validate_dependencies(
-        config.enable_hybrid_search,
         config.enable_rrf_fusion,
         config.reranker_engine,
     )

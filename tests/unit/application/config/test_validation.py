@@ -451,28 +451,16 @@ class TestValidateDependencies:
         """Valid dependency combination returns True."""
         v = ConfigurationValidator()
         result = v.validate_dependencies(
-            enable_hybrid_search=True,
             enable_rrf_fusion=True,
             reranker_engine="cross_encoder",
         )
         assert result is True
         assert not v.has_errors()
 
-    def test_disabled_hybrid_still_valid(self):
-        """Disabled hybrid search is allowed (commented-out check)."""
-        v = ConfigurationValidator()
-        result = v.validate_dependencies(
-            enable_hybrid_search=False,
-            enable_rrf_fusion=True,
-            reranker_engine="cross_encoder",
-        )
-        assert result is True
-
     def test_no_reranker_still_valid(self):
         """No reranker engine is allowed."""
         v = ConfigurationValidator()
         result = v.validate_dependencies(
-            enable_hybrid_search=True,
             enable_rrf_fusion=False,
             reranker_engine="none",
         )
@@ -1005,7 +993,6 @@ class TestValidateConfig:
             fusion_method=FusionMethod.RRF,
             min_memory_length=1,
             max_memory_length=30720,
-            enable_hybrid_search=True,
             enable_rrf_fusion=True,
         )
         if not overrides:
@@ -1061,9 +1048,7 @@ class TestValidateConfig:
         assert not any("OPENROUTER_API_KEY" in e.field for e in errors)
 
     def test_dependencies_validated(self):
-        """Typed hybrid/RRF/reranker defaults remain valid together."""
         cfg = self._make_config(
-            enable_hybrid_search=True,
             enable_rrf_fusion=True,
             reranker_engine=RerankerEngine.CROSS_ENCODER,
         )
