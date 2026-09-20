@@ -17,7 +17,7 @@ from reflectlog.application.config.settings import Config
 from reflectlog.application.memory.manager import MemoryManager
 from reflectlog.application.utils.logging import StructuredLogger
 from reflectlog.application.utils.security import SecretString
-from reflectlog.core.enums import RerankerEngine
+from reflectlog.core.enums import EmbedderProvider, RerankerEngine
 from reflectlog.core.logging import IStructuredLogger
 from reflectlog.core.types import Embeddings
 
@@ -57,7 +57,7 @@ def create_usearch_config(temp_dir: str, project_suffix: str = "") -> Config:
     return Config(
         workspace_id=workspace_id,
         openrouter_api_key=SecretString("test-key"),
-        embedder_provider="langchain",
+        embedder_provider=EmbedderProvider.LANGCHAIN,
         embedding_model="mock-model",
         embedding_dims=128,
         qwen_embedding_dims=128,
