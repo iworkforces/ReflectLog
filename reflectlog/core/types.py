@@ -219,6 +219,13 @@ class Embeddings(Protocol):
         ...
 
 
+@runtime_checkable
+class Closable(Protocol):
+    """Resource with synchronous idempotent cleanup."""
+
+    def close(self) -> None: ...
+
+
 class ISemanticSearchEngine(Protocol):
     """Interface for semantic search engine operations.
 
