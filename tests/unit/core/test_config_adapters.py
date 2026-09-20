@@ -36,6 +36,7 @@ from reflectlog.core.config_adapters import (
 )
 from reflectlog.core.enums import (
     CrossEncoderDevice,
+    EmbedderProvider,
     RerankerEngine,
     TransportMode,
 )
@@ -80,7 +81,7 @@ def custom_config() -> Config:
         cross_encoder_device=CrossEncoderDevice.CUDA,
         reranker_batch_normalize=False,
         embedding_model="openai/text-embedding-3-small",
-        embedder_provider="langchain",
+        embedder_provider=EmbedderProvider.LANGCHAIN,
         qwen_embedding_dims=2048,
         embedding_batch_size=256,
         embedding_max_concurrent_batches=8,
