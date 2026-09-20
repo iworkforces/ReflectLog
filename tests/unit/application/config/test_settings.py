@@ -93,6 +93,8 @@ class TestConfigDefaults:
         assert cfg.embedding_model == "openai/text-embedding-3-large"
         assert cfg.embedding_dims == 3072
         assert cfg.qwen_embedding_dims == 4096
+        assert cfg.wemm_embedding_dims == 2048
+        assert cfg.wemm_device == "auto"
         assert cfg.embedding_batch_size == 512
         assert cfg.embedding_max_concurrent_batches == 4
         assert cfg.embedding_cache_enabled is True
@@ -866,11 +868,11 @@ class TestStaticParseMethods:
         assert result["path"] == "/mcp"
 
     def test_parse_embedding_config_custom(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("EMBEDDER_PROVIDER", "custom")
+        monkeypatch.setenv("EMBEDDER_PROVIDER", "langchain")
         monkeypatch.setenv("EMBEDDING_MODEL", "my-model")
         monkeypatch.setenv("EMBEDDING_DIMS", "768")
         result = Config._parse_embedding_config()
-        assert result["embedder_provider"] == "custom"
+        assert result["embedder_provider"] == "langchain"
         assert result["embedding_model"] == "my-model"
         assert result["embedding_dims"] == 768
 
@@ -998,6 +1000,8 @@ class TestTypedDictReturns:
             "embedding_model",
             "embedding_dims",
             "qwen_embedding_dims",
+            "wemm_embedding_dims",
+            "wemm_device",
             "embedding_batch_size",
             "embedding_max_concurrent_batches",
             "embedding_cache_enabled",
