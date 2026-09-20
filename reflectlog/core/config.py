@@ -24,9 +24,11 @@ if TYPE_CHECKING:
     from reflectlog.core.enums import (
         CrossEncoderDevice,
         DistanceMetric,
+        EmbedderProvider,
         LlmProvider,
         RerankerEngine,
         TransportMode,
+        WeMMDevice,
     )
 
 
@@ -265,13 +267,23 @@ class IEmbedderConfig(Protocol):
         ...
 
     @property
-    def embedder_provider(self) -> str:
-        """Embedder provider: langchain or openai."""
+    def embedder_provider(self) -> EmbedderProvider:
+        """Embedding backend."""
         ...
 
     @property
     def qwen_embedding_dims(self) -> int:
         """Qwen embedding dimensions."""
+        ...
+
+    @property
+    def wemm_embedding_dims(self) -> int:
+        """Validated WeMM embedding dimensions."""
+        ...
+
+    @property
+    def wemm_device(self) -> WeMMDevice:
+        """Device selection for local WeMM inference."""
         ...
 
     @property

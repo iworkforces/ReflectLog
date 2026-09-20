@@ -106,6 +106,70 @@ LOG_LEVEL=INFO                    # Logging level
 
 See `.env.example` for all available options.
 
+### Local Tencent WeMM Embeddings
+
+ReflectLog can run Tencent WeMM embeddings locally through the checkpoints'
+official SentenceTransformer integration. The runtime surface is text-only even
+though the upstream checkpoints are multimodal.
+
+```bash
+EMBEDDER_PROVIDER=wemm
+EMBEDDING_MODEL=tencent/WeMM-Embedding-2B
+WEMM_DEVICE=auto
+EMBEDDING_BATCH_SIZE=1
+```
+
+Exactly three model selectors are accepted:
+
+| Model | Native dimensions | Allowed `WEMM_EMBEDDING_DIMS` |
+|-------|-------------------|----------------------------------|
+| `tencent/WeMM-Embedding-2B` | 2048 | 64, 128, 256, 512, 1024, 2048 |
+| `tencent/WeMM-Embedding-4B` | 2560 | 64, 128, 256, 512, 1024, 2560 |
+| `tencent/WeMM-Embedding-9B` | 4096 | 64, 128, 256, 512, 1024, 2048, 4096 |
+
+Omit `WEMM_EMBEDDING_DIMS` to use the selected model's native width. Set
+`WEMM_DEVICE` to `auto`, `cpu`, `cuda`, or `mps`; `auto` delegates device
+selection to SentenceTransformers. The first embedding call downloads and loads
+the checkpoint. `SentenceTransformer(..., trust_remote_code=True)` is required
+by Tencent's official integration, so only run a checkpoint revision whose
+repository code you trust.
+
+WeMM embedding inference does not call OpenRouter. ReflectLog still requires its
+existing `OPENROUTER_API_KEY` configuration for features such as smart memory
+replacement; that requirement is independent of the selected embedding backend.
+
+Tencent's model cards demonstrate CUDA execution only. `cpu` and `mps` are
+SentenceTransformers device selectors provided for practical host selection,
+not an upstream WeMM compatibility or performance guarantee.
+
+Tencent recommends the `qwen-vl-utils[decord]` extra. ReflectLog installs that
+exact extra on Linux x86_64. `decord 0.6.0` has no macOS wheel or source
+distribution, so macOS installs the same pinned `qwen-vl-utils` package without
+the video-only decoder. This does not reduce ReflectLog's text-only WeMM surface.
+
+These are multi-billion-parameter local models. Disk, system memory, accelerator
+memory, and startup time increase substantially from 2B to 4B to 9B. Start with
+2B, a small batch size, and an explicit device appropriate for the host. The 9B
+checkpoint generally requires server-class resources or an appropriately sized
+accelerator; it is not a realistic default for memory-constrained laptops.
+
+USearch persists a fixed vector width. Changing `EMBEDDING_MODEL` or
+`WEMM_EMBEDDING_DIMS` requires rebuilding that workspace's vector index. Export
+or otherwise preserve the workspace memories first, stop ReflectLog, recreate
+the workspace semantic storage, and re-add the memories. Existing vectors are
+not migrated or made compatible automatically.
+
+Real checkpoint tests are opt-in and are never part of normal CI:
+
+```bash
+RUN_LOCAL_MODEL_TESTS=1 WEMM_TEST_MODEL=tencent/WeMM-Embedding-2B \
+  uv run python -m pytest tests/integration/test_wemm_embeddings_integration.py
+RUN_LOCAL_MODEL_TESTS=1 WEMM_TEST_MODEL=tencent/WeMM-Embedding-4B \
+  uv run python -m pytest tests/integration/test_wemm_embeddings_integration.py
+RUN_LOCAL_MODEL_TESTS=1 WEMM_TEST_MODEL=tencent/WeMM-Embedding-9B \
+  uv run python -m pytest tests/integration/test_wemm_embeddings_integration.py
+```
+
 ## Architecture
 
 ```

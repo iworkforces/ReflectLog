@@ -99,9 +99,14 @@ class FastMCPServer:
             f"log_level={self.config.log_level}"
         )
 
-        self.logger.info(
-            f"embedding_dims={self.config.qwen_embedding_dims if self.config.embedder_provider == EmbedderProvider.LANGCHAIN else self.config.embedding_dims}"
-        )
+        match self.config.embedder_provider:
+            case EmbedderProvider.OPENAI:
+                embedding_dimensions = self.config.embedding_dims
+            case EmbedderProvider.LANGCHAIN:
+                embedding_dimensions = self.config.qwen_embedding_dims
+            case EmbedderProvider.WEMM:
+                embedding_dimensions = self.config.wemm_embedding_dims
+        self.logger.info(f"embedding_dims={embedding_dimensions}")
 
         # Initialize memory manager
         self._memory_manager = MemoryManager(self.config, self.logger)

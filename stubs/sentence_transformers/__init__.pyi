@@ -11,6 +11,33 @@ from collections.abc import Callable, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
+class SentenceTransformer:
+    def __init__(
+        self,
+        model_name_or_path: str,
+        *,
+        device: str | None = None,
+        trust_remote_code: bool = False,
+    ) -> None: ...
+    def encode_query(
+        self,
+        sentences: list[str],
+        *,
+        batch_size: int = 32,
+        normalize_embeddings: bool = False,
+        convert_to_numpy: bool = True,
+        truncate_dim: int | None = None,
+    ) -> NDArray[np.float32]: ...
+    def encode_document(
+        self,
+        sentences: list[str],
+        *,
+        batch_size: int = 32,
+        normalize_embeddings: bool = False,
+        convert_to_numpy: bool = True,
+        truncate_dim: int | None = None,
+    ) -> NDArray[np.float32]: ...
+
 class CrossEncoder:
     """Cross-encoder model for computing similarity scores between sentence pairs.
 

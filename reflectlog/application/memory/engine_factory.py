@@ -6,18 +6,24 @@ It enables testing with mock engines and supports new engine types without
 modifying the factory interface.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from reflectlog.application.memory.fusion import create_fusion_engine
 from reflectlog.core.config_adapters import ConfigAdapter
-from reflectlog.core.enums import EmbedderProvider, RerankerEngine
+from reflectlog.core.enums import EmbedderProvider, RerankerEngine, WeMMModel
 from reflectlog.infrastructure.cross_encoder_reranker import (
     CrossEncoderConfig,
     CrossEncoderReranker,
 )
 from reflectlog.infrastructure.embeddings.cached_embeddings import CachedEmbeddings
 from reflectlog.infrastructure.embeddings.qwen3_embedding import LangchainQwenEmbeddings
+from reflectlog.infrastructure.embeddings.wemm_embedding import (
+    WeMMEmbeddingConfig,
+    WeMMEmbeddings,
+)
 from reflectlog.infrastructure.smart_replacer import SmartReplacer, SmartReplacerConfig
 from reflectlog.infrastructure.tantivy_engine import TantivyConfig, TantivyEngine
 from reflectlog.infrastructure.usearch_engine import USearchConfig, USearchEngine
@@ -27,6 +33,7 @@ if TYPE_CHECKING:
     from reflectlog.application.memory.fusion.base import FusionEngine
     from reflectlog.core.logging import IStructuredLogger
     from reflectlog.core.storage_coordination import IStorageCoordinator
+    from reflectlog.core.types import Embeddings
 
 
 @dataclass
@@ -120,7 +127,7 @@ class EngineFactory:
         self,
         config: Config,
         logger: IStructuredLogger | None,
-    ) -> LangchainQwenEmbeddings | CachedEmbeddings:
+    ) -> Embeddings:
         """Create embedder with optional caching.
 
         Args:
@@ -130,26 +137,55 @@ class EngineFactory:
         Returns:
             Embedder instance (possibly wrapped with caching).
         """
-        base_embedder = LangchainQwenEmbeddings(
-            config={
-                "model": config.embedding_model,
-                "embedding_dims": config.qwen_embedding_dims
-                if config.embedder_provider == EmbedderProvider.LANGCHAIN
-                else config.embedding_dims,
-                "api_key": config.openrouter_api_key.get_secret_value(),
-                "openai_base_url": config.openrouter_base_url,
-                "batch_size": config.embedding_batch_size,
-                "max_concurrent_batches": config.embedding_max_concurrent_batches,
-            }
-        )
-
+        match config.embedder_provider:
+            case EmbedderProvider.OPENAI:
+                base_embedder: Embeddings = LangchainQwenEmbeddings(
+                    config={
+                        "model": config.embedding_model,
+                        "embedding_dims": config.embedding_dims,
+                        "api_key": config.openrouter_api_key.get_secret_value(),
+                        "openai_base_url": config.openrouter_base_url,
+                        "batch_size": config.embedding_batch_size,
+                        "max_concurrent_batches": config.embedding_max_concurrent_batches,
+                    }
+                )
+            case EmbedderProvider.LANGCHAIN:
+                base_embedder = LangchainQwenEmbeddings(
+                    config={
+                        "model": config.embedding_model,
+                        "embedding_dims": config.qwen_embedding_dims,
+                        "api_key": config.openrouter_api_key.get_secret_value(),
+                        "openai_base_url": config.openrouter_base_url,
+                        "batch_size": config.embedding_batch_size,
+                        "max_concurrent_batches": config.embedding_max_concurrent_batches,
+                    }
+                )
+            case EmbedderProvider.WEMM:
+                base_embedder = WeMMEmbeddings(
+                    WeMMEmbeddingConfig(
+                        model=WeMMModel.from_config(config.embedding_model),
+                        dimensions=config.wemm_embedding_dims,
+                        device=config.wemm_device,
+                        batch_size=config.embedding_batch_size,
+                    )
+                )
         if config.embedding_cache_enabled:
-            return CachedEmbeddings(
-                embedder=base_embedder,
-                cache_size=config.embedding_cache_size,
-                enabled=True,
-                logger=logger,
-            )
+            match config.embedder_provider:
+                case EmbedderProvider.WEMM:
+                    return CachedEmbeddings(
+                        embedder=base_embedder,
+                        cache_size=config.embedding_cache_size,
+                        enabled=True,
+                        role_separated=True,
+                        logger=logger,
+                    )
+                case EmbedderProvider.OPENAI | EmbedderProvider.LANGCHAIN:
+                    return CachedEmbeddings(
+                        embedder=base_embedder,
+                        cache_size=config.embedding_cache_size,
+                        enabled=True,
+                        logger=logger,
+                    )
         return base_embedder
 
     def _create_tantivy_engine(

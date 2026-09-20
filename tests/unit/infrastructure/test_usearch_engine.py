@@ -201,6 +201,54 @@ class TestUSearchEngineAdd:
         finally:
             engine.close()
 
+    def test_add_indexes_document_role_vector(
+        self, temp_engine: tuple[USearchConfig, MockEmbedder, str]
+    ) -> None:
+        config, _, _ = temp_engine
+        embedder = MagicMock(spec=Embeddings)
+        query_vector = [1.0, *([0.0] * 127)]
+        document_vector = [0.0, 1.0, *([0.0] * 126)]
+        embedder.embed_query.return_value = query_vector
+        embedder.embed_documents.return_value = [document_vector]
+        engine = USearchEngine(config=config, embedder=embedder)
+
+        try:
+            engine.add("user1", "persisted document", infer=False)
+            memory_id = engine.get_id_by_content("user1", "persisted document")
+
+            assert memory_id is not None
+            embedder.embed_documents.assert_called_once_with(["persisted document"])
+            embedder.embed_query.assert_not_called()
+            stored_vector = engine.index.get(memory_id)
+            assert stored_vector is not None
+            np.testing.assert_allclose(stored_vector, document_vector)
+        finally:
+            engine.close()
+
+    @pytest.mark.parametrize(
+        "document_vectors",
+        [[], [[]], [[0.0] * 128, [1.0] * 128]],
+    )
+    def test_add_rejects_invalid_document_embedding_batch(
+        self,
+        temp_engine: tuple[USearchConfig, MockEmbedder, str],
+        document_vectors: list[list[float]],
+    ) -> None:
+        config, _, _ = temp_engine
+        embedder = MagicMock(spec=Embeddings)
+        embedder.embed_query.return_value = [1.0, *([0.0] * 127)]
+        embedder.embed_documents.return_value = document_vectors
+        engine = USearchEngine(config=config, embedder=embedder)
+
+        try:
+            with pytest.raises(RuntimeError):
+                engine.add("user1", "persisted document", infer=False)
+
+            assert engine.count("user1") == 0
+            embedder.embed_query.assert_not_called()
+        finally:
+            engine.close()
+
     def test_add_skips_duplicates(
         self, temp_engine: tuple[USearchConfig, MockEmbedder, str]
     ) -> None:

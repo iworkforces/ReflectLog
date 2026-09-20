@@ -44,9 +44,11 @@ from reflectlog.core.config import (
 from reflectlog.core.enums import (
     CrossEncoderDevice,
     DistanceMetric,
+    EmbedderProvider,
     LlmProvider,
     RerankerEngine,
     TransportMode,
+    WeMMDevice,
     parse_str_enum,
 )
 
@@ -314,14 +316,24 @@ class ConfigAdapter(IAppConfig):
         return self._config.embedding_model
 
     @property
-    def embedder_provider(self) -> str:
-        """Embedder provider: langchain or openai."""
+    def embedder_provider(self) -> EmbedderProvider:
+        """Embedding backend."""
         return self._config.embedder_provider
 
     @property
     def qwen_embedding_dims(self) -> int:
         """Qwen embedding dimensions."""
         return self._config.qwen_embedding_dims
+
+    @property
+    def wemm_embedding_dims(self) -> int:
+        """Validated WeMM embedding dimensions."""
+        return self._config.wemm_embedding_dims
+
+    @property
+    def wemm_device(self) -> WeMMDevice:
+        """Device selection for local WeMM inference."""
+        return self._config.wemm_device
 
     @property
     def embedding_batch_size(self) -> int:
@@ -622,12 +634,20 @@ class EmbedderConfigAdapter(IEmbedderConfig):
         return self._config.embedding_model
 
     @property
-    def embedder_provider(self) -> str:
+    def embedder_provider(self) -> EmbedderProvider:
         return self._config.embedder_provider
 
     @property
     def qwen_embedding_dims(self) -> int:
         return self._config.qwen_embedding_dims
+
+    @property
+    def wemm_embedding_dims(self) -> int:
+        return self._config.wemm_embedding_dims
+
+    @property
+    def wemm_device(self) -> WeMMDevice:
+        return self._config.wemm_device
 
     @property
     def embedding_batch_size(self) -> int:

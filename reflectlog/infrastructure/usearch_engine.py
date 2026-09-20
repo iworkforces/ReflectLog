@@ -32,7 +32,7 @@ from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import InitializationError, StorageError
 from reflectlog.core.logging import IStructuredLogger
 from reflectlog.core.storage_coordination import IStorageCoordinator, LeaseMode
-from reflectlog.core.types import Embeddings, IStoredMemory
+from reflectlog.core.types import Closable, Embeddings, IStoredMemory
 from reflectlog.infrastructure.memory_store import MemoryStore
 from reflectlog.utility.scoring import distance_to_similarity_cosine
 from reflectlog.utility.security import validate_workspace_id
@@ -247,12 +247,13 @@ class USearchConfig:
         if not os.path.isabs(base_path):
             base_path = os.path.join(os.getcwd(), base_path)
 
-        # Determine embedding dims based on provider
-        embedding_dims = (
-            config.qwen_embedding_dims
-            if config.embedder_provider == EmbedderProvider.LANGCHAIN
-            else config.embedding_dims
-        )
+        match config.embedder_provider:
+            case EmbedderProvider.OPENAI:
+                embedding_dims = config.embedding_dims
+            case EmbedderProvider.LANGCHAIN:
+                embedding_dims = config.qwen_embedding_dims
+            case EmbedderProvider.WEMM:
+                embedding_dims = config.wemm_embedding_dims
 
         return cls(
             workspace_id=workspace_id,
@@ -634,7 +635,12 @@ class USearchEngine(BaseModel):
                     )
                 return
             try:
-                vector = self.embedder.embed_query(content)
+                vectors = self.embedder.embed_documents([content])
+                if len(vectors) != 1:
+                    raise RuntimeError("Embedding batch size mismatch for USearch add")
+                vector = vectors[0]
+                if not vector:
+                    raise RuntimeError("Embedding produced an empty vector")
             except Exception as embed_error:
                 raise RuntimeError(
                     f"Failed to generate embedding: {embed_error}"
@@ -1286,10 +1292,14 @@ class USearchEngine(BaseModel):
         Closes the MemoryStore SQLite connection.
         """
         with self._init_lock:
+            if self._closed:
+                return
             self._closed = True
             if self._memory_store is not None:
                 self._memory_store.close()
             self._index = None
+            if isinstance(self.embedder, Closable):
+                self.embedder.close()
 
     def __enter__(self) -> Self:
         """Enter context manager.

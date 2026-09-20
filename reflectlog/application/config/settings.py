@@ -15,6 +15,8 @@ from reflectlog.core.enums import (
     LlmProvider,
     RerankerEngine,
     TransportMode,
+    WeMMDevice,
+    WeMMModel,
     parse_str_enum,
 )
 from reflectlog.core.exceptions import ConfigurationError
@@ -109,10 +111,12 @@ class TransportConfigDict(TypedDict):
 
 
 class EmbeddingConfigDict(TypedDict):
-    embedder_provider: str
+    embedder_provider: EmbedderProvider
     embedding_model: str
     embedding_dims: int
     qwen_embedding_dims: int
+    wemm_embedding_dims: int
+    wemm_device: WeMMDevice
     embedding_batch_size: int
     embedding_max_concurrent_batches: int
     embedding_cache_enabled: bool
@@ -243,10 +247,12 @@ class Config:
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     # Embedding settings
-    embedder_provider: str = EmbedderProvider.OPENAI
+    embedder_provider: EmbedderProvider = EmbedderProvider.OPENAI
     embedding_model: str = "openai/text-embedding-3-large"
     embedding_dims: int = 3072
     qwen_embedding_dims: int = 4096
+    wemm_embedding_dims: int = 2048
+    wemm_device: WeMMDevice = WeMMDevice.AUTO
 
     # Embedding performance settings
     embedding_batch_size: int = 512  # Texts per API request for async batching
@@ -398,16 +404,37 @@ class Config:
     @staticmethod
     def _parse_embedding_config() -> EmbeddingConfigDict:
         """Parse embedding-related configuration from environment variables."""
+        provider = parse_str_enum(
+            EmbedderProvider,
+            os.environ.get("EMBEDDER_PROVIDER", EmbedderProvider.OPENAI),
+            field="EMBEDDER_PROVIDER",
+        )
+        embedding_model = os.environ.get(
+            "EMBEDDING_MODEL", "openai/text-embedding-3-large"
+        )
+        wemm_dimensions = 2048
+        if provider is EmbedderProvider.WEMM:
+            model = WeMMModel.from_config(embedding_model)
+            raw_dimensions = os.environ.get("WEMM_EMBEDDING_DIMS")
+            override = (
+                _parse_env_int("WEMM_EMBEDDING_DIMS", raw_dimensions, minimum=1)
+                if raw_dimensions is not None
+                else None
+            )
+            wemm_dimensions = model.resolve_dimensions(override)
+            embedding_model = model.value
         return {
-            "embedder_provider": os.environ.get(
-                "EMBEDDER_PROVIDER", EmbedderProvider.OPENAI
-            ),
-            "embedding_model": os.environ.get(
-                "EMBEDDING_MODEL", "openai/text-embedding-3-large"
-            ),
+            "embedder_provider": provider,
+            "embedding_model": embedding_model,
             "embedding_dims": _parse_env_int("EMBEDDING_DIMS", "3072", minimum=1),
             "qwen_embedding_dims": _parse_env_int(
                 "QWEN_EMBEDDING_DIMS", "4096", minimum=1
+            ),
+            "wemm_embedding_dims": wemm_dimensions,
+            "wemm_device": parse_str_enum(
+                WeMMDevice,
+                os.environ.get("WEMM_DEVICE", WeMMDevice.AUTO),
+                field="WEMM_DEVICE",
             ),
             "embedding_batch_size": _parse_env_int(
                 "EMBEDDING_BATCH_SIZE", "512", minimum=1

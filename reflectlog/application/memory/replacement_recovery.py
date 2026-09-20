@@ -220,12 +220,14 @@ def apply_pending_transition(
         )
         return True
 
-    _ensure_replacement_present(
+    replacement_live = _ensure_replacement_present(
         transition,
         semantic_engine=semantic_engine,
         tantivy_engine=tantivy_engine,
         precomputed_vectors=precomputed_vectors,
     )
+    if not replacement_live:
+        return False
     _remove_recorded_old(transition, semantic_engine, tantivy_engine)
 
     if tantivy_engine is not None:
@@ -599,8 +601,8 @@ def _ensure_replacement_present(
     semantic_engine: ISemanticSearchEngine,
     tantivy_engine: TantivyEngine | None,
     precomputed_vectors: dict[str, list[float]] | None = None,
-) -> None:
-    """Insert the replacement when SQLite/USearch or Tantivy still lacks it."""
+) -> bool:
+    """Ensure the replacement has both SQLite identity and a live vector."""
     existing_id = semantic_engine.get_id_by_content(
         transition.workspace_id, transition.new_content
     )
@@ -611,21 +613,27 @@ def _ensure_replacement_present(
     )
     if existing_id is None:
         if precomputed_vectors is not None and vector is None:
-            return
+            return False
         _insert_recovered_add(semantic_engine, transition, vector=vector)
     elif not _vector_present(semantic_engine, existing_id):
         if precomputed_vectors is not None and vector is None:
-            return
+            return False
         _reindex_if_vector_missing(
             semantic_engine, existing_id, transition, vector=vector
         )
 
+    replacement_id = semantic_engine.get_id_by_content(
+        transition.workspace_id, transition.new_content
+    )
+    if replacement_id is None or not _vector_present(semantic_engine, replacement_id):
+        return False
     if tantivy_engine is None:
-        return
+        return True
     if not _tantivy_has(
         tantivy_engine, transition.workspace_id, transition.new_content
     ):
         tantivy_engine.add(transition.workspace_id, transition.new_content)
+    return True
 
 
 def _reindex_if_vector_missing(
@@ -686,19 +694,34 @@ def _precompute_add_vectors(
             continue
         seen.add(content)
         needed.append(content)
+    if not needed:
+        return {}
+
+    try:
+        raw_vectors = embedder.embed_documents(needed)
+    except Exception as exc:
+        logger.warning(
+            "Pre-embed for recovery add failed; leaving intent pending",
+            extra={"error": str(exc)},
+        )
+        return {}
+    if len(raw_vectors) != len(needed):
+        logger.warning(
+            "Pre-embed for recovery add failed; leaving intent pending",
+            extra={"error": "Embedding batch size mismatch for recovery add"},
+        )
+        return {}
+
     vectors: dict[str, list[float]] = {}
-    for content in needed:
-        try:
-            raw = embedder.embed_query(content)
-        except Exception as exc:
+    for content, raw in zip(needed, raw_vectors, strict=True):
+        converted = _as_floats(raw)
+        if converted is None:
             logger.warning(
                 "Pre-embed for recovery add failed; leaving intent pending",
-                extra={"error": str(exc)},
+                extra={"error": "Embedding batch contained an empty vector"},
             )
-            continue
-        converted = _as_floats(raw)
-        if converted is not None:
-            vectors[content] = converted
+            return {}
+        vectors[content] = converted
     return vectors
 
 

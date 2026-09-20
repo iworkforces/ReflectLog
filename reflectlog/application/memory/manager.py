@@ -50,6 +50,10 @@ from reflectlog.infrastructure.cross_encoder_reranker import (
 )
 from reflectlog.infrastructure.embeddings.cached_embeddings import CachedEmbeddings
 from reflectlog.infrastructure.embeddings.qwen3_embedding import LangchainQwenEmbeddings
+from reflectlog.infrastructure.embeddings.wemm_embedding import (
+    WeMMEmbeddingConfig,
+    WeMMEmbeddings,
+)
 from reflectlog.infrastructure.smart_replacer import SmartReplacer, SmartReplacerConfig
 from reflectlog.infrastructure.tantivy_engine import TantivyConfig, TantivyEngine
 from reflectlog.infrastructure.usearch_engine import USearchConfig, USearchEngine
@@ -60,6 +64,7 @@ from ...core.enums import (
     EngineReadiness,
     RerankerEngine,
     TransitionKind,
+    WeMMModel,
 )
 from ...core.storage_coordination import IStorageCoordinator, LeaseMode
 from ...infrastructure.storage_coordinator import PortalockerStorageCoordinator
@@ -85,7 +90,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
     from ...core.logging import IStructuredLogger
-    from ...core.types import ISemanticSearchEngine, ReplacementTransition
+    from ...core.types import Embeddings, ISemanticSearchEngine, ReplacementTransition
     from ..config.settings import Config
     from .fusion.base import FusionEngine
 
@@ -256,25 +261,55 @@ class MemoryManager:
         """Create USearch semantic engine with optional embedding cache."""
         config = self.config
         usearch_config = USearchConfig.from_config(ConfigAdapter(config))
-        base_embedder = LangchainQwenEmbeddings(
-            config={
-                "model": config.embedding_model,
-                "embedding_dims": config.qwen_embedding_dims
-                if config.embedder_provider == EmbedderProvider.LANGCHAIN
-                else config.embedding_dims,
-                "api_key": config.openrouter_api_key.get_secret_value(),
-                "openai_base_url": config.openrouter_base_url,
-                "batch_size": config.embedding_batch_size,
-                "max_concurrent_batches": config.embedding_max_concurrent_batches,
-            }
-        )
+        match config.embedder_provider:
+            case EmbedderProvider.OPENAI:
+                base_embedder: Embeddings = LangchainQwenEmbeddings(
+                    config={
+                        "model": config.embedding_model,
+                        "embedding_dims": config.embedding_dims,
+                        "api_key": config.openrouter_api_key.get_secret_value(),
+                        "openai_base_url": config.openrouter_base_url,
+                        "batch_size": config.embedding_batch_size,
+                        "max_concurrent_batches": config.embedding_max_concurrent_batches,
+                    }
+                )
+            case EmbedderProvider.LANGCHAIN:
+                base_embedder = LangchainQwenEmbeddings(
+                    config={
+                        "model": config.embedding_model,
+                        "embedding_dims": config.qwen_embedding_dims,
+                        "api_key": config.openrouter_api_key.get_secret_value(),
+                        "openai_base_url": config.openrouter_base_url,
+                        "batch_size": config.embedding_batch_size,
+                        "max_concurrent_batches": config.embedding_max_concurrent_batches,
+                    }
+                )
+            case EmbedderProvider.WEMM:
+                base_embedder = WeMMEmbeddings(
+                    WeMMEmbeddingConfig(
+                        model=WeMMModel.from_config(config.embedding_model),
+                        dimensions=config.wemm_embedding_dims,
+                        device=config.wemm_device,
+                        batch_size=config.embedding_batch_size,
+                    )
+                )
         if config.embedding_cache_enabled:
-            embedder = CachedEmbeddings(
-                embedder=base_embedder,
-                cache_size=config.embedding_cache_size,
-                enabled=True,
-                logger=self.logger,
-            )
+            match config.embedder_provider:
+                case EmbedderProvider.WEMM:
+                    embedder = CachedEmbeddings(
+                        embedder=base_embedder,
+                        cache_size=config.embedding_cache_size,
+                        enabled=True,
+                        role_separated=True,
+                        logger=self.logger,
+                    )
+                case EmbedderProvider.OPENAI | EmbedderProvider.LANGCHAIN:
+                    embedder = CachedEmbeddings(
+                        embedder=base_embedder,
+                        cache_size=config.embedding_cache_size,
+                        enabled=True,
+                        logger=self.logger,
+                    )
         else:
             embedder = base_embedder
         self._semantic_engine: ISemanticSearchEngine = USearchEngine(

@@ -11,6 +11,7 @@ from reflectlog.application.utils.logging import StructuredLogger
 from reflectlog.core.logging import IStructuredLogger
 from reflectlog.core.types import Embeddings
 from reflectlog.infrastructure.embeddings.cached_embeddings import CachedEmbeddings
+from reflectlog.infrastructure.embeddings.wemm_embedding import WeMMEmbeddings
 
 
 def embedding_for_text(text: str) -> list[float]:
@@ -107,6 +108,22 @@ class TestHashQuery:
         hash1 = cached._hash_query("deterministic")
         hash2 = cached._hash_query("deterministic")
         assert hash1 == hash2
+
+    def test_role_separated_document_hash_keeps_text_canonicalization(
+        self, mock_embedder: MagicMock
+    ) -> None:
+        cached = CachedEmbeddings(embedder=mock_embedder, role_separated=True)
+
+        assert cached._hash_document("line one\nline two") == cached._hash_document(
+            "line one line two"
+        )
+        assert cached._hash_query("line one\r\nline two") == cached._hash_query(
+            "line one\nline two"
+        )
+        assert cached._hash_document("line one\r\nline two") == cached._hash_document(
+            "line one\nline two"
+        )
+        assert cached._hash_document("same text") != cached._hash_query("same text")
 
 
 class TestGetCached:
@@ -279,6 +296,18 @@ class TestEmbedDocuments:
         assert mock_embedder.embed_documents.call_count == 1
         assert cached.get_cache_stats()["size"] == 1
 
+    def test_default_reuses_query_entry_for_document(
+        self, cached: CachedEmbeddings, mock_embedder: MagicMock
+    ) -> None:
+        mock_embedder.embed_query.return_value = [0.1, 0.2]
+
+        cached.embed_query("shared text")
+        document_vectors = cached.embed_documents(["shared text"])
+
+        assert document_vectors == [[0.1, 0.2]]
+        mock_embedder.embed_query.assert_called_once_with("shared text")
+        mock_embedder.embed_documents.assert_not_called()
+
     def test_short_embed_batch_raises(
         self, cached: CachedEmbeddings, mock_embedder: MagicMock
     ) -> None:
@@ -302,6 +331,46 @@ class TestEmbedDocuments:
         with pytest.raises(RuntimeError, match="empty vector"):
             cached.embed_query("broken query")
         assert cached.get_cache_stats()["size"] == 0
+
+
+class TestRoleSeparatedCache:
+    def test_identical_text_uses_distinct_query_and_document_entries(
+        self,
+    ) -> None:
+        wemm_embedder = MagicMock(spec=WeMMEmbeddings)
+        wemm_embedder.embed_query.return_value = [1.0, 0.0]
+        wemm_embedder.embed_documents.return_value = [[0.0, 1.0]]
+        cached = CachedEmbeddings(
+            embedder=wemm_embedder,
+            role_separated=True,
+        )
+
+        query_vector = cached.embed_query("same text")
+        document_vectors = cached.embed_documents(["same text"])
+
+        assert query_vector == [1.0, 0.0]
+        assert document_vectors == [[0.0, 1.0]]
+        wemm_embedder.embed_query.assert_called_once_with("same text")
+        wemm_embedder.embed_documents.assert_called_once_with(["same text"])
+
+    def test_prefixed_query_and_document_use_distinct_encoder_entries(self) -> None:
+        wemm_embedder = MagicMock(spec=WeMMEmbeddings)
+        wemm_embedder.embed_query.return_value = [1.0, 0.0]
+        wemm_embedder.embed_documents.return_value = [[0.0, 1.0]]
+        cached = CachedEmbeddings(
+            embedder=wemm_embedder,
+            role_separated=True,
+        )
+
+        assert cached._hash_query("document:foo") != cached._hash_document("foo")
+
+        query_vector = cached.embed_query("document:foo")
+        document_vectors = cached.embed_documents(["foo"])
+
+        assert query_vector == [1.0, 0.0]
+        assert document_vectors == [[0.0, 1.0]]
+        wemm_embedder.embed_query.assert_called_once_with("document:foo")
+        wemm_embedder.embed_documents.assert_called_once_with(["foo"])
 
 
 class TestAembedQuery:
@@ -419,6 +488,46 @@ class TestAembedDocuments:
         mock_embedder.aembed_documents.return_value = [[0.7, 0.8]]
         with pytest.raises(RuntimeError, match="Embedding batch size mismatch"):
             await cached.aembed_documents(["adoc1", "adoc2"])
+
+    async def test_identical_text_uses_distinct_query_and_document_entries(
+        self,
+    ) -> None:
+        wemm_embedder = MagicMock(spec=WeMMEmbeddings)
+        wemm_embedder.aembed_query = AsyncMock(return_value=[1.0, 0.0])
+        wemm_embedder.aembed_documents = AsyncMock(return_value=[[0.0, 1.0]])
+        cached = CachedEmbeddings(
+            embedder=wemm_embedder,
+            role_separated=True,
+        )
+
+        query_vector = await cached.aembed_query("same text")
+        document_vectors = await cached.aembed_documents(["same text"])
+
+        assert query_vector == [1.0, 0.0]
+        assert document_vectors == [[0.0, 1.0]]
+        wemm_embedder.aembed_query.assert_awaited_once_with("same text")
+        wemm_embedder.aembed_documents.assert_awaited_once_with(["same text"])
+
+    async def test_prefixed_query_and_document_use_distinct_encoder_entries(
+        self,
+    ) -> None:
+        wemm_embedder = MagicMock(spec=WeMMEmbeddings)
+        wemm_embedder.aembed_query = AsyncMock(return_value=[1.0, 0.0])
+        wemm_embedder.aembed_documents = AsyncMock(return_value=[[0.0, 1.0]])
+        cached = CachedEmbeddings(
+            embedder=wemm_embedder,
+            role_separated=True,
+        )
+
+        assert cached._hash_query("document:foo") != cached._hash_document("foo")
+
+        query_vector = await cached.aembed_query("document:foo")
+        document_vectors = await cached.aembed_documents(["foo"])
+
+        assert query_vector == [1.0, 0.0]
+        assert document_vectors == [[0.0, 1.0]]
+        wemm_embedder.aembed_query.assert_awaited_once_with("document:foo")
+        wemm_embedder.aembed_documents.assert_awaited_once_with(["foo"])
 
 
 class TestLRUEviction:

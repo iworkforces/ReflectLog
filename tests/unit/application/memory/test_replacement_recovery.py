@@ -60,7 +60,7 @@ class TestApplyPendingTransition:
     def test_deletes_old_and_inserts_missing_new(self) -> None:
         semantic = MagicMock()
         _stub_journal(semantic)
-        semantic.get_id_by_content.side_effect = [None, None, 99, None]
+        semantic.get_id_by_content.side_effect = [None, 99, None, 99, None]
         semantic.index = {99}
         tantivy = MagicMock()
         seen_new = {"yes": False}
@@ -231,7 +231,7 @@ class TestApplyPendingTransition:
     def test_works_without_tantivy(self) -> None:
         semantic = MagicMock()
         _stub_journal(semantic)
-        semantic.get_id_by_content.side_effect = [None, 7, None]
+        semantic.get_id_by_content.side_effect = [None, 7, 7, None]
         semantic.index = {7}
 
         _ = apply_pending_transition(
@@ -334,7 +334,9 @@ class TestReconcilePendingReplacements:
             _ = store.begin_add_intents("proj", ["ghost-content"])
             semantic = MagicMock()
             semantic.memory_store = store
-            semantic.embedder.embed_query.side_effect = RuntimeError("provider down")
+            semantic.embedder.embed_documents.side_effect = RuntimeError(
+                "provider down"
+            )
             semantic.get_id_by_content.return_value = None
             semantic.ensure_initialized = MagicMock()
             count = reconcile_pending_replacements(
@@ -350,6 +352,149 @@ class TestReconcilePendingReplacements:
             assert pending[0].new_content == "ghost-content"
             semantic.add.assert_not_called()
             semantic.add_batch.assert_not_called()
+            store.close()
+
+    def test_pending_add_indexes_document_role_vector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(db_path=os.path.join(tmpdir, "memories.db"))
+            _ = store.begin_add_intents("proj", ["pending add"])
+            semantic = MagicMock()
+            semantic.memory_store = store
+            semantic.embedder.embed_query.return_value = [1.0, 0.0]
+            semantic.embedder.embed_documents.return_value = [[0.0, 1.0]]
+            semantic.index = set()
+            live: dict[str, int] = {}
+            semantic.get_id_by_content.side_effect = lambda _workspace_id, content: (
+                live.get(content)
+            )
+            semantic.contains_id.side_effect = lambda memory_id: (
+                memory_id in semantic.index
+            )
+
+            def add_batch(
+                _workspace_id: str,
+                contents: list[str],
+                *,
+                infer: bool,
+                vectors: list[list[float]],
+            ) -> list[str]:
+                _ = infer, vectors
+                live[contents[0]] = 21
+                semantic.index.add(21)
+                return contents
+
+            semantic.add_batch.side_effect = add_batch
+
+            count = reconcile_pending_replacements(
+                semantic_engine=semantic,
+                tantivy_engine=None,
+                write_lock=threading.Lock(),
+                lock=threading.RLock(),
+                logger=MagicMock(),
+            )
+
+            assert count == 1
+            semantic.embedder.embed_documents.assert_called_once_with(["pending add"])
+            semantic.embedder.embed_query.assert_not_called()
+            semantic.add_batch.assert_called_once_with(
+                "proj",
+                ["pending add"],
+                infer=False,
+                vectors=[[0.0, 1.0]],
+            )
+            store.close()
+
+    def test_pending_replace_indexes_document_role_vector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(db_path=os.path.join(tmpdir, "memories.db"))
+            _ = store.begin_replacement_transition(
+                old_memory_id=11,
+                workspace_id="proj",
+                old_content="old convention",
+                new_content="replacement document",
+                reason="updated",
+                confidence=0.9,
+            )
+            semantic = MagicMock()
+            semantic.memory_store = store
+            semantic.embedder.embed_query.return_value = [1.0, 0.0]
+            semantic.embedder.embed_documents.return_value = [[0.0, 1.0]]
+            semantic.index = set()
+            live: dict[str, int] = {}
+            semantic.get_id_by_content.side_effect = lambda _workspace_id, content: (
+                live.get(content)
+            )
+            semantic.contains_id.side_effect = lambda memory_id: (
+                memory_id in semantic.index
+            )
+
+            def add_batch(
+                _workspace_id: str,
+                contents: list[str],
+                *,
+                infer: bool,
+                vectors: list[list[float]],
+            ) -> list[str]:
+                _ = infer, vectors
+                live[contents[0]] = 22
+                semantic.index.add(22)
+                return contents
+
+            semantic.add_batch.side_effect = add_batch
+            semantic.delete.side_effect = lambda *, memory_id: semantic.index.discard(
+                int(memory_id)
+            )
+
+            count = reconcile_pending_replacements(
+                semantic_engine=semantic,
+                tantivy_engine=None,
+                write_lock=threading.Lock(),
+                lock=threading.RLock(),
+                logger=MagicMock(),
+            )
+
+            assert count == 1
+            semantic.embedder.embed_documents.assert_called_once_with(
+                ["replacement document"]
+            )
+            semantic.embedder.embed_query.assert_not_called()
+            semantic.add_batch.assert_called_once_with(
+                "proj",
+                ["replacement document"],
+                infer=False,
+                vectors=[[0.0, 1.0]],
+            )
+            store.close()
+
+    @pytest.mark.parametrize(
+        "document_vectors",
+        [[[0.0, 1.0]], [[0.0, 1.0], []]],
+    )
+    def test_invalid_document_batch_leaves_all_adds_pending(
+        self, document_vectors: list[list[float]]
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(db_path=os.path.join(tmpdir, "memories.db"))
+            _ = store.begin_add_intents("proj", ["first add", "second add"])
+            semantic = MagicMock()
+            semantic.memory_store = store
+            semantic.embedder.embed_query.return_value = [1.0, 0.0]
+            semantic.embedder.embed_documents.return_value = document_vectors
+            semantic.get_id_by_content.return_value = None
+            semantic.contains_id.return_value = False
+
+            count = reconcile_pending_replacements(
+                semantic_engine=semantic,
+                tantivy_engine=None,
+                write_lock=threading.Lock(),
+                lock=threading.RLock(),
+                logger=MagicMock(),
+            )
+
+            assert count == 0
+            assert len(store.list_pending_transitions()) == 2
+            semantic.add_batch.assert_not_called()
+            semantic.embedder.embed_query.assert_not_called()
             store.close()
 
     def test_noops_when_nothing_is_pending(self) -> None:
@@ -700,7 +845,7 @@ class TestReconcilePendingReplacements:
 
             semantic = MagicMock()
             semantic.memory_store = store
-            semantic.embedder.embed_query.return_value = [0.1, 0.2]
+            semantic.embedder.embed_documents.return_value = [[0.1, 0.2], [0.3, 0.4]]
             semantic.index = set()
 
             def get_id(_workspace_id: str, content: str) -> int | None:
@@ -878,7 +1023,7 @@ class TestReconcilePendingReplacements:
 
             semantic = MagicMock()
             semantic.memory_store = store
-            semantic.embedder.embed_query.return_value = [0.1, 0.2]
+            semantic.embedder.embed_documents.return_value = [[0.1, 0.2], [0.3, 0.4]]
             semantic.index = set()
 
             def get_id(_workspace_id: str, content: str) -> int | None:

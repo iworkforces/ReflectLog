@@ -100,6 +100,65 @@ class EmbedderProvider(StrEnum):
 
     OPENAI = "openai"
     LANGCHAIN = "langchain"
+    WEMM = "wemm"
+
+
+class WeMMModel(StrEnum):
+    """Supported Tencent WeMM embedding checkpoints."""
+
+    EMBEDDING_2B = "tencent/WeMM-Embedding-2B"
+    EMBEDDING_4B = "tencent/WeMM-Embedding-4B"
+    EMBEDDING_9B = "tencent/WeMM-Embedding-9B"
+
+    @classmethod
+    def from_config(cls, value: str) -> WeMMModel:
+        try:
+            return cls(value.strip())
+        except ValueError:
+            valid = ", ".join(model.value for model in cls)
+            raise ConfigurationError(
+                f"Invalid EMBEDDING_MODEL: '{value}'. Valid options: {valid}"
+            ) from None
+
+    @property
+    def native_dimensions(self) -> int:
+        match self:
+            case WeMMModel.EMBEDDING_2B:
+                return 2048
+            case WeMMModel.EMBEDDING_4B:
+                return 2560
+            case WeMMModel.EMBEDDING_9B:
+                return 4096
+
+    @property
+    def allowed_dimensions(self) -> frozenset[int]:
+        shared = {64, 128, 256, 512, 1024}
+        match self:
+            case WeMMModel.EMBEDDING_2B:
+                return frozenset({*shared, 2048})
+            case WeMMModel.EMBEDDING_4B:
+                return frozenset({*shared, 2560})
+            case WeMMModel.EMBEDDING_9B:
+                return frozenset({*shared, 2048, 4096})
+
+    def resolve_dimensions(self, override: int | None) -> int:
+        dimensions = self.native_dimensions if override is None else override
+        if dimensions not in self.allowed_dimensions:
+            allowed = ", ".join(str(value) for value in sorted(self.allowed_dimensions))
+            raise ConfigurationError(
+                f"Invalid WEMM_EMBEDDING_DIMS for {self.value}: {dimensions}. "
+                f"Valid options: {allowed}"
+            )
+        return dimensions
+
+
+class WeMMDevice(StrEnum):
+    """Device selection for local WeMM inference."""
+
+    AUTO = "auto"
+    CPU = "cpu"
+    CUDA = "cuda"
+    MPS = "mps"
 
 
 class EngineReadiness(StrEnum):
