@@ -22,6 +22,7 @@ from reflectlog.application.memory.search_strategies import (
     calculate_adaptive_overfetch,
 )
 from reflectlog.application.utils.logging import StructuredLogger
+from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import InitializationError, SearchError
 from reflectlog.core.logging import IStructuredLogger
 
@@ -255,6 +256,7 @@ class TestCanonicalPipelineIdentity:
         """MemoryManager._init_pipelines() uses search_strategies.SearchPipeline."""
         config = MagicMock()
         config.workspace_id = "test_project"
+        config.embedder_provider = EmbedderProvider.OPENAI
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -285,6 +287,7 @@ class TestCanonicalPipelineIdentity:
         ready.is_ready.return_value = True
         config = MagicMock()
         config.workspace_id = "test_project"
+        config.embedder_provider = EmbedderProvider.OPENAI
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -330,6 +333,7 @@ class TestCanonicalPipelineIdentity:
         missing.is_ready = None
         config = MagicMock()
         config.workspace_id = "test_project"
+        config.embedder_provider = EmbedderProvider.OPENAI
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -1291,6 +1295,7 @@ class TestSearchResponsiveness:
 
         config = MagicMock()
         config.workspace_id = "test_project"
+        config.embedder_provider = EmbedderProvider.OPENAI
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -1372,6 +1377,7 @@ class TestSearchResponsiveness:
 
         config = MagicMock()
         config.workspace_id = "test_project"
+        config.embedder_provider = EmbedderProvider.OPENAI
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
@@ -1453,6 +1459,7 @@ class TestSearchResponsiveness:
     async def test_manager_search_recovery_initialization_error_aborts(self) -> None:
         config = MagicMock()
         config.workspace_id = "test_project"
+        config.embedder_provider = EmbedderProvider.OPENAI
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
         config.enable_smart_replace = False
         config.reranker_engine = "none"
