@@ -12,7 +12,7 @@ from cachetools import LRUCache
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from reflectlog.core.logging import IStructuredLogger
-from reflectlog.core.types import Embeddings
+from reflectlog.core.types import Closable, Embeddings
 
 
 @dataclass
@@ -29,8 +29,9 @@ class CachedEmbeddings(BaseModel):
     text as the cache key. This is useful for search operations where the same
     query may be executed multiple times (e.g., during result refinement).
 
-    `embed_documents()` consults the same per-text LRU so add-path Phase 2
-    query embeds can be reused during Phase 3 persist.
+    `embed_documents()` consults the same per-text LRU by default so add-path
+    Phase 2 query embeds can be reused during Phase 3 persist. Providers with
+    distinct query and document encoders can opt into role-separated keys.
 
     Thread-safety: cachetools.LRUCache is not thread-safe; access is locked.
 
@@ -62,6 +63,7 @@ class CachedEmbeddings(BaseModel):
     # Cache configuration
     cache_size: int = 100  # Maximum number of cached embeddings
     enabled: bool = True  # Enable/disable caching
+    role_separated: bool = False
 
     # Optional logger for cache hit/miss stats
     logger: IStructuredLogger | None = None
@@ -78,6 +80,7 @@ class CachedEmbeddings(BaseModel):
         default_factory=dict
     )
     _async_gate: asyncio.Lock | None = PrivateAttr(default=None)
+    _closed: bool = PrivateAttr(default=False)
 
     def model_post_init(self, _context: object, /) -> None:
         """Bind LRU capacity to the configured cache_size."""
@@ -85,6 +88,8 @@ class CachedEmbeddings(BaseModel):
 
     def _normalize_text(self, text: str) -> str:
         """Match embedder newline collapsing so cache keys align."""
+        if self.role_separated:
+            return text.replace("\r\n", "\n").replace("\n", " ")
         return text.replace("\n", " ")
 
     def _hash_query(self, text: str) -> str:
@@ -98,7 +103,17 @@ class CachedEmbeddings(BaseModel):
         Returns:
             SHA-256 hex digest of the text.
         """
-        return hashlib.sha256(self._normalize_text(text).encode("utf-8")).hexdigest()
+        normalized = self._normalize_text(text)
+        if not self.role_separated:
+            return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return hashlib.sha256(f"query\0{normalized}".encode()).hexdigest()
+
+    def _hash_document(self, text: str) -> str:
+        if not self.role_separated:
+            return self._hash_query(text)
+        return hashlib.sha256(
+            f"document\0{self._normalize_text(text)}".encode()
+        ).hexdigest()
 
     def _get_cached(self, cache_key: str) -> list[float] | None:
         """Get cached embedding if exists (LRU access).
@@ -217,7 +232,7 @@ class CachedEmbeddings(BaseModel):
         miss_indices: list[int] = []
         miss_texts: list[str] = []
         for idx, text in enumerate(texts):
-            cached = self._get_cached(self._hash_query(text))
+            cached = self._get_cached(self._hash_document(text))
             if cached is not None:
                 results[idx] = cached
             else:
@@ -233,7 +248,7 @@ class CachedEmbeddings(BaseModel):
             for idx, embedding in zip(miss_indices, computed, strict=True):
                 if not embedding:
                     raise RuntimeError("Empty embedding returned for cached document")
-                self._set_cached(self._hash_query(texts[idx]), embedding)
+                self._set_cached(self._hash_document(texts[idx]), embedding)
                 results[idx] = embedding
 
         filled: list[list[float]] = []
@@ -334,7 +349,7 @@ class CachedEmbeddings(BaseModel):
         miss_indices: list[int] = []
         miss_texts: list[str] = []
         for idx, text in enumerate(texts):
-            cached = self._get_cached(self._hash_query(text))
+            cached = self._get_cached(self._hash_document(text))
             if cached is not None:
                 results[idx] = cached
             else:
@@ -350,7 +365,7 @@ class CachedEmbeddings(BaseModel):
             for idx, embedding in zip(miss_indices, computed, strict=True):
                 if not embedding:
                     raise RuntimeError("Empty embedding returned for cached document")
-                self._set_cached(self._hash_query(texts[idx]), embedding)
+                self._set_cached(self._hash_document(texts[idx]), embedding)
                 results[idx] = embedding
 
         filled: list[list[float]] = []
@@ -380,6 +395,18 @@ class CachedEmbeddings(BaseModel):
         self._hits = 0
         self._misses = 0
         self._coalesced = 0
+
+    def close(self) -> None:
+        with self._cache_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._cache.clear()
+            self._hits = 0
+            self._misses = 0
+            self._coalesced = 0
+        if isinstance(self.embedder, Closable):
+            self.embedder.close()
 
     def _ensure_async_gate(self) -> asyncio.Lock:
         gate = self._async_gate
