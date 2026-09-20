@@ -7,6 +7,7 @@ files to prove convergence to one active replacement plus an audit row.
 
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import replace
 import tempfile
 from unittest.mock import patch
 
@@ -29,6 +30,24 @@ OLD = "Prefer tabs for indentation in this repository"
 NEW = "Prefer spaces for indentation in this repository"
 
 Injector = Callable[[MemoryManager], AbstractContextManager[None]]
+FailedEmbedDocuments = Callable[[list[str]], list[list[float]]]
+DOCUMENT_VECTOR = [0.0, 1.0, *([0.0] * 126)]
+
+
+class _ProviderFailure(RuntimeError):
+    pass
+
+
+def _provider_exception(_texts: list[str]) -> list[list[float]]:
+    raise _ProviderFailure
+
+
+FAILED_DOCUMENT_EMBEDDERS: list[FailedEmbedDocuments] = [
+    _provider_exception,
+    lambda _texts: [],
+    lambda _texts: [DOCUMENT_VECTOR, DOCUMENT_VECTOR],
+    lambda _texts: [[]],
+]
 
 
 def _replacement() -> ReplacementInfo:
@@ -269,6 +288,59 @@ class TestReplacementRecoveryIntegration:
 
                 await _replace(manager)
                 _assert_converged(manager)
+
+    @pytest.mark.parametrize(
+        "embed_documents",
+        FAILED_DOCUMENT_EMBEDDERS,
+        ids=["provider_exception", "missing_batch", "extra_batch", "empty_vector"],
+    )
+    def test_pending_replace_keeps_old_when_document_precompute_fails(
+        self,
+        embed_documents: FailedEmbedDocuments,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = replace(_config(tmpdir), embedding_cache_enabled=False)
+            manager, _ = create_memory_manager(config)
+            try:
+                assert manager.add_memories([OLD]) == 1
+                old_id = manager.get_id_by_content(OLD)
+                assert old_id is not None
+                engine = manager._semantic_engine
+                assert isinstance(engine, USearchEngine)
+                assert engine.contains_id(old_id) is True
+                store = engine.memory_store
+                assert isinstance(store, MemoryStore)
+                transition = store.begin_replacement_transition(
+                    old_memory_id=old_id,
+                    workspace_id=manager.workspace_id,
+                    old_content=OLD,
+                    new_content=NEW,
+                    reason="updated convention",
+                    confidence=0.93,
+                )
+
+                def failed_embed_documents(texts: list[str]) -> list[list[float]]:
+                    assert texts == [NEW]
+                    return embed_documents(texts)
+
+                monkeypatch.setattr(
+                    engine.embedder,
+                    "embed_documents",
+                    failed_embed_documents,
+                )
+
+                count = manager.reconcile_pending_replacements()
+
+                old_after = manager.get_id_by_content(OLD)
+                assert count == 0
+                assert old_after == old_id
+                assert engine.contains_id(old_id) is True
+                assert manager.get_id_by_content(NEW) is None
+                assert manager.get_all() == [OLD]
+                assert store.list_pending_transitions() == [transition]
+            finally:
+                cleanup_manager(manager)
 
     async def test_crash_after_transition_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
