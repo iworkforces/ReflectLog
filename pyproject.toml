@@ -1,11 +1,11 @@
 [project]
 name = "reflectlog"
-version = "0.4.0"
+version = "0.4.1"
 description = "ReflectLog Is A MCP Server For AI Agent Workspace-based Memories"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
-    { name = "iWorkforces Engineers" }
+    { name = "iworkforces Engineers" }
 ]
 requires-python = ">=3.14.4"
 keywords = ["mcp", "semantic-memory", "hybrid-search", "vector-database", "ai-agent", "reflectlog"]
@@ -18,10 +18,10 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
 ]
 dependencies = [
-    "fastmcp==4.0.5",
-    "pydantic==2.14.0b1",
+    "fastmcp==4.0.9",
+    "pydantic==2.14.0b2",
     "fastapi[standard]>=0.141.1",
-    "uvicorn[standard]>=0.53.0",
+    "uvicorn[standard]>=0.54.0",
     "asyncer>=0.0.18",
     "anyio>=4.15.1",
     "python-dotenv>=1.2.3",
@@ -29,8 +29,8 @@ dependencies = [
     "mcp>=2.2.0",
     "uvloop>=0.22.1; sys_platform != 'win32'",
     "httptools>=0.8.0",
-    "starlette>=1.6.0",
-    "openai>=3.16.2",
+    "starlette>=1.7.0",
+    "openai>=3.19.2",
     "tiktoken>=0.14.0",
     "aiohttp>=3.14.3",
     "aiodns>=4.0.4",
@@ -54,15 +54,15 @@ dependencies = [
     "qwen-vl-utils[decord]==0.0.14; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "qwen-vl-utils==0.0.14; sys_platform != 'linux' or platform_machine != 'x86_64'",
     "accelerate>=1.15.0",
-    "claude-agent-sdk>=0.2.157",
-    "pydantic-core==2.48.0",
+    "claude-agent-sdk>=0.2.159",
+    "pydantic-core==2.49.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/iWorkforces/ReflectLog"
-Repository = "https://github.com/iWorkforces/ReflectLog"
-Issues = "https://github.com/iWorkforces/ReflectLog/issues"
-Documentation = "https://github.com/iWorkforces/ReflectLog#readme"
+Homepage = "https://github.com/iworkforces/ReflectLog"
+Repository = "https://github.com/iworkforces/ReflectLog"
+Issues = "https://github.com/iworkforces/ReflectLog/issues"
+Documentation = "https://github.com/iworkforces/ReflectLog#readme"
 
 [project.scripts]
 reflectlog = "reflectlog.server:main"
@@ -76,12 +76,12 @@ packages = ["reflectlog"]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.16.8",
+    "ruff>=0.16.9",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.8.0",
-    "ty>=0.0.82",
+    "ty>=0.0.84",
     "pyright>=1.1.414",
 ]
 
