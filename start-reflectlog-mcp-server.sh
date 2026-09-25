@@ -145,44 +145,13 @@ echo -e "${BLUE}🚀 ReflectLog Server${NC}"
 echo -e "${BLUE}================================${NC}"
 echo ""
 
-# Check if uv is installed, install if not present
 if ! command -v uv &> /dev/null; then
-    echo -e "${YELLOW}⚠️  uv is not installed, installing automatically...${NC}"
-
-    # Detect OS and install uv accordingly
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        # Linux
-        echo -e "${CYAN}Installing uv for Linux...${NC}"
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        source $HOME/.cargo/env
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS
-        echo -e "${CYAN}Installing uv for macOS...${NC}"
-        if command -v brew &> /dev/null; then
-            brew install uv
-        else
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-            source $HOME/.cargo/env
-        fi
-    else
-        # Windows or other
-        echo -e "${RED}❌ Automatic installation not supported for this OS${NC}"
-        echo -e "${YELLOW}Please install uv manually: https://docs.astral.sh/uv/getting-started/installation/${NC}"
-        exit 1
-    fi
-
-    # Verify installation
-    if ! command -v uv &> /dev/null; then
-        echo -e "${RED}❌ uv installation failed${NC}"
-        echo -e "${YELLOW}Please install uv manually: https://docs.astral.sh/uv/getting-started/installation/${NC}"
-        exit 1
-    fi
-
-    echo -e "${GREEN}✅ uv installed successfully${NC}"
-else
-    echo -e "${GREEN}✅ uv is available${NC}"
+    echo -e "${RED}❌ uv is not installed${NC}"
+    echo -e "${YELLOW}Please install uv: https://docs.astral.sh/uv/getting-started/installation/${NC}"
+    exit 1
 fi
 
+echo -e "${GREEN}✅ uv is available${NC}"
 echo -e "${CYAN}uv version: $(uv --version)${NC}"
 echo -e "${CYAN}Python version: $(uv run python --version 2>&1)${NC}"
 echo ""
