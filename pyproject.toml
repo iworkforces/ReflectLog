@@ -18,7 +18,7 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
 ]
 dependencies = [
-    "fastmcp==4.0.9",
+    "fastmcp==4.0.10",
     "pydantic==2.14.0b2",
     "fastapi[standard]>=0.141.1",
     "uvicorn[standard]>=0.54.0",
@@ -54,7 +54,7 @@ dependencies = [
     "qwen-vl-utils[decord]==0.0.14; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "qwen-vl-utils==0.0.14; sys_platform != 'linux' or platform_machine != 'x86_64'",
     "accelerate>=1.15.0",
-    "claude-agent-sdk>=0.2.159",
+    "claude-agent-sdk>=0.2.160",
     "pydantic-core==2.49.0",
 ]
 
