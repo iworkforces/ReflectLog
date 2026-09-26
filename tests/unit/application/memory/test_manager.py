@@ -9,6 +9,8 @@ Uncovered lines targeted:
 
 from dataclasses import replace
 import logging
+import os
+from pathlib import Path
 from typing import Self, cast
 from unittest.mock import MagicMock, patch
 
@@ -21,12 +23,19 @@ from reflectlog.application.utils.security import SecretString
 from reflectlog.core.enums import LlmProvider, RerankerEngine
 from reflectlog.core.exceptions import (
     InconsistentStateError,
+    InitializationError,
     SearchError,
     StorageError,
 )
 from reflectlog.core.storage_coordination import IStorageCoordinator
 from reflectlog.core.types import ISemanticSearchEngine
 from reflectlog.infrastructure.cross_encoder_reranker import CrossEncoderReranker
+from reflectlog.infrastructure.embedding_identity import IDENTITY_NAME
+from reflectlog.infrastructure.storage_coordinator import (
+    GENERATION_NAME,
+    LOCK_NAME,
+    PortalockerStorageCoordinator,
+)
 from reflectlog.infrastructure.tantivy_engine import TantivyEngine
 
 # ---------------------------------------------------------------------------
@@ -47,6 +56,7 @@ def _stub_coordinator(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
         return PortalockerStorageCoordinator(str(tmp_path / "indexes"), timeout=1.0)
 
     monkeypatch.setattr(MemoryManager, "_create_coordinator", _factory)
+    monkeypatch.chdir(tmp_path)
 
 
 _ = _stub_coordinator
@@ -66,11 +76,12 @@ def _fake_coordinator() -> IStorageCoordinator:
         mode = LeaseMode.EXCLUSIVE
 
         def paths_for(self, workspace_id: str) -> WorkspaceStoragePaths:
+            root = os.path.abspath(os.path.join("indexes", workspace_id.lower()))
             return WorkspaceStoragePaths(
                 workspace_id=workspace_id,
-                root="/tmp",
-                lock_path="/tmp/.lock",
-                generation_path="/tmp/.gen",
+                root=root,
+                lock_path=os.path.join(root, LOCK_NAME),
+                generation_path=os.path.join(root, GENERATION_NAME),
             )
 
         def acquire(
@@ -83,6 +94,7 @@ def _fake_coordinator() -> IStorageCoordinator:
             _ = workspace_id, timeout
             self.workspace_id = workspace_id
             self.mode = mode
+            os.makedirs(self.paths_for(workspace_id).root, exist_ok=True)
             return self
 
         def release(self) -> None:
@@ -175,12 +187,14 @@ def _return_inserted_memories(
 
 
 def _make_manager(
-    config: Config, logger: LogCapture
+    config: Config, logger: LogCapture, coordinator: IStorageCoordinator | None = None
 ) -> tuple[MemoryManager, MagicMock, MagicMock]:
     """Helper to construct MemoryManager with all infrastructure mocked."""
     with (
         patch(f"{MODULE}.USearchEngine") as usearch_cls,
         patch(f"{MODULE}.LangchainQwenEmbeddings"),
+        patch(f"{MODULE}.WeMMEmbeddings"),
+        patch(f"{MODULE}.CachedEmbeddings"),
         patch(f"{MODULE}.TantivyEngine") as tantivy_cls,
     ):
         mock_usearch = MagicMock()
@@ -209,9 +223,96 @@ def _make_manager(
         tantivy_cls.return_value = mock_tantivy
 
         manager = MemoryManager(
-            config, logger.structured, coordinator=_fake_coordinator()
+            config, logger.structured, coordinator=coordinator or _fake_coordinator()
         )
         return manager, mock_usearch, mock_tantivy
+
+
+@pytest.mark.unit
+class TestEmbeddingIdentityStartup:
+    def test_external_tantivy_rejected_before_engines_or_recovery(
+        self, mock_config: Config, mock_logger: LogCapture, tmp_path: Path
+    ) -> None:
+        external = tmp_path / "external" / "tantivy"
+        external.mkdir(parents=True)
+        (external / "metadata.json").write_text("legacy")
+        config = replace(mock_config, tantivy_index_path_template=str(external))
+        coordinator = PortalockerStorageCoordinator(os.path.abspath("indexes"))
+
+        with (
+            patch(f"{MODULE}.WeMMEmbeddings") as embedder,
+            patch(f"{MODULE}.USearchEngine") as semantic,
+            patch(f"{MODULE}.TantivyEngine") as tantivy,
+            patch.object(MemoryManager, "reconcile_pending_replacements") as reconcile,
+            pytest.raises(InitializationError, match="Legacy workspace"),
+        ):
+            MemoryManager(config, mock_logger.structured, coordinator=coordinator)
+
+        embedder.assert_not_called()
+        semantic.assert_not_called()
+        tantivy.assert_not_called()
+        reconcile.assert_not_called()
+        assert not Path(coordinator.paths_for(config.workspace_id).root).exists()
+        assert (external / "metadata.json").read_text() == "legacy"
+
+    def test_rejects_changed_model_before_embedder_or_recovery(
+        self, mock_config: Config, mock_logger: LogCapture
+    ) -> None:
+        coordinator = PortalockerStorageCoordinator(os.path.abspath("indexes"))
+        _make_manager(mock_config, mock_logger, coordinator)
+
+        with (
+            patch(f"{MODULE}.WeMMEmbeddings") as embedder,
+            patch(f"{MODULE}.TantivyEngine") as tantivy,
+            patch.object(MemoryManager, "reconcile_pending_replacements") as reconcile,
+            pytest.raises(InitializationError, match="identity"),
+        ):
+            MemoryManager(
+                replace(mock_config, embedding_model="different/model"),
+                mock_logger.structured,
+                coordinator=coordinator,
+            )
+
+        embedder.assert_not_called()
+        tantivy.assert_not_called()
+        reconcile.assert_not_called()
+
+    def test_matching_reopen_with_cache_toggle(
+        self, mock_config: Config, mock_logger: LogCapture
+    ) -> None:
+        coordinator = PortalockerStorageCoordinator(os.path.abspath("indexes"))
+        _make_manager(mock_config, mock_logger, coordinator)
+        identity_path = (
+            Path(coordinator.paths_for(mock_config.workspace_id).root) / IDENTITY_NAME
+        )
+        identity_before = identity_path.read_bytes()
+
+        reopened, _, _ = _make_manager(
+            replace(mock_config, embedding_cache_enabled=True), mock_logger, coordinator
+        )
+
+        assert reopened.workspace_id == mock_config.workspace_id
+        assert identity_path.read_bytes() == identity_before
+
+    def test_publishes_identity_before_embedder_construction(
+        self, mock_config: Config, mock_logger: LogCapture
+    ) -> None:
+        coordinator = PortalockerStorageCoordinator(os.path.abspath("indexes"))
+        identity_path = (
+            Path(coordinator.paths_for(mock_config.workspace_id).root) / IDENTITY_NAME
+        )
+        with (
+            patch(f"{MODULE}.WeMMEmbeddings") as embedder,
+            patch(f"{MODULE}.USearchEngine"),
+            patch(f"{MODULE}.TantivyEngine"),
+            patch.object(MemoryManager, "reconcile_pending_replacements"),
+        ):
+            embedder.side_effect = lambda *_args: (
+                identity_path.read_bytes() and MagicMock()
+            )
+            MemoryManager(mock_config, mock_logger.structured, coordinator=coordinator)
+
+        embedder.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

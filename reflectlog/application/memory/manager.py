@@ -48,6 +48,7 @@ from reflectlog.infrastructure.cross_encoder_reranker import (
     CrossEncoderConfig,
     CrossEncoderReranker,
 )
+from reflectlog.infrastructure.embedding_identity import ensure_embedding_identity
 from reflectlog.infrastructure.embeddings.cached_embeddings import CachedEmbeddings
 from reflectlog.infrastructure.embeddings.qwen3_embedding import LangchainQwenEmbeddings
 from reflectlog.infrastructure.embeddings.wemm_embedding import (
@@ -138,6 +139,13 @@ class MemoryManager:
 
         self._init_locks()
         self._coordinator = coordinator or self._create_coordinator()
+        self._coordinator = ensure_embedding_identity(
+            USearchConfig.from_config(ConfigAdapter(config)),
+            self._coordinator,
+            tantivy_index_path=config.tantivy_index_path_template.format(
+                workspace_id=config.workspace_id
+            ).lower(),
+        )
         try:
             self._init_semantic_engine()
             self._init_search_engine()
