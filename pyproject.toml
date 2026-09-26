@@ -140,7 +140,7 @@ exclude_lines = [
 
 [tool.ty.environment]
 # Target Python version
-python-version = "3.14.7"
+python-version = "3.14"
 # Custom stub paths (equivalent to mypy_path)
 extra-paths = ["stubs"]
 
