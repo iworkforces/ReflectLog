@@ -53,6 +53,7 @@ class WorkflowTantivyEngine(Protocol):
 
 
 class WorkflowConfig(Protocol):
+    workspace_id: str
     enable_rrf_fusion: bool
     reranker_engine: str
     fusion_ranking_threshold: float
@@ -78,6 +79,7 @@ class WorkflowMemoryManager(Protocol):
 class WorkflowServer(Protocol):
     tools: list["WorkflowTool"]
     memory_manager: WorkflowMemoryManager
+    config: WorkflowConfig
 
 
 class WorkflowTool(Protocol):
@@ -96,11 +98,15 @@ def _tool_handler(
 
 
 async def _add(server: WorkflowServer, memories: list[str]) -> None:
-    _ = await _tool_handler(server, "add")(memories)
+    _ = await _tool_handler(server, "add")(
+        memories, workspace_id=server.config.workspace_id
+    )
 
 
 async def _get_all(server: WorkflowServer) -> list[str]:
-    result: object = await _tool_handler(server, "get_all")()
+    result: object = await _tool_handler(server, "get_all")(
+        workspace_id=server.config.workspace_id
+    )
     if isinstance(result, dict):
         page = cast(dict[str, object], result).get("memories")
         if isinstance(page, list):
@@ -110,11 +116,15 @@ async def _get_all(server: WorkflowServer) -> list[str]:
 
 
 async def _search(server: WorkflowServer, query: str) -> list[str]:
-    return await _tool_handler(server, "search")(query)
+    return await _tool_handler(server, "search")(
+        query, workspace_id=server.config.workspace_id
+    )
 
 
 async def _remove(server: WorkflowServer, memories: list[str]) -> None:
-    _ = await _tool_handler(server, "remove")(memories)
+    _ = await _tool_handler(server, "remove")(
+        memories, workspace_id=server.config.workspace_id
+    )
 
 
 def _add_to_store(stored_memories: list[str]) -> BatchCallback:

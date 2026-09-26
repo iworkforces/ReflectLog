@@ -1,9 +1,11 @@
 """Tests for dynamic MCP instructions generation."""
 # mypy: disable-error-code="misc,var-annotated"
 
-from typing import cast
+from collections.abc import Callable
+from typing import Protocol, cast, runtime_checkable
 from unittest.mock import MagicMock, patch
 
+from fastmcp import Client
 import pytest
 from pytest import MonkeyPatch
 
@@ -14,6 +16,12 @@ from reflectlog.core.prompts import (
     TOOL_ORDER,
     build_instructions,
 )
+
+
+@runtime_checkable
+class _SchemaTool(Protocol):
+    name: str
+    inputSchema: dict[str, list[str]]
 
 
 @pytest.mark.unit
@@ -188,10 +196,9 @@ class TestToolInstructionSnippets:
 class TestDynamicInstructionsIntegration:
     """Test suite for dynamic MCP instructions with FastMCPServer."""
 
-    def _build_server_and_capture_instructions(
+    def _build_server(
         self, monkeypatch: MonkeyPatch, allowed_value: str | None
-    ) -> tuple[FastMCPServer, str]:
-        """Helper to create a FastMCPServer and capture the instructions."""
+    ) -> FastMCPServer:
         monkeypatch.setenv("WORKSPACE_ID", "test_project")
         monkeypatch.setenv("OPENROUTER_API_KEY", "test_api_key")
 
@@ -200,18 +207,7 @@ class TestDynamicInstructionsIntegration:
         else:
             monkeypatch.setenv("ALLOWED_TOOLS", allowed_value)
 
-        captured_instructions = ""
-
-        def capture_fastmcp(*args: str, **kwargs: str) -> MagicMock:
-            nonlocal captured_instructions
-            captured_instructions = kwargs.get("instructions", "")
-            return MagicMock()
-
         with (
-            patch(
-                "reflectlog.application.mcp_server.FastMCP",
-                side_effect=capture_fastmcp,
-            ),
             patch("reflectlog.application.mcp_server.MemoryManager"),
             patch(
                 "reflectlog.application.mcp_server.create_logger"
@@ -225,64 +221,58 @@ class TestDynamicInstructionsIntegration:
             server_config = Config.from_environment()
             server = FastMCPServer(server_config=server_config)
 
-        return server, captured_instructions
+        return server
 
-    def test_instructions_include_all_tools_when_no_restriction(
+    async def test_all_tools_require_workspace_when_no_restriction(
         self, monkeypatch: MonkeyPatch
     ) -> None:
-        """Instructions should include all tools when ALLOWED_TOOLS is not set."""
-        _server, instructions = self._build_server_and_capture_instructions(
-            monkeypatch, None
-        )
+        server = self._build_server(monkeypatch, None)
 
-        assert "add(memories: list[str], dry_run: bool = False)" in instructions
-        assert "get_all(" in instructions
-        assert "search(query: str)" in instructions
-        assert "remove(memories: list[str])" in instructions
+        client_factory = cast("Callable[[object], Client]", Client)
+        async with client_factory(server.mcp) as client:
+            tools = await client.list_tools()
 
-    def test_instructions_include_only_allowed_tools(
+        assert {tool.name for tool in tools} == {
+            "add",
+            "get_all",
+            "search",
+            "remove",
+            "health_check",
+        }
+        for tool in tools:
+            assert isinstance(tool, _SchemaTool)
+            assert "workspace_id" in tool.inputSchema["required"]
+
+    async def test_only_allowed_tools_require_workspace(
         self, monkeypatch: MonkeyPatch
     ) -> None:
-        """Instructions should only document tools that are allowed."""
-        _server, instructions = self._build_server_and_capture_instructions(
-            monkeypatch, "add,search"
-        )
+        server = self._build_server(monkeypatch, "add,search")
 
-        assert "add(memories: list[str], dry_run: bool = False)" in instructions
-        assert "search(query: str)" in instructions
-        assert "get_all(" not in instructions
-        assert "remove(memories: list[str])" not in instructions
+        client_factory = cast("Callable[[object], Client]", Client)
+        async with client_factory(server.mcp) as client:
+            tools = await client.list_tools()
 
-    def test_instructions_single_tool(self, monkeypatch: MonkeyPatch) -> None:
-        """Instructions should work correctly with single tool."""
-        _server, instructions = self._build_server_and_capture_instructions(
-            monkeypatch, "get_all"
-        )
+        assert {tool.name for tool in tools} == {"add", "search"}
+        for tool in tools:
+            assert isinstance(tool, _SchemaTool)
+            assert "workspace_id" in tool.inputSchema["required"]
 
-        assert "get_all(" in instructions
-        assert "add(memories: list[str]" not in instructions
-        assert "search(query: str)" not in instructions
-        assert "remove(memories: list[str])" not in instructions
+    def test_single_tool_selection(self, monkeypatch: MonkeyPatch) -> None:
+        server = self._build_server(monkeypatch, "get_all")
 
-    def test_instructions_show_no_tools_message_when_none_enabled(
+        assert set(server.registered_tools) == {"get_all"}
+
+    def test_no_tools_registered_when_none_enabled(
         self, monkeypatch: MonkeyPatch
     ) -> None:
-        """Instructions should indicate no tools when none are enabled."""
-        _server, instructions = self._build_server_and_capture_instructions(
-            monkeypatch, "none"
-        )
+        server = self._build_server(monkeypatch, "none")
 
-        assert "(No tools available)" in instructions
-        assert "add(memories: list[str])" not in instructions
+        assert server.registered_tools == {}
 
-    def test_instructions_header_always_present(self, monkeypatch: MonkeyPatch) -> None:
-        """Server description header should always be included."""
-        _server, instructions = self._build_server_and_capture_instructions(
-            monkeypatch, "add"
-        )
+    def test_tool_alias_selection(self, monkeypatch: MonkeyPatch) -> None:
+        server = self._build_server(monkeypatch, "Add-Tool")
 
-        assert "ReflectLog Server" in instructions
-        assert "hybrid search" in instructions
+        assert set(server.registered_tools) == {"add"}
 
 
 @pytest.mark.unit

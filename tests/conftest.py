@@ -1,14 +1,19 @@
 """Shared fixtures and configuration for all tests."""
 
 from collections.abc import Callable, Generator
-from typing import TYPE_CHECKING
+from dataclasses import replace
+from typing import cast
 from unittest.mock import MagicMock, patch
 
+import anyio
 import pytest
 from pytest import MonkeyPatch
 
-if TYPE_CHECKING:
-    from reflectlog.application.mcp_server import FastMCPServer
+from reflectlog.application.mcp_server import FastMCPServer
+
+
+class _WorkflowServer(FastMCPServer):
+    memory_manager: MagicMock
 
 
 class MockMemorySearchResult:
@@ -158,7 +163,7 @@ def unset_workspace_id(monkeypatch: MonkeyPatch) -> None:
 @pytest.fixture
 def mcp_server(
     set_env_vars: dict[str, str], mock_usearch_engine: MagicMock
-) -> "FastMCPServer":
+) -> Generator["FastMCPServer"]:
     """Create FastMCPServer instance with mocked dependencies.
 
     Args:
@@ -182,7 +187,8 @@ def mcp_server(
             "reflectlog.application.memory.manager.CachedEmbeddings"
         ) as mock_cached_embedder_cls,
     ):
-        from reflectlog.application.mcp_server import FastMCPServer
+        from reflectlog.application.config.settings import Config
+        from reflectlog.application.memory.manager import MemoryManager
 
         # Configure USearchEngine mock
         mock_usearch_cls.return_value = mock_usearch_engine
@@ -215,12 +221,25 @@ def mcp_server(
             lambda _workspace, contents, verify_exists=True: len(contents)
         )
 
-        server = FastMCPServer()
-        # Add backwards-compatible 'memory_manager' attribute for tests (accessing private attribute)
-        server.memory_manager = server._memory_manager  # type: ignore
-        # Add backwards-compatible 'memory' attribute for tests
-        server.memory_manager.memory = mock_usearch_engine  # type: ignore
-        return server
+        workspace_id = set_env_vars["WORKSPACE_ID"]
+        server = _WorkflowServer(
+            replace(Config.from_environment(), workspace_id=workspace_id)
+        )
+
+        async def acquire_manager() -> MemoryManager:
+            async with server._registry.acquire(workspace_id) as manager:
+                return manager
+
+        server.memory_manager = cast("MagicMock", anyio.run(acquire_manager))
+        server.memory_manager.memory = mock_usearch_engine
+        semantic_engine = server.memory_manager._semantic_engine
+        tantivy_engine = server.memory_manager._tantivy_engine
+        try:
+            yield server
+        finally:
+            server.memory_manager._semantic_engine = semantic_engine
+            server.memory_manager._tantivy_engine = tantivy_engine
+            anyio.run(server.aclose)
 
 
 @pytest.fixture

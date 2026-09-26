@@ -2,18 +2,84 @@
 # mypy: disable-error-code="misc,var-annotated"
 # Tests are async because tool handlers are async functions
 
-from unittest.mock import MagicMock, patch
+from collections.abc import Callable
+from dataclasses import replace
+from functools import partial
+from inspect import signature
+import json
+from typing import Protocol, cast, runtime_checkable
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import anyio
+from fastmcp import Client
 import pytest
 
+from reflectlog.application.config.settings import Config
 from reflectlog.application.mcp_server import FastMCPServer
-from reflectlog.application.memory.manager import AddResult
+from reflectlog.application.memory.manager import AddResult, MemoryManager
 from reflectlog.core.exceptions import (
-    ConfigurationError,
     InconsistentStateError,
     SearchError,
     StorageError,
 )
+
+
+class _TestServer(FastMCPServer):
+    memory_manager: MagicMock
+
+
+@runtime_checkable
+class _SchemaTool(Protocol):
+    name: str
+    inputSchema: dict[str, list[str]]
+
+
+@pytest.fixture
+def mcp_server(set_env_vars, mock_usearch_engine):
+    with (
+        patch("reflectlog.application.memory.manager.USearchEngine") as usearch,
+        patch("reflectlog.application.memory.manager.TantivyEngine") as tantivy,
+        patch(
+            "reflectlog.application.memory.manager.LangchainQwenEmbeddings"
+        ) as embedder,
+        patch("reflectlog.application.memory.manager.CachedEmbeddings") as cached,
+    ):
+        usearch.return_value = mock_usearch_engine
+        tantivy.return_value = MagicMock()
+        tantivy.return_value.ensure_initialized.return_value = None
+        tantivy.return_value.search.return_value = []
+        tantivy.return_value.is_ready.return_value = False
+        tantivy.return_value.find_by_exact_match.return_value = []
+        tantivy.return_value.delete.return_value = True
+        tantivy.return_value.delete_batch.side_effect = (
+            lambda _workspace, contents, verify_exists=True: len(contents)
+        )
+        embedding = MagicMock()
+        embedding.embed_documents.side_effect = lambda texts: [[0.1] * 4 for _ in texts]
+        embedding.embed_query.side_effect = lambda _query: [0.1] * 4
+        embedder.return_value = embedding
+        cached.return_value = MagicMock()
+        cached.return_value.embedder = embedding
+        cached.return_value.embed_documents.side_effect = embedding.embed_documents
+        cached.return_value.embed_query.side_effect = embedding.embed_query
+        server = _TestServer(
+            replace(Config.from_environment(), workspace_id="test_project")
+        )
+
+        async def manager() -> MemoryManager:
+            async with server._registry.acquire(server.config.workspace_id) as active:
+                return active
+
+        server.memory_manager = cast("MagicMock", anyio.run(manager))
+        server.memory_manager.memory = mock_usearch_engine
+        for tool in server.registered_tools.values():
+            tool.fn = partial(tool.fn, workspace_id=server.config.workspace_id)
+        semantic_engine = server.memory_manager._semantic_engine
+        tantivy_engine = server.memory_manager._tantivy_engine
+        yield server
+        server.memory_manager._semantic_engine = semantic_engine
+        server.memory_manager._tantivy_engine = tantivy_engine
+        anyio.run(server.aclose)
 
 
 @pytest.mark.unit
@@ -28,27 +94,137 @@ class TestFastMCPServerInitialization:
         # Memory manager should have a mock semantic engine
         assert mcp_server.memory_manager.memory is not None
 
-    def test_server_initialization_missing_workspace_id(self):
-        """Test Config.from_environment fails without WORKSPACE_ID.
-
-        Note: FastMCPServer uses a module-level config singleton, so we test
-        the Config class directly to verify WORKSPACE_ID validation.
-        """
-        import os
-
+    def test_server_initialization_missing_workspace_id(self, monkeypatch):
         from reflectlog.application.config.settings import Config
 
-        # Save original and clear WORKSPACE_ID
-        original = os.environ.pop("WORKSPACE_ID", None)
-        try:
-            with pytest.raises(
-                ConfigurationError, match="WORKSPACE_ID environment variable"
-            ):
-                Config.from_environment()
-        finally:
-            # Restore original
-            if original is not None:
-                os.environ["WORKSPACE_ID"] = original
+        monkeypatch.delenv("WORKSPACE_ID", raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test_api_key")
+        assert Config.from_environment().workspace_id == ""
+
+
+@pytest.mark.unit
+class TestWorkspaceSelection:
+    async def test_client_requires_workspace_and_routes_health(self, set_env_vars):
+        config = replace(Config.from_environment(), workspace_id="")
+        managers: list[MagicMock] = []
+
+        def create_manager(concrete: Config, _logger: object) -> MagicMock:
+            manager = MagicMock(spec=MemoryManager)
+            manager.config = concrete
+            manager.startup_metrics = None
+            manager.search_engine_status.return_value = {
+                "semantic_engine": "initialized",
+                "tantivy_engine": "initialized",
+            }
+            manager.pending_intent_count.return_value = 0
+            managers.append(manager)
+            return manager
+
+        with patch(
+            "reflectlog.application.mcp_server.MemoryManager",
+            side_effect=create_manager,
+        ) as factory:
+            server = FastMCPServer(config)
+            client_factory = cast("Callable[[object], Client]", Client)
+            async with client_factory(server.mcp) as client:
+                tools = await client.list_tools()
+                assert {tool.name for tool in tools} == {
+                    "add",
+                    "search",
+                    "get_all",
+                    "remove",
+                    "health_check",
+                }
+                for tool in tools:
+                    assert isinstance(tool, _SchemaTool)
+                    assert "workspace_id" in tool.inputSchema["required"]
+
+                with pytest.raises(Exception, match="workspace_id"):
+                    await client.call_tool("health_check", {})
+                assert factory.call_count == 0
+
+                result = await client.call_tool(
+                    "health_check", {"workspace_id": "alpha"}
+                )
+                assert json.loads(result.content[0].text)["workspace_id"] == "alpha"
+                assert factory.call_count == 1
+
+            managers[0].close.assert_called_once()
+
+    async def test_schema_and_concurrent_workspace_isolation(
+        self, set_env_vars, monkeypatch
+    ):
+        monkeypatch.delenv("WORKSPACE_ID", raising=False)
+        config = replace(Config.from_environment(), workspace_id="")
+        managers: dict[str, MagicMock] = {}
+        entered = {"alpha": anyio.Event(), "beta": anyio.Event()}
+        release = anyio.Event()
+
+        def create_manager(concrete: Config, _logger: object) -> MagicMock:
+            manager = MagicMock(spec=MemoryManager)
+            manager.config = concrete
+            manager.startup_metrics = None
+            manager.count.return_value = 1
+            manager.get_all.return_value = [concrete.workspace_id]
+
+            async def search(_query: str, *, limit: int) -> list[str]:
+                entered[concrete.workspace_id].set()
+                await release.wait()
+                return [concrete.workspace_id]
+
+            manager.search = AsyncMock(side_effect=search)
+            managers[concrete.workspace_id] = manager
+            return manager
+
+        with patch(
+            "reflectlog.application.mcp_server.MemoryManager",
+            side_effect=create_manager,
+        ):
+            server = FastMCPServer(config)
+            with pytest.raises(TypeError, match="workspace_id"):
+                signature(server._search).bind("query")
+
+            results: dict[str, list[str]] = {}
+
+            async def search_in(workspace_id: str) -> None:
+                results[workspace_id] = await server._search(
+                    "query", workspace_id=workspace_id
+                )
+
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(search_in, "alpha")
+                tasks.start_soon(search_in, "beta")
+                await entered["alpha"].wait()
+                await entered["beta"].wait()
+                tasks.start_soon(server.aclose)
+                assert not managers["alpha"].close.called
+                assert not managers["beta"].close.called
+                release.set()
+            assert results == {"alpha": ["alpha"], "beta": ["beta"]}
+            managers["alpha"].close.assert_called_once()
+            managers["beta"].close.assert_called_once()
+
+    async def test_default_selection_and_health_metrics(self, set_env_vars):
+        config = replace(Config.from_environment(), workspace_id="test_project")
+        with patch("reflectlog.application.mcp_server.MemoryManager") as factory:
+            manager = MagicMock(spec=MemoryManager)
+            manager.config = config
+            manager.startup_metrics = None
+            manager.search_engine_status.return_value = {
+                "semantic_engine": "initialized",
+                "tantivy_engine": "initialized",
+            }
+            manager.pending_intent_count.return_value = 0
+            factory.return_value = manager
+            server = FastMCPServer(config)
+            server.set_startup_metrics({"total_startup": 0.25})
+            assert factory.call_count == 0
+            health = await server._health_check(workspace_id=config.workspace_id)
+            assert health["workspace_id"] == config.workspace_id
+            assert health["startup_metrics"] == {"total_startup": 250.0}
+            assert factory.call_count == 1
+            await server.aclose()
+            manager.close.assert_called_once()
 
     def test_memory_config_structure(self, set_env_vars):
         """Test USearchEngine is initialized with correct config."""
@@ -65,7 +241,15 @@ class TestFastMCPServerInitialization:
                 ) as mock_tantivy_cls:
                     mock_tantivy_cls.return_value = MagicMock()
 
-                    FastMCPServer()
+                    server = FastMCPServer(
+                        replace(Config.from_environment(), workspace_id="test_project")
+                    )
+
+                    async def open_workspace() -> None:
+                        async with server._registry.acquire(server.config.workspace_id):
+                            pass
+
+                    anyio.run(open_workspace)
 
                     # Verify USearchEngine was called
                     mock_usearch_cls.assert_called_once()
@@ -76,6 +260,7 @@ class TestFastMCPServerInitialization:
 
                     # Verify config attributes (USearchConfig uses workspace_id)
                     assert usearch_config.workspace_id == "test_project"
+                    server.close()
 
 
 @pytest.mark.unit
@@ -933,7 +1118,9 @@ class TestToolRegistrationConfiguration:
             from reflectlog.application.config.settings import Config
             from reflectlog.application.mcp_server import FastMCPServer
 
-            server_config = Config.from_environment()
+            server_config = replace(
+                Config.from_environment(), workspace_id="test_project"
+            )
             server = FastMCPServer(server_config=server_config)
 
         return server, logger, fastmcp_instance
@@ -944,8 +1131,7 @@ class TestToolRegistrationConfiguration:
             monkeypatch, "add,get_all"
         )
 
-        tool_names = [tool.get_name() for tool in server.tools]
-        assert tool_names == ["add", "get_all"]
+        assert [tool.get_name() for tool in server.tools] == ["add", "get_all"]
         assert fastmcp_instance.tool.call_count == 2
         logger.warning.assert_not_called()
 
@@ -955,8 +1141,7 @@ class TestToolRegistrationConfiguration:
             monkeypatch, "add,unknown,remove_tool"
         )
 
-        tool_names = [tool.get_name() for tool in server.tools]
-        assert tool_names == ["add", "remove"]
+        assert [tool.get_name() for tool in server.tools] == ["add", "remove"]
         assert fastmcp_instance.tool.call_count == 2
 
         warnings = logger.warning.call_args_list
@@ -1165,8 +1350,16 @@ class TestServerClose:
 
             from reflectlog.application.config.settings import Config
 
-            server_config = Config.from_environment()
+            server_config = replace(
+                Config.from_environment(), workspace_id="test_project"
+            )
             server = FastMCPServer(server_config=server_config)
+
+            async def open_workspace() -> None:
+                async with server._registry.acquire(server_config.workspace_id):
+                    pass
+
+            anyio.run(open_workspace)
 
         return server, mock_mm_instance, mock_logger
 
@@ -1187,13 +1380,17 @@ class TestServerClose:
         server, mock_mm, mock_logger = self._build_server(monkeypatch)
         mock_mm.close.side_effect = RuntimeError("disk full")
 
-        with pytest.raises(RuntimeError, match="disk full"):
+        with pytest.raises(
+            ExceptionGroup, match="Workspace managers could not be closed"
+        ) as error:
             server.close()
 
+        assert isinstance(error.value.exceptions[0], RuntimeError)
+        assert str(error.value.exceptions[0]) == "disk full"
         mock_mm.close.assert_called_once()
         mock_logger.error.assert_called_once()
         error_msg = mock_logger.error.call_args.args[0]
-        assert "disk full" in error_msg
+        assert "Workspace managers could not be closed" in error_msg
 
 
 @pytest.mark.unit
