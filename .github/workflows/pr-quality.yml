@@ -1,0 +1,27 @@
+name: pr-quality
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: '3.14.7'
+      - name: Frozen install
+        run: uv sync --frozen
+      - name: Type checking
+        run: ./start-type-check.sh --check
+      - name: Lint and format checking
+        run: ./start-lint.sh --check
+      - name: Tests and coverage
+        run: NUMBA_DISABLE_JIT=1 ./start-unittest.sh --coverage

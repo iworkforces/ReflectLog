@@ -88,10 +88,10 @@ class TestConfigDefaults:
 
     def test_embedding_defaults(self):
         cfg = self._make_config()
-        assert cfg.embedder_provider == "openai"
-        assert cfg.embedding_model == "openai/text-embedding-3-large"
-        assert cfg.embedding_dims == 3072
-        assert cfg.qwen_embedding_dims == 4096
+        assert cfg.embedder_provider == "wemm"
+        assert cfg.embedding_model == "tencent/WeMM-Embedding-2B"
+        assert cfg.embedding_dims == 2048
+        assert cfg.qwen_embedding_dims == 2048
         assert cfg.wemm_embedding_dims == 2048
         assert cfg.wemm_device == "auto"
         assert cfg.embedding_batch_size == 512

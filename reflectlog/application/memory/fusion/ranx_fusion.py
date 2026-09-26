@@ -59,8 +59,8 @@ def _load_ranx() -> tuple[type[Run], Callable[..., Run]]:
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
+            message=r".*is an invalid escape sequence.*",
             category=SyntaxWarning,
-            module=r"ranx(\.|$)",
         )
         from ranx import Run
         from ranx import fuse as ranx_fuse

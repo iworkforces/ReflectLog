@@ -100,6 +100,8 @@ def test_cached_and_usearch_close_reach_wemm_model_idempotently(tmp_path) -> Non
             index_path=str(tmp_path / "vectors.usearch"),
             db_path=str(tmp_path / "memories.db"),
             embedding_dims=64,
+            embedder_provider=EmbedderProvider.WEMM,
+            embedding_model=WeMMModel.EMBEDDING_4B,
         ),
         embedder=cached,
     )

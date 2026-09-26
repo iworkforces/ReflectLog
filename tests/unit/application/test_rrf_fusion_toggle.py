@@ -2,11 +2,15 @@
 """Unit tests for ENABLE_RRF_FUSION configuration toggle."""
 
 import os
-from unittest.mock import Mock, patch
+from pathlib import Path
+from unittest.mock import Mock, PropertyMock, patch
 
 import pytest
 
 from reflectlog.application.config.settings import Config
+from reflectlog.core.config_adapters import ConfigAdapter
+from reflectlog.core.enums import EmbedderProvider
+from reflectlog.infrastructure.storage_coordinator import PortalockerStorageCoordinator
 
 
 @pytest.mark.unit
@@ -106,13 +110,13 @@ class TestSearchPipelineWithRRFToggle:
     """Tests for search pipeline behavior with RRF toggle."""
 
     @pytest.fixture
-    def mock_config_rrf_enabled(self):
+    def mock_config_rrf_enabled(self, tmp_path: Path):
         """Mock configuration with RRF fusion enabled."""
         config = Mock(spec=Config)
         config.workspace_id = "test_project"
         config.enable_rrf_fusion = True  # RRF enabled
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
-        config.index_base_path = "/tmp/test_indexes"
+        config.index_base_path = str(tmp_path)
         config.search_limit = 5
         config.search_score_threshold = 0.8
         config.deduplicate_memories = True
@@ -140,7 +144,7 @@ class TestSearchPipelineWithRRFToggle:
         config.log_search_result_limit = 3
         config.embedding_model = "openai/text-embedding-3-large"
         config.embedding_dims = 3072
-        config.embedder_provider = "openai"
+        config.embedder_provider = EmbedderProvider.OPENAI
         config.llm_model = "x-ai/grok-4.1-fast"
         config.openrouter_api_key = Mock()
         config.openrouter_api_key.get_secret_value.return_value = "test-api-key"
@@ -152,13 +156,13 @@ class TestSearchPipelineWithRRFToggle:
         return config
 
     @pytest.fixture
-    def mock_config_rrf_disabled(self):
+    def mock_config_rrf_disabled(self, tmp_path: Path):
         """Mock configuration with RRF fusion disabled."""
         config = Mock(spec=Config)
         config.workspace_id = "test_project"
         config.enable_rrf_fusion = False  # RRF disabled
         config.tantivy_index_path_template = "{workspace_id}_tantivy_test"
-        config.index_base_path = "/tmp/test_indexes"
+        config.index_base_path = str(tmp_path)
         config.search_limit = 5
         config.search_score_threshold = 0.8
         config.deduplicate_memories = True
@@ -186,7 +190,7 @@ class TestSearchPipelineWithRRFToggle:
         config.log_search_result_limit = 3
         config.embedding_model = "openai/text-embedding-3-large"
         config.embedding_dims = 3072
-        config.embedder_provider = "openai"
+        config.embedder_provider = EmbedderProvider.OPENAI
         config.llm_model = "x-ai/grok-4.1-fast"
         config.openrouter_api_key = Mock()
         config.openrouter_api_key.get_secret_value.return_value = "test-api-key"
@@ -229,7 +233,21 @@ class TestSearchPipelineWithRRFToggle:
                     mock_tantivy_instance.search.return_value = [("msg2", 0.8)]
                     mock_tantivy.return_value = mock_tantivy_instance
 
-                    manager = MemoryManager(mock_config_rrf_enabled, mock_logger)
+                    with patch.object(
+                        ConfigAdapter, "usearch_index_path", new_callable=PropertyMock
+                    ) as index_path:
+                        index_path.return_value = str(
+                            Path(mock_config_rrf_enabled.index_base_path)
+                            / mock_config_rrf_enabled.workspace_id
+                            / "usearch"
+                        )
+                        manager = MemoryManager(
+                            mock_config_rrf_enabled,
+                            mock_logger,
+                            coordinator=PortalockerStorageCoordinator(
+                                mock_config_rrf_enabled.index_base_path
+                            ),
+                        )
 
                     # Mock the fusion engine
                     mock_fusion = Mock()

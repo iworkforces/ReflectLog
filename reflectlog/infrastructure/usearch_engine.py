@@ -28,11 +28,12 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 from usearch.index import BatchMatches, Index, Match
 
-from reflectlog.core.enums import EmbedderProvider
+from reflectlog.core.enums import EmbedderProvider, parse_str_enum
 from reflectlog.core.exceptions import InitializationError, StorageError
 from reflectlog.core.logging import IStructuredLogger
 from reflectlog.core.storage_coordination import IStorageCoordinator, LeaseMode
 from reflectlog.core.types import Closable, Embeddings, IStoredMemory
+from reflectlog.infrastructure.embedding_identity import ensure_embedding_identity
 from reflectlog.infrastructure.memory_store import MemoryStore
 from reflectlog.utility.scoring import distance_to_similarity_cosine
 from reflectlog.utility.security import validate_workspace_id
@@ -179,6 +180,8 @@ class USearchConfig:
         workspace_id: Workspace identifier for filtering.
         index_path: Path to the USearch index file.
         db_path: Path to the SQLite memory database.
+        embedder_provider: Provider used to produce the embeddings.
+        embedding_model: Model used to produce the embeddings.
         embedding_dims: Vector embedding dimensions.
         metric: Distance metric (cos, l2, ip).
         connectivity: HNSW M parameter.
@@ -198,6 +201,8 @@ class USearchConfig:
     index_path: str
     db_path: str
     embedding_dims: int
+    embedder_provider: EmbedderProvider
+    embedding_model: str
     metric: str = "cos"
     connectivity: int = 16
     expansion_add: int = 128
@@ -223,6 +228,10 @@ class USearchConfig:
             index_path=data.get("index_path", "") or "",
             db_path=data.get("db_path", "") or "",
             embedding_dims=int(data.get("embedding_dims", 3072)),
+            embedder_provider=parse_str_enum(
+                EmbedderProvider, data["embedder_provider"], field="embedder_provider"
+            ),
+            embedding_model=data["embedding_model"],
             metric=data.get("metric", "cos") or "cos",
             connectivity=int(data.get("connectivity", 16)),
             expansion_add=int(data.get("expansion_add", 128)),
@@ -260,6 +269,8 @@ class USearchConfig:
             index_path=os.path.join(base_path, "vectors.usearch"),
             db_path=os.path.join(base_path, "memories.db"),
             embedding_dims=embedding_dims,
+            embedder_provider=config.embedder_provider,
+            embedding_model=config.embedding_model,
             exact_search=config.usearch_exact_search,
             exact_search_threshold=config.usearch_exact_search_threshold,
         )
@@ -278,6 +289,7 @@ class USearchEngine(BaseModel):
     Example:
         ```python
         from reflectlog.infrastructure.usearch_engine import USearchConfig, USearchEngine
+        from reflectlog.core.enums import EmbedderProvider
         from langchain_openai import OpenAIEmbeddings
 
         config = USearchConfig(
@@ -285,6 +297,8 @@ class USearchEngine(BaseModel):
             index_path="indexes/my-project/usearch/vectors.usearch",
             db_path="indexes/my-project/usearch/memories.db",
             embedding_dims=3072,
+            embedder_provider=EmbedderProvider.OPENAI,
+            embedding_model="text-embedding-3-large",
         )
         embedder = OpenAIEmbeddings(model="text-embedding-3-large")
         engine = USearchEngine(config=config, embedder=embedder, logger=logger)
@@ -330,6 +344,7 @@ class USearchEngine(BaseModel):
             config = USearchConfig.from_dict(config)
 
         super().__init__(config=config, embedder=embedder, logger=logger, **kwargs)
+        self.coordinator = ensure_embedding_identity(self.config, self.coordinator)
 
     def _reject_populated_hnsw_without_db(self, hnsw_size: int) -> None:
         """Refuse a loaded HNSW that cannot be paired with SQLite SoT."""

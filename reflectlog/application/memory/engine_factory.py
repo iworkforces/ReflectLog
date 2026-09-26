@@ -18,6 +18,7 @@ from reflectlog.infrastructure.cross_encoder_reranker import (
     CrossEncoderConfig,
     CrossEncoderReranker,
 )
+from reflectlog.infrastructure.embedding_identity import ensure_embedding_identity
 from reflectlog.infrastructure.embeddings.cached_embeddings import CachedEmbeddings
 from reflectlog.infrastructure.embeddings.qwen3_embedding import LangchainQwenEmbeddings
 from reflectlog.infrastructure.embeddings.wemm_embedding import (
@@ -79,6 +80,14 @@ class EngineFactory:
         Returns:
             EngineFactoryResult with all initialized engines.
         """
+        coordinator = ensure_embedding_identity(
+            USearchConfig.from_config(ConfigAdapter(config)),
+            coordinator,
+            tantivy_index_path=config.tantivy_index_path_template.format(
+                workspace_id=config.workspace_id
+            ).lower(),
+        )
+
         # Create USearch semantic engine
         semantic_engine = self._create_semantic_engine(
             config, logger, coordinator=coordinator

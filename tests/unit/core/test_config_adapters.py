@@ -245,9 +245,9 @@ class TestConfigAdapter:
         assert adapter.tantivy_index_path == "indexes/test-project/tantivy"
 
     def test_embedding_dims_default(self, minimal_config: Config) -> None:
-        """Default embedding_dims is 3072."""
+        """Default embedding_dims is 2048."""
         adapter = ConfigAdapter(minimal_config)
-        assert adapter.embedding_dims == 3072
+        assert adapter.embedding_dims == 2048
 
     def test_metric_hardcoded(self, minimal_config: Config) -> None:
         """metric is always 'cosine'."""
@@ -288,17 +288,17 @@ class TestConfigAdapter:
     def test_embedding_model_default(self, minimal_config: Config) -> None:
         """Default embedding_model."""
         adapter = ConfigAdapter(minimal_config)
-        assert adapter.embedding_model == "openai/text-embedding-3-large"
+        assert adapter.embedding_model == "tencent/WeMM-Embedding-2B"
 
     def test_embedder_provider_default(self, minimal_config: Config) -> None:
-        """Default embedder_provider is 'openai'."""
+        """Default embedder_provider is 'wemm'."""
         adapter = ConfigAdapter(minimal_config)
-        assert adapter.embedder_provider == "openai"
+        assert adapter.embedder_provider == "wemm"
 
     def test_qwen_embedding_dims_default(self, minimal_config: Config) -> None:
-        """Default qwen_embedding_dims is 4096."""
+        """Default qwen_embedding_dims is 2048."""
         adapter = ConfigAdapter(minimal_config)
-        assert adapter.qwen_embedding_dims == 4096
+        assert adapter.qwen_embedding_dims == 2048
 
     def test_embedding_batch_size_default(self, minimal_config: Config) -> None:
         """Default embedding_batch_size is 512."""
@@ -607,7 +607,7 @@ class TestStorageConfigAdapter:
         assert adapter.storage_path == "indexes"
         assert adapter.usearch_index_path == "indexes/test-project/usearch"
         assert adapter.tantivy_index_path == "indexes/test-project/tantivy"
-        assert adapter.embedding_dims == 3072
+        assert adapter.embedding_dims == 2048
         assert adapter.metric == "cosine"
         assert adapter.usearch_exact_search is False
         assert adapter.usearch_exact_search_threshold == 256
@@ -751,9 +751,9 @@ class TestEmbedderConfigAdapter:
     def test_defaults(self, minimal_config: Config) -> None:
         """All defaults match Config defaults."""
         adapter = EmbedderConfigAdapter(minimal_config)
-        assert adapter.embedding_model == "openai/text-embedding-3-large"
-        assert adapter.embedder_provider == "openai"
-        assert adapter.qwen_embedding_dims == 4096
+        assert adapter.embedding_model == "tencent/WeMM-Embedding-2B"
+        assert adapter.embedder_provider == "wemm"
+        assert adapter.qwen_embedding_dims == 2048
         assert adapter.embedding_batch_size == 512
         assert adapter.embedding_max_concurrent_batches == 4
         assert adapter.embedding_cache_enabled is True

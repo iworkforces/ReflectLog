@@ -1,5 +1,9 @@
 """Unit tests for RanxFusionEngine class."""
 
+import os
+from pathlib import Path
+import subprocess
+import sys
 from typing import List, Tuple
 from unittest.mock import MagicMock, patch
 
@@ -346,6 +350,41 @@ class TestCreateFusionEngineFactory:
 @pytest.mark.unit
 class TestRanxLazyImport:
     """Default RRF stays local; ranx loads only for ranx-backed methods."""
+
+    def test_fresh_ranx_compile_fuses_and_preserves_unrelated_warnings(
+        self, tmp_path: Path
+    ) -> None:
+        script = """
+import warnings
+from reflectlog.application.memory.fusion.ranx_fusion import RanxFusionEngine
+
+warnings.simplefilter("error")
+first = [("A", 0.9), ("B", 0.5)]
+second = [("B", 0.8), ("C", 0.7)]
+sum_scores = dict(RanxFusionEngine(method="sum").fuse(first, second))
+max_scores = dict(RanxFusionEngine(method="max").fuse(first, second))
+assert sum_scores == {"A": 0.9, "B": 1.3, "C": 0.7}
+assert max_scores == {"A": 0.9, "B": 0.8, "C": 0.7}
+print("fusion succeeded", flush=True)
+warnings.warn("unrelated syntax warning", SyntaxWarning)
+"""
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-X",
+                f"pycache_prefix={tmp_path / 'fresh-pycache'}",
+                "-c",
+                script,
+            ],
+            cwd=Path(__file__).resolve().parents[3],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "NUMBA_DISABLE_JIT": "1"},
+        )
+        assert completed.stdout == "fusion succeeded\n", completed.stderr
+        assert completed.returncode != 0
+        assert "SyntaxWarning: unrelated syntax warning" in completed.stderr
 
     def test_local_rrf_does_not_import_ranx(self) -> None:
         script = """

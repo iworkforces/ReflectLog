@@ -7,18 +7,19 @@ import os
 from pathlib import Path
 import signal
 import sys
-import tempfile
 from typing import cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
+from reflectlog.core.config_adapters import ConfigAdapter
+from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import StorageError
 from reflectlog.infrastructure.storage_coordinator import PortalockerStorageCoordinator
 from reflectlog.server import _start_server
 
 
-def test_lease_handoff_after_close() -> None:
+def test_lease_handoff_after_close(tmp_path: Path) -> None:
     import logging
 
     from reflectlog.application.config.settings import Config
@@ -28,33 +29,37 @@ def test_lease_handoff_after_close() -> None:
     from reflectlog.core.enums import LlmProvider, RerankerEngine
 
     logger = StructuredLogger(logging.getLogger("shutdown-handoff"))
-    with tempfile.TemporaryDirectory() as tmpdir:
-        coordinator = PortalockerStorageCoordinator(tmpdir, timeout=1.0)
-        config = Config(
-            workspace_id="ws",
-            openrouter_api_key=SecretString("test"),
-            tantivy_index_path_template=os.path.join(
-                tmpdir, "{workspace_id}", "tantivy"
-            ),
-            enable_smart_replace=False,
-            llm_provider=LlmProvider.OPENAI,
-            reranker_engine=RerankerEngine.NONE,
-            embedding_cache_enabled=False,
-            eager_initialization=False,
-        )
-        with (
-            patch("reflectlog.application.memory.manager.USearchEngine") as usearch_cls,
-            patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"),
-            patch("reflectlog.application.memory.manager.TantivyEngine"),
-        ):
-            usearch_cls.return_value = MagicMock()
-            first = MemoryManager(config, logger, coordinator=coordinator)
-            first.close()
-            with pytest.raises(StorageError, match="closed"):
-                first.get_all()
-            second = MemoryManager(config, logger, coordinator=coordinator)
-            assert second._coordinator is coordinator
-            second.close()
+    coordinator = PortalockerStorageCoordinator(str(tmp_path), timeout=1.0)
+    config = Config(
+        workspace_id="ws",
+        openrouter_api_key=SecretString("test"),
+        tantivy_index_path_template=str(tmp_path / "{workspace_id}" / "tantivy"),
+        embedder_provider=EmbedderProvider.OPENAI,
+        embedding_model="openai/text-embedding-3-large",
+        embedding_dims=3072,
+        enable_smart_replace=False,
+        llm_provider=LlmProvider.OPENAI,
+        reranker_engine=RerankerEngine.NONE,
+        embedding_cache_enabled=False,
+        eager_initialization=False,
+    )
+    with (
+        patch.object(
+            ConfigAdapter, "usearch_index_path", new_callable=PropertyMock
+        ) as index_path,
+        patch("reflectlog.application.memory.manager.USearchEngine") as usearch_cls,
+        patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"),
+        patch("reflectlog.application.memory.manager.TantivyEngine"),
+    ):
+        index_path.return_value = str(tmp_path / "ws" / "usearch")
+        usearch_cls.return_value = MagicMock()
+        first = MemoryManager(config, logger, coordinator=coordinator)
+        first.close()
+        with pytest.raises(StorageError, match="closed"):
+            first.get_all()
+        second = MemoryManager(config, logger, coordinator=coordinator)
+        assert second._coordinator is coordinator
+        second.close()
 
 
 def test_graceful_signal_registers_posix_handlers() -> None:

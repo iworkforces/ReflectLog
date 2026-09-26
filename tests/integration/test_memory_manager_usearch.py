@@ -40,6 +40,12 @@ class MockEmbedder(Embeddings):
         """Embed a list of documents."""
         return [self.embed_query(text) for text in texts]
 
+    async def aembed_query(self, text: str) -> list[float]:
+        return self.embed_query(text)
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.embed_documents(texts)
+
 
 def create_usearch_config(temp_dir: str, project_suffix: str = "") -> Config:
     """Create a Config instance configured for USearch backend.
@@ -51,7 +57,11 @@ def create_usearch_config(temp_dir: str, project_suffix: str = "") -> Config:
     import uuid
 
     # Create unique workspace_id to ensure test isolation
-    unique_id = project_suffix or uuid.uuid4().hex[:8]
+    unique_id = (
+        f"{project_suffix}-{uuid.uuid4().hex[:8]}"
+        if project_suffix
+        else uuid.uuid4().hex[:8]
+    )
     workspace_id = f"test-usearch-{unique_id}"
 
     return Config(

@@ -10,6 +10,8 @@ Tests cover:
 - create_smart_replacer: SmartReplacer factory
 """
 
+from dataclasses import replace
+from pathlib import Path
 from typing import cast
 from unittest.mock import Mock, patch
 
@@ -24,8 +26,12 @@ from reflectlog.application.memory.engine_factory import (
 )
 from reflectlog.application.memory.fusion.base import FusionEngine
 from reflectlog.application.utils.logging import StructuredLogger
+from reflectlog.application.utils.security import SecretString
 from reflectlog.core.enums import RerankerEngine
+from reflectlog.core.exceptions import InitializationError
 from reflectlog.core.logging import IStructuredLogger
+from reflectlog.infrastructure.embedding_identity import ensure_embedding_identity
+from reflectlog.infrastructure.storage_coordinator import PortalockerStorageCoordinator
 from reflectlog.infrastructure.tantivy_engine import TantivyEngine
 from reflectlog.infrastructure.usearch_engine import USearchEngine
 
@@ -80,6 +86,14 @@ def factory() -> EngineFactory:
     return EngineFactory()
 
 
+@pytest.fixture(autouse=True)
+def _stub_identity_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "reflectlog.application.memory.engine_factory.ensure_embedding_identity",
+        lambda _config, coordinator, *, tantivy_index_path: coordinator,
+    )
+
+
 @pytest.mark.unit
 class TestEngineFactoryResult:
     """Tests for EngineFactoryResult dataclass."""
@@ -116,6 +130,92 @@ class TestEngineFactoryInit:
 @pytest.mark.unit
 class TestCreateEngines:
     """Tests for EngineFactory.create_engines orchestration."""
+
+    def test_external_tantivy_rejected_before_engines(
+        self,
+        factory: EngineFactory,
+        mock_logger: IStructuredLogger,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "reflectlog.application.memory.engine_factory.ensure_embedding_identity",
+            ensure_embedding_identity,
+        )
+        external = tmp_path / "external" / "tantivy"
+        external.mkdir(parents=True)
+        (external / "metadata.json").write_text("legacy")
+        config = Config(
+            workspace_id="factory_project",
+            openrouter_api_key=SecretString("test-api-key"),
+            tantivy_index_path_template=str(external),
+        )
+        coordinator = PortalockerStorageCoordinator(str(tmp_path / "indexes"))
+
+        with (
+            patch(
+                "reflectlog.application.memory.engine_factory.USearchEngine"
+            ) as semantic,
+            patch(
+                "reflectlog.application.memory.engine_factory.TantivyEngine"
+            ) as tantivy,
+            patch(
+                "reflectlog.application.memory.engine_factory.WeMMEmbeddings"
+            ) as embedder,
+            pytest.raises(InitializationError, match="Legacy workspace"),
+        ):
+            factory.create_engines(config, mock_logger, coordinator)
+
+        semantic.assert_not_called()
+        tantivy.assert_not_called()
+        embedder.assert_not_called()
+        assert not Path(coordinator.paths_for(config.workspace_id).root).exists()
+        assert (external / "metadata.json").read_text() == "legacy"
+
+    def test_preflight_rejects_mismatch_before_embedder_and_shares_coordinator(
+        self,
+        factory: EngineFactory,
+        mock_logger: IStructuredLogger,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "reflectlog.application.memory.engine_factory.ensure_embedding_identity",
+            ensure_embedding_identity,
+        )
+        config = Config(
+            workspace_id="factory_project",
+            openrouter_api_key=SecretString("test-api-key"),
+            embedding_cache_enabled=False,
+        )
+        coordinator = PortalockerStorageCoordinator(str(tmp_path / "indexes"))
+        with (
+            patch(
+                "reflectlog.application.memory.engine_factory.USearchEngine"
+            ) as semantic,
+            patch(
+                "reflectlog.application.memory.engine_factory.TantivyEngine"
+            ) as tantivy,
+            patch(
+                "reflectlog.application.memory.engine_factory.WeMMEmbeddings"
+            ) as embedder,
+            patch("reflectlog.application.memory.engine_factory.create_fusion_engine"),
+        ):
+            factory.create_engines(config, mock_logger, coordinator)
+            assert semantic.call_args.kwargs["coordinator"] is coordinator
+            assert tantivy.call_args.kwargs["coordinator"] is coordinator
+            embedder.reset_mock()
+
+            with pytest.raises(InitializationError, match="identity"):
+                factory.create_engines(
+                    replace(config, embedding_model="different/model"),
+                    mock_logger,
+                    coordinator,
+                )
+
+            embedder.assert_not_called()
 
     @patch("reflectlog.application.memory.engine_factory.create_fusion_engine")
     @patch("reflectlog.application.memory.engine_factory.TantivyEngine")

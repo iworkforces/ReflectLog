@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.types import Embeddings
 from reflectlog.infrastructure.storage_coordinator import PortalockerStorageCoordinator
 from reflectlog.infrastructure.usearch_engine import USearchConfig, USearchEngine
@@ -53,6 +54,8 @@ def _writer(
         index_path=os.path.join(root, workspace_id, "usearch", "vectors.usearch"),
         db_path=os.path.join(root, workspace_id, "usearch", "memories.db"),
         embedding_dims=32,
+        embedder_provider=EmbedderProvider.OPENAI,
+        embedding_model="test/hash-32",
     )
     engine = USearchEngine(
         config=config, embedder=_HashEmbedder(), coordinator=coordinator
@@ -106,6 +109,8 @@ def test_disjoint_and_duplicate_multiprocess_writes(tmp_path: Path) -> None:
             index_path=os.path.join(root, workspace_id, "usearch", "vectors.usearch"),
             db_path=os.path.join(root, workspace_id, "usearch", "memories.db"),
             embedding_dims=32,
+            embedder_provider=EmbedderProvider.OPENAI,
+            embedding_model="test/hash-32",
         )
         inspector = USearchEngine(
             config=config, embedder=_HashEmbedder(), coordinator=coordinator
@@ -140,6 +145,8 @@ def _mutator(
         index_path=os.path.join(root, workspace_id, "usearch", "vectors.usearch"),
         db_path=os.path.join(root, workspace_id, "usearch", "memories.db"),
         embedding_dims=32,
+        embedder_provider=EmbedderProvider.OPENAI,
+        embedding_model="test/hash-32",
     )
     engine = USearchEngine(
         config=config, embedder=_HashEmbedder(), coordinator=coordinator
@@ -210,6 +217,8 @@ def test_delete_and_readd_later_write_wins(tmp_path: Path) -> None:
             index_path=os.path.join(root, workspace_id, "usearch", "vectors.usearch"),
             db_path=os.path.join(root, workspace_id, "usearch", "memories.db"),
             embedding_dims=32,
+            embedder_provider=EmbedderProvider.OPENAI,
+            embedding_model="test/hash-32",
         )
         inspector = USearchEngine(
             config=config, embedder=_HashEmbedder(), coordinator=coordinator
