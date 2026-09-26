@@ -649,6 +649,7 @@ class TestGracefulShutdown:
         # Verify SIGINT handler was registered
         assert signal.SIGINT in registered_handlers
         handler = registered_handlers[signal.SIGINT]
+        mock_server.close.reset_mock()
 
         # Invoke the handler - should call sys.exit(0)
         with pytest.raises(SystemExit) as exc_info:
@@ -727,6 +728,7 @@ class TestGracefulShutdown:
         # Verify SIGTERM handler was registered
         assert signal.SIGTERM in registered_handlers
         handler = registered_handlers[signal.SIGTERM]
+        mock_server.close.reset_mock()
 
         # Invoke the handler
         with pytest.raises(SystemExit) as exc_info:

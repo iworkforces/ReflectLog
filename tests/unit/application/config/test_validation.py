@@ -8,6 +8,7 @@ from reflectlog.application.config.settings import Config
 from reflectlog.application.config.validation import (
     ConfigurationValidator,
     ValidationError,
+    canonical_workspace_id,
     validate_config,
 )
 from reflectlog.application.utils.security import SecretString
@@ -18,6 +19,7 @@ from reflectlog.core.enums import (
     RerankerEngine,
     TransportMode,
 )
+from reflectlog.core.exceptions import ConfigurationError
 
 # ---------------------------------------------------------------------------
 # ValidationError dataclass
@@ -115,6 +117,16 @@ class TestValidatorLifecycle:
 
 
 @pytest.mark.unit
+class TestCanonicalWorkspaceId:
+    def test_normalized_length_is_validated(self):
+        assert canonical_workspace_id(f"  {'A' * 64} \t") == "a" * 64
+
+    def test_normalized_overlong_id_is_rejected(self):
+        with pytest.raises(ConfigurationError, match="Invalid WORKSPACE_ID"):
+            canonical_workspace_id(f"  {'A' * 65} \t")
+
+
+@pytest.mark.unit
 class TestValidateWorkspaceId:
     """Tests for ConfigurationValidator.validate_workspace_id."""
 
@@ -157,6 +169,10 @@ class TestValidateWorkspaceId:
         v = ConfigurationValidator()
         assert v.validate_workspace_id("a..b") is False
         assert "Path traversal" in v.errors[0].message
+
+    def test_current_directory_invalid(self):
+        validator = ConfigurationValidator()
+        assert validator.validate_workspace_id(".") is False
 
     def test_path_traversal_leading_slash(self):
         """Leading slash path traversal is rejected."""
@@ -1010,6 +1026,10 @@ class TestValidateConfig:
         cfg = self._make_config(workspace_id="bad@id!")
         errors = validate_config(cfg)
         assert any(e.field == "WORKSPACE_ID" for e in errors)
+
+    def test_unset_workspace_id_is_valid(self):
+        config = self._make_config(workspace_id="")
+        assert validate_config(config) == []
 
     def test_invalid_port(self):
         """Invalid port produces error."""

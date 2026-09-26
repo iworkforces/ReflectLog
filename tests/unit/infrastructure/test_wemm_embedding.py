@@ -75,6 +75,66 @@ def test_documents_use_encode_document_and_empty_batch_does_not_load() -> None:
     assert all(len(vector) == 64 for vector in result)
 
 
+def test_query_normalizes_low_precision_model_output() -> None:
+    rounded = np.full((1, 2048), 1.0 / math.sqrt(2048), dtype=np.float16)
+    assert abs(math.sqrt(sum(float(value) ** 2 for value in rounded[0])) - 1.0) > 1e-5
+    with patch(
+        "reflectlog.infrastructure.embeddings.wemm_embedding.SentenceTransformer"
+    ) as model_class:
+        model_class.return_value.encode_query.return_value = rounded
+        result = WeMMEmbeddings(_config(dimensions=2048)).embed_query("query")
+
+    assert len(result) == 2048
+    assert all(type(value) is float and value > 0 for value in result)
+    assert math.sqrt(sum(value * value for value in result)) == pytest.approx(1.0)
+
+
+def test_documents_normalize_low_precision_model_output() -> None:
+    rounded = np.full((2, 2048), 1.0 / math.sqrt(2048), dtype=np.float16)
+    rounded[1] *= -1
+    with patch(
+        "reflectlog.infrastructure.embeddings.wemm_embedding.SentenceTransformer"
+    ) as model_class:
+        model_class.return_value.encode_document.return_value = rounded
+        result = WeMMEmbeddings(_config(dimensions=2048)).embed_documents(
+            ["first", "second"]
+        )
+
+    assert len(result) == 2
+    assert all(len(vector) == 2048 for vector in result)
+    assert all(type(value) is float and value > 0 for value in result[0])
+    assert all(type(value) is float and value < 0 for value in result[1])
+    assert all(
+        math.sqrt(sum(value * value for value in vector)) == pytest.approx(1.0)
+        for vector in result
+    )
+
+
+def test_query_normalizes_finite_nonunit_float32_output() -> None:
+    with patch(
+        "reflectlog.infrastructure.embeddings.wemm_embedding.SentenceTransformer"
+    ) as model_class:
+        model_class.return_value.encode_query.return_value = np.ones(
+            (1, 64), dtype=np.float32
+        )
+        result = WeMMEmbeddings(_config()).embed_query("query")
+
+    assert result == pytest.approx([0.125] * 64)
+
+
+def test_documents_reject_zero_vector() -> None:
+    with patch(
+        "reflectlog.infrastructure.embeddings.wemm_embedding.SentenceTransformer"
+    ) as model_class:
+        model_class.return_value.encode_document.return_value = np.zeros(
+            (1, 64), dtype=np.float16
+        )
+        embeddings = WeMMEmbeddings(_config())
+
+        with pytest.raises(RuntimeError, match="nonzero"):
+            embeddings.embed_documents(["document"])
+
+
 @pytest.mark.parametrize("payload", [123, {"text": "query"}, ["query"]])
 def test_query_rejects_non_text_before_model_load(payload: object) -> None:
     with patch(
@@ -143,7 +203,8 @@ def test_device_selection_is_forwarded(
         (np.empty((1, 0), dtype=np.float32), "empty"),
         (np.full((1, 64), np.nan, dtype=np.float32), "finite"),
         (np.full((1, 64), np.inf, dtype=np.float32), "finite"),
-        (np.full((1, 64), 1.0, dtype=np.float32), "normalized"),
+        (np.zeros((1, 64), dtype=np.float32), "nonzero"),
+        (np.ones(64, dtype=np.float32), "matrix"),
     ],
 )
 def test_query_output_validation_fails_closed(

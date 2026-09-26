@@ -1,18 +1,24 @@
 """ReflectLog Server - Refactored modular implementation."""
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, replace
 import hmac
 from ipaddress import ip_address
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
+import anyio
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware
 from fastmcp.utilities.logging import get_logger
+from pydantic import Field
 
 from reflectlog.application.config.settings import Config, get_config
 from reflectlog.application.memory.manager import MemoryManager
+from reflectlog.application.memory.workspace_registry import WorkspaceRegistry
 from reflectlog.application.tools.add import AddTool
 from reflectlog.application.tools.get_all import GetAllTool
 from reflectlog.application.tools.health_check import HealthCheckTool
@@ -25,7 +31,7 @@ from reflectlog.core.prompts import build_instructions
 from .utils.logging import create_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from reflectlog.application.tools.base import BaseTool
 
@@ -65,6 +71,39 @@ AVAILABLE_TOOL_CLASSES: dict[str, type[BaseTool]] = {
     "health_check": HealthCheckTool,
 }
 
+TOOL_INSTRUCTIONS = {
+    "add": "    • add(memories: list[str], workspace_id: str, dry_run: bool = False) -> dict\n"
+    "      Add memories with semantic embeddings. Empty lists are no-op.\n"
+    "      Returns stored/skipped/replaced counts. dry_run previews replacements.",
+    "get_all": "    • get_all(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict\n"
+    "      Page stored memories. Default cap 1000. Returns memories, "
+    "total, offset, limit, truncated.",
+    "search": "    • search(query: str, workspace_id: str) -> list[str]\n"
+    "      Hybrid semantic + full-text search. Finds semantically similar\n"
+    "      memories using vector embeddings (limit: configurable, default 5).",
+    "remove": "    • remove(memories: list[str], workspace_id: str)\n"
+    "      Remove memories using exact string matching (case-sensitive).\n"
+    "      Uses USearch (source of truth) with Python-level exact matching.\n"
+    "      Removes all occurrences of each memory. Silently ignores non-existent memories.",
+    "health_check": "    • health_check(workspace_id: str) -> dict[str, Any]\n"
+    "      Get server health status including component initialization state.",
+}
+
+
+@dataclass
+class _RegisteredTool:
+    name: str
+    fn: Callable[..., Awaitable[object]]
+
+    def get_name(self) -> str:
+        return self.name
+
+    def get_handler(self) -> Callable[..., Awaitable[object]]:
+        return self.fn
+
+    def get_instruction_snippet(self) -> str:
+        return TOOL_INSTRUCTIONS[self.name]
+
 
 class FastMCPServer:
     """Orchestrator for the ReflectLog Server.
@@ -91,8 +130,7 @@ class FastMCPServer:
         )
 
         # Log initialization
-        init_msg = f"Initializing reflectlog MCP server [workspace_id={self.config.workspace_id}]"
-        self.logger.info(init_msg)
+        self.logger.info("Initializing reflectlog MCP server")
 
         self.logger.info(
             f"transport={self.config.transport}, port={self.config.port}, "
@@ -108,8 +146,11 @@ class FastMCPServer:
                 embedding_dimensions = self.config.wemm_embedding_dims
         self.logger.info(f"embedding_dims={embedding_dimensions}")
 
-        # Initialize memory manager
-        self._memory_manager = MemoryManager(self.config, self.logger)
+        self._startup_metrics: dict[str, float] | None = None
+        self._registry = WorkspaceRegistry(
+            self.config, manager_factory=self._create_manager
+        )
+        self._closed = False
 
         # Initialize tools BEFORE creating FastMCP (to build dynamic instructions)
         self._initialize_tools()
@@ -118,7 +159,9 @@ class FastMCPServer:
         instructions = self._build_dynamic_instructions()
 
         # Initialize FastMCP with dynamic instructions
-        self.mcp = FastMCP(name="reflectlog", instructions=instructions)
+        self.mcp = cast("Callable[..., FastMCP]", FastMCP)(
+            name="reflectlog-mcp", instructions=instructions, lifespan=self._lifespan
+        )
         self._http_auth_installed = False
         self._install_http_auth()
 
@@ -145,20 +188,14 @@ class FastMCPServer:
                 extra={"available_tools": available_names},
             )
 
-        # Initialize each permitted tool with dependencies
-        self.tools: list[BaseTool] = []
+        handlers = self._handlers()
+        self.tools: list[_RegisteredTool] = []
         for tool_name in selected_names:
-            tool_class = AVAILABLE_TOOL_CLASSES[tool_name]
-            tool = tool_class(
-                config=self.config,
-                memory_manager=self._memory_manager,
-                logger=self.logger,
-            )
-            self.tools.append(tool)
+            self.tools.append(_RegisteredTool(tool_name, handlers[tool_name]))
 
             self.logger.info(
-                f"Initialized tool: {tool.get_name()}",
-                extra={"tool": tool.get_name()},
+                f"Initialized tool: {tool_name}",
+                extra={"tool": tool_name},
             )
 
         if selected_names:
@@ -170,11 +207,7 @@ class FastMCPServer:
     def _register_tools(self) -> None:
         """Register all tools with the FastMCP instance."""
         for tool in self.tools:
-            # Get the handler function from the tool
-            handler = tool.get_handler()
-
-            # Register with FastMCP using the decorator
-            _ = self.mcp.tool(handler)
+            _ = self.mcp.tool(tool.get_handler(), name=tool.get_name())
 
             self.logger.info(
                 f"Registered tool: {tool.get_name()}", extra={"tool": tool.get_name()}
@@ -184,21 +217,83 @@ class FastMCPServer:
             f"Registered {len(self.tools)} tools with FastMCP",
             extra={"tool_count": len(self.tools)},
         )
-        from types import SimpleNamespace
+        self.registered_tools = {tool.get_name(): tool for tool in self.tools}
 
-        self.registered_tools = {
-            tool.get_name(): SimpleNamespace(
-                name=tool.get_name(), fn=tool.get_handler()
-            )
-            for tool in self.tools
+    def _handlers(self) -> dict[str, Callable[..., Awaitable[object]]]:
+        return {
+            "add": self._add,
+            "search": self._search,
+            "get_all": self._get_all,
+            "remove": self._remove,
+            "health_check": self._health_check,
         }
 
     def tool_fn(self, name: str) -> Callable[..., object]:
         """Return the registered handler for an MCP tool name."""
-        for tool in self.tools:
-            if tool.get_name() == name:
-                return tool.get_handler()
-        raise KeyError(name)
+        return self.registered_tools[name].fn
+
+    def _create_manager(self, config: Config) -> MemoryManager:
+        logger = create_logger(__name__, config.workspace_id, config.log_level)
+        manager = MemoryManager(config, logger)
+        manager.startup_metrics = self._startup_metrics
+        return manager
+
+    def _handler(self, name: str, manager: MemoryManager) -> Callable[..., Any]:
+        tool = AVAILABLE_TOOL_CLASSES[name](
+            replace(self.config, workspace_id=manager.config.workspace_id),
+            manager,
+            self.logger,
+        )
+        return tool.get_handler()
+
+    async def _add(
+        self, memories: list[str], workspace_id: str, dry_run: bool = False
+    ) -> dict[str, object]:
+        async with self._registry.acquire(workspace_id) as manager:
+            return await self._handler("add", manager)(memories, dry_run)
+
+    async def _search(
+        self,
+        query: Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=1000,
+                description="Search query for semantic matching",
+            ),
+        ],
+        workspace_id: str,
+    ) -> list[str]:
+        async with self._registry.acquire(workspace_id) as manager:
+            return await self._handler("search", manager)(query)
+
+    async def _get_all(
+        self, workspace_id: str, limit: int | None = None, offset: int = 0
+    ) -> dict[str, object]:
+        async with self._registry.acquire(workspace_id) as manager:
+            return await self._handler("get_all", manager)(limit, offset)
+
+    async def _remove(self, memories: list[str], workspace_id: str) -> None:
+        async with self._registry.acquire(workspace_id) as manager:
+            await self._handler("remove", manager)(memories)
+
+    async def _health_check(self, workspace_id: str) -> dict[str, Any]:
+        async with self._registry.acquire(workspace_id) as manager:
+            return await self._handler("health_check", manager)()
+
+    @asynccontextmanager
+    async def _lifespan(self, _server: FastMCP) -> AsyncGenerator[None]:
+        reaper = asyncio.create_task(self._registry.run_reaper())
+        try:
+            yield
+        finally:
+            with anyio.CancelScope(shield=True):
+                try:
+                    await self.aclose()
+                finally:
+                    _ = reaper.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await reaper
 
     def _build_dynamic_instructions(self) -> str:
         """Build MCP instructions dynamically from registered tools.
@@ -213,7 +308,10 @@ class FastMCPServer:
             (tool.get_name(), tool.get_instruction_snippet()) for tool in self.tools
         ]
 
-        instructions = build_instructions(tool_snippets)
+        instructions = (
+            f"{build_instructions(tool_snippets)}\n\n"
+            "Every tool requires workspace_id: str as an argument."
+        )
 
         self.logger.info(
             f"Built dynamic instructions for {len(self.tools)} tool(s)",
@@ -337,24 +435,30 @@ class FastMCPServer:
             port=self.config.port,
             host=self.config.host,
             path=self.config.path,
+            uvicorn_config={"timeout_graceful_shutdown": None},
         )
 
-    def close(self) -> None:
-        """Gracefully shutdown the server and persist all data.
-
-        This method ensures all data is properly saved before shutdown:
-        1. Closes the MemoryManager (which persists USearch and Tantivy data)
-
-        Should be called during graceful shutdown (e.g., on SIGINT/SIGTERM)
-        to prevent data loss.
-        """
+    async def aclose(self) -> None:
+        if self._closed:
+            return
         self.logger.info("Initiating graceful server shutdown...")
-
         try:
-            self._memory_manager.close()
             from reflectlog.utility.http import HttpClientFactory
 
-            HttpClientFactory.close_all_sync()
+            errors: list[Exception] = []
+            try:
+                await self._registry.close()
+            except Exception as error:
+                errors.append(error)
+            try:
+                await HttpClientFactory.close_all()
+            except Exception as error:
+                errors.append(error)
+            if len(errors) == 1:
+                raise errors[0]
+            if len(errors) > 1:
+                raise ExceptionGroup("Server shutdown incomplete", errors)
+            self._closed = True
             self.logger.info("Server shutdown complete - all data persisted")
         except Exception as e:
             self.logger.error(
@@ -362,6 +466,15 @@ class FastMCPServer:
                 extra={"error": str(e)},
             )
             raise
+
+    def close(self) -> None:
+        try:
+            _ = anyio.get_current_task()
+        except anyio.NoEventLoopError:
+            pass
+        else:
+            raise RuntimeError("Use await aclose() inside an async event loop")
+        anyio.run(self.aclose)
 
     def set_startup_metrics(self, metrics: dict[str, float]) -> None:
         """Store startup timing metrics on the memory manager.
@@ -372,11 +485,11 @@ class FastMCPServer:
         Args:
             metrics: Mapping of phase name to elapsed seconds.
         """
-        self._memory_manager.startup_metrics = metrics
+        self._startup_metrics = metrics
 
     @property
     def startup_metrics(self) -> dict[str, float] | None:
-        return self._memory_manager.startup_metrics
+        return self._startup_metrics
 
 
 def main() -> None:
@@ -396,8 +509,11 @@ def main() -> None:
         # Configuration is loaded automatically via the singleton
         server = FastMCPServer()
         server.run()
+        server.close()
     except RuntimeError as e:
         fallback_logger.error(f"Failed to start server: {e}")
+        if server is not None:
+            server.close()
         raise
     except KeyboardInterrupt:
         fallback_logger.info("Server shutdown requested (Ctrl+C)")

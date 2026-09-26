@@ -32,10 +32,9 @@ uv sync
 
 ### Configuration
 
-Create a `.env` file:
+Create a `.env` file with your API key:
 
 ```bash
-WORKSPACE_ID=my-workspace_id
 OPENROUTER_API_KEY=sk-or-your-key-here
 ```
 
@@ -45,9 +44,89 @@ OPENROUTER_API_KEY=sk-or-your-key-here
 # Start with stdio transport (default for MCP clients)
 uv run reflectlog
 
+# Or use the launcher
+./start-reflectlog-mcp-server.sh
+
 # Start with HTTP transport (requires MCP_AUTH_TOKEN; bind-all needs ALLOW_PUBLIC_BIND=true)
 MCP_AUTH_TOKEN=change-me uv run reflectlog --transport http --port 9103
 ```
+
+### Connect HTTP MCP clients
+
+Choose a secret token and use the same value for the server's `MCP_AUTH_TOKEN`
+and each client's `REFLECTLOG_MCP_TOKEN`. For example, replace `change-me` in
+the command above and export the matching value in the environment that starts
+each client:
+
+```bash
+export REFLECTLOG_MCP_TOKEN='change-me'
+```
+
+The local endpoint is `http://127.0.0.1:9103/mcp`. Each client sends
+`Authorization: Bearer <token>`. A server `.env` file does not set environment
+variables in other client processes. Keep the real token out of tracked config
+files and shell history. For access across hosts, use HTTPS; binding to all
+interfaces requires `ALLOW_PUBLIC_BIND=true`, and plaintext HTTP must not be
+exposed over a network.
+
+Pick the configuration for your client:
+
+- **Claude Code:** Add this to your project's `.mcp.json` (which may be shared).
+  [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+
+  ```json
+  {
+    "mcpServers": {
+      "reflectlog": {
+        "type": "http",
+        "url": "http://127.0.0.1:9103/mcp",
+        "headers": { "Authorization": "Bearer ${REFLECTLOG_MCP_TOKEN}" }
+      }
+    }
+  }
+  ```
+
+  Check with `claude mcp get reflectlog` or `/mcp` inside Claude Code.
+
+- **Codex:** Add this to `~/.codex/config.toml`.
+  [Codex MCP documentation](https://developers.openai.com/codex/extend/mcp#streamable-http-servers).
+
+  ```toml
+  [mcp_servers.reflectlog]
+  url = "http://127.0.0.1:9103/mcp"
+  bearer_token_env_var = "REFLECTLOG_MCP_TOKEN"
+  ```
+
+  Check with `codex mcp list` or `/mcp` inside Codex.
+
+- **Grok Build:** Add this to `~/.grok/config.toml`. Grok expands `${VAR}` in
+  header values. [Grok Build MCP documentation](https://docs.x.ai/build/features/mcp-servers).
+
+  ```toml
+  [mcp_servers.reflectlog]
+  url = "http://127.0.0.1:9103/mcp"
+  headers = { Authorization = "Bearer ${REFLECTLOG_MCP_TOKEN}" }
+  ```
+
+  Check with `grok mcp doctor reflectlog` or `/mcps` inside Grok Build.
+
+- **OpenCode:** Add this entry under `mcp` in `opencode.json`.
+  [OpenCode MCP documentation](https://opencode.ai/docs/mcp-servers/).
+
+  ```json
+  {
+    "mcp": {
+      "reflectlog": {
+        "type": "remote",
+        "url": "http://127.0.0.1:9103/mcp",
+        "oauth": false,
+        "headers": { "Authorization": "Bearer {env:REFLECTLOG_MCP_TOKEN}" }
+      }
+    }
+  }
+  ```
+
+  Check with `opencode mcp list`.
 
 ## Usage
 
@@ -55,28 +134,44 @@ MCP_AUTH_TOKEN=change-me uv run reflectlog --transport http --port 9103
 
 ReflectLog provides five MCP tools:
 
-1. **add(memories: list[str], dry_run: bool = False) -> dict** - Store memories; returns stored/skipped/replaced counts
-2. **get_all(limit: int | None = None, offset: int = 0) -> dict** - Page stored memories (default cap 1000); includes `total` and `truncated`
-3. **search(query: str) -> list[str]** - Hybrid semantic + full-text search
-4. **remove(memories: list[str])** - Remove memories by exact match
-5. **health_check() -> dict** - Server health, including `pending_intent_count`
+1. `add(memories: list[str], workspace_id: str, dry_run: bool = False) -> dict`: Store memories; returns stored/skipped/replaced counts
+2. `get_all(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict`: Page stored memories (default cap 1000); includes `total` and `truncated`
+3. `search(query: str, workspace_id: str) -> list[str]`: Hybrid semantic + full-text search
+4. `remove(memories: list[str], workspace_id: str)`: Remove memories by exact match
+5. `health_check(workspace_id: str) -> dict`: Workspace-specific health, including `pending_intent_count`
+
+Every tool call, including `health_check`, requires an explicit `workspace_id`.
+`WORKSPACE_ID` in the environment or `.env` is not used as a default. Active
+workspace managers are cached per workspace. Idle managers expire after 15
+minutes without a call; a sweep runs every 60 seconds, with at most 8 idle
+managers retained.
+
+Workspace IDs must be 1 to 64 characters from `A-Z`, `a-z`, `0-9`, `_`, `.`,
+and `-`; `.` and traversal-like IDs are rejected. Storage treats IDs without
+regard to case, so names that differ only in capitalization share a workspace.
+The MCP bearer token authenticates access to the server, not to an individual
+workspace. Only give workspace access to trusted clients; `workspace_id` is not
+an authorization boundary.
 
 ### Example Usage
 
 ```python
 # Add memories
-await add(["I prefer Python for web development", "I use FastAPI for APIs"])
+await add(["I prefer Python for web development", "I use FastAPI for APIs"], workspace_id="my-project")
 
 # Search semantically
-results = await search("web frameworks")
+results = await search("web frameworks", workspace_id="my-project")
 # Returns: ["I prefer Python for web development"]
 
 # Get all memories
-page = await get_all()
+page = await get_all(workspace_id="my-project")
 # Returns {"memories": [...], "total": N, "offset": 0, "limit": 1000, "truncated": bool}
 
 # Remove memories
-await remove(["I use FastAPI for APIs"])
+await remove(["I use FastAPI for APIs"], workspace_id="my-project")
+
+# Check this workspace's health
+status = await health_check(workspace_id="my-project")
 ```
 
 ## Configuration
@@ -85,7 +180,6 @@ await remove(["I use FastAPI for APIs"])
 
 | Variable | Description |
 |----------|-------------|
-| `WORKSPACE_ID` | Unique workspace identifier |
 | `OPENROUTER_API_KEY` | OpenRouter API key for LLM/embeddings |
 
 ### Optional Configuration
@@ -207,8 +301,8 @@ ReflectLog/
 ./start-unittest.sh
 ./start-unittest.sh --coverage
 
-# Run server
-./start-reflectlog-mcp-server.sh --workspace_id my-workspace_id
+# Run server (workspace_id required on every tool call)
+./start-reflectlog-mcp-server.sh
 ```
 
 ### Testing

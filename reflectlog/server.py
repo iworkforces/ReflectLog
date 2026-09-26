@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import os
 import signal
 import sys
@@ -140,8 +141,10 @@ Examples:
   # Run with SSE transport
   reflectlog --transport sse --port 8080 --host 0.0.0.0
 
+Workspace selection is required as workspace_id on every MCP tool call.
+WORKSPACE_ID is ignored by the server.
+
 Environment Variables:
-  WORKSPACE_ID    The unique workspace name
   MCP_TRANSPORT   Override transport mode (stdio, http, sse, streamable-http)
   MCP_PORT        Override server port
   MCP_HOST        Override server host
@@ -219,7 +222,8 @@ def main() -> None:
         started.set_startup_metrics(merged)
         _print_startup_timing(output_stream, merged)
         started.run()
-    except KeyboardInterrupt:
+        started.close()
+    except KeyboardInterrupt, asyncio.CancelledError:
         if server is not None:
             server.close()
     except Exception:
@@ -306,6 +310,14 @@ def _start_server(
         )
         persist_ok = True
         if server is not None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+            else:
+                for task in asyncio.all_tasks(loop):
+                    _ = task.cancel()
+                return
             try:
                 server.close()
             except Exception as exc:

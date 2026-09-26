@@ -63,12 +63,21 @@ def _focused_commands(inject_failure: str | None) -> list[tuple[str, list[str]]]
     commands: list[tuple[str, list[str]]] = [
         (
             "runtime-contract",
-            [*UV_RUN, "pytest", "-q", "tests/unit/test_runtime_contract.py"],
+            [
+                *UV_RUN,
+                "python",
+                "-m",
+                "pytest",
+                "-q",
+                "tests/unit/test_runtime_contract.py",
+            ],
         ),
         (
             "coordinator",
             [
                 *UV_RUN,
+                "python",
+                "-m",
                 "pytest",
                 "-q",
                 "tests/unit/infrastructure/test_storage_coordinator.py",
@@ -83,6 +92,8 @@ def _focused_commands(inject_failure: str | None) -> list[tuple[str, list[str]]]
             "usearch-concurrency",
             [
                 *UV_RUN,
+                "python",
+                "-m",
                 "pytest",
                 "-q",
                 "tests/integration/test_multiprocess_writers.py",
@@ -182,6 +193,14 @@ def main(argv: list[str] | None = None) -> int:
         "artifact": str(output_path),
     }
     _ = output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    if status == "failed":
+        failure = results[-1]
+        print(
+            f"Focused gate {failure['name']} failed (exit {failure['exit']})",
+            file=sys.stderr,
+        )
+        print(f"stdout:\n{failure['stdout']}", file=sys.stderr)
+        print(f"stderr:\n{failure['stderr']}", file=sys.stderr)
     return 0 if status == "ok" else 1
 
 

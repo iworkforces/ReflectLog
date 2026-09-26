@@ -1,5 +1,7 @@
 """Configuration contract tests for the local WeMM provider."""
 
+from dataclasses import replace
+
 import pytest
 
 from reflectlog.application.config.settings import Config
@@ -34,7 +36,9 @@ def test_wemm_native_dimension_is_derived_when_override_absent(
     assert config.embedder_provider is EmbedderProvider.WEMM
     assert config.wemm_embedding_dims == native_dimensions
     assert (
-        USearchConfig.from_config(ConfigAdapter(config)).embedding_dims
+        USearchConfig.from_config(
+            ConfigAdapter(replace(config, workspace_id="wemm-test"))
+        ).embedding_dims
         == native_dimensions
     )
 

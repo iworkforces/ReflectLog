@@ -107,10 +107,10 @@ class WeMMEmbeddings:
             vector = [float(vectors[row_index, index]) for index in range(width)]
             if not all(math.isfinite(value) for value in vector):
                 raise RuntimeError("WeMM embedding values must be finite")
-            norm = math.sqrt(sum(value * value for value in vector))
-            if not math.isclose(norm, 1.0, rel_tol=1e-5, abs_tol=1e-5):
-                raise RuntimeError("WeMM embedding vector must be normalized")
-            validated.append(vector)
+            norm = math.hypot(*vector)
+            if norm == 0.0:
+                raise RuntimeError("WeMM embedding vector must be nonzero")
+            validated.append([value / norm for value in vector])
         return validated
 
     def embed_query(self, text: str) -> list[float]:

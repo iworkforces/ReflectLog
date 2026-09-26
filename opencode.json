@@ -8,6 +8,12 @@
                 "--mcp"
             ],
             "enabled": true
+        },
+        "reflectlog-mcp": {
+            "type": "remote",
+            "url": "http://127.0.0.1:9103/mcp",
+            "enabled": true,
+            "authToken": "518I1wod29fF"
         }
     }
 }
