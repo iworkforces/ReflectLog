@@ -247,11 +247,26 @@ memory, and startup time increase substantially from 2B to 4B to 9B. Start with
 checkpoint generally requires server-class resources or an appropriately sized
 accelerator; it is not a realistic default for memory-constrained laptops.
 
-USearch persists a fixed vector width. Changing `EMBEDDING_MODEL` or
-`WEMM_EMBEDDING_DIMS` requires rebuilding that workspace's vector index. Export
-or otherwise preserve the workspace memories first, stop ReflectLog, recreate
-the workspace semantic storage, and re-add the memories. Existing vectors are
-not migrated or made compatible automatically.
+Each workspace records its embedding provider, model selector, and effective
+vector dimensions in `.reflectlog.embedding-identity.json`. Reopening with the
+same identity is supported. Changing `EMBEDDER_PROVIDER`, `EMBEDDING_MODEL`, or
+effective dimensions requires an offline rebuild, even if the new embedder has
+the same vector width. A model selector does not pin an upstream checkpoint
+revision; manage checkpoint revisions separately.
+
+If the old environment remains compatible, obtain and verify a complete
+export of memory content for each workspace before stopping it. Stop all
+ReflectLog processes, then archive the complete workspace directory, including
+SQLite database and WAL files, vector and full-text indexes, pending intents,
+and metadata sidecars. Keep this archive intact; a content export alone does
+not preserve the journal or indexes. Rebuild into a distinct, empty workspace
+storage location with the chosen embedder and re-add the exported content.
+Legacy storage without identity metadata that contains
+memories, has unknown index occupancy, or has pending intents also requires
+this offline export and rebuild. Do not create or rewrite the identity sidecar
+to make unknown vectors appear compatible. ReflectLog does not migrate or
+delete existing storage automatically, or fall back to full-text-only search.
+See [storage coordination](docs/storage-coordination.md) for recovery details.
 
 Real checkpoint tests are opt-in and are never part of normal CI:
 
