@@ -13,9 +13,11 @@ import numpy.typing as npt
 import pytest
 
 from reflectlog.application.utils.logging import StructuredLogger
+from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import StorageError
 from reflectlog.core.logging import IStructuredLogger
 from reflectlog.core.types import Embeddings
+from reflectlog.infrastructure.embedding_identity import ensure_embedding_identity
 from reflectlog.infrastructure.usearch_engine import USearchConfig, USearchEngine
 
 
@@ -89,6 +91,8 @@ def temp_engine() -> Generator[tuple[USearchConfig, MockEmbedder, str], None, No
             index_path=os.path.join(tmpdir, "index.usearch"),
             db_path=os.path.join(tmpdir, "messages.db"),
             embedding_dims=128,
+            embedder_provider=EmbedderProvider.OPENAI,
+            embedding_model="test/mock-128",
         )
         embedder = MockEmbedder(dims=128)
         yield config, embedder, tmpdir
@@ -101,7 +105,8 @@ class TestUSearchConfigFromAppConfig:
         """Factory should create config from application Config."""
         mock_config = MagicMock()
         mock_config.workspace_id = "test-project"
-        mock_config.embedder_provider = "openai"
+        mock_config.embedder_provider = EmbedderProvider.OPENAI
+        mock_config.embedding_model = "openai/text-embedding-3-large"
         mock_config.embedding_dims = 3072
         mock_config.qwen_embedding_dims = 4096
         mock_config.usearch_index_path = "indexes/test-project/usearch"
@@ -120,7 +125,8 @@ class TestUSearchConfigFromAppConfig:
         """Factory should use qwen_embedding_dims for langchain provider."""
         mock_config = MagicMock()
         mock_config.workspace_id = "test-project"
-        mock_config.embedder_provider = "langchain"
+        mock_config.embedder_provider = EmbedderProvider.LANGCHAIN
+        mock_config.embedding_model = "Qwen/Qwen3-Embedding-4B"
         mock_config.embedding_dims = 3072
         mock_config.qwen_embedding_dims = 4096
         mock_config.usearch_index_path = "indexes/test-project/usearch"
@@ -517,6 +523,8 @@ class TestUSearchEngineExactSearch:
             index_path=config.index_path,
             db_path=config.db_path,
             embedding_dims=config.embedding_dims,
+            embedder_provider=config.embedder_provider,
+            embedding_model=config.embedding_model,
         )
         engine = USearchEngine(config=default_config, embedder=embedder)
 
@@ -537,6 +545,8 @@ class TestUSearchEngineExactSearch:
             index_path=os.path.join(tmpdir, "index.usearch"),
             db_path=os.path.join(tmpdir, "messages.db"),
             embedding_dims=128,
+            embedder_provider=EmbedderProvider.OPENAI,
+            embedding_model="test/mock-128",
             exact_search=True,  # Force exact search
         )
         engine = USearchEngine(config=config, embedder=embedder)
@@ -556,6 +566,8 @@ class TestUSearchEngineExactSearch:
             index_path=os.path.join(tmpdir, "index.usearch"),
             db_path=os.path.join(tmpdir, "messages.db"),
             embedding_dims=128,
+            embedder_provider=EmbedderProvider.OPENAI,
+            embedding_model="test/mock-128",
             exact_search=False,
             exact_search_threshold=1000,  # Auto-switch when < 1000 vectors
         )
@@ -582,6 +594,8 @@ class TestUSearchEngineExactSearch:
             index_path=os.path.join(tmpdir, "index.usearch"),
             db_path=os.path.join(tmpdir, "messages.db"),
             embedding_dims=128,
+            embedder_provider=EmbedderProvider.OPENAI,
+            embedding_model="test/mock-128",
             exact_search=False,
             exact_search_threshold=3,  # Auto-switch when < 3 vectors
         )
@@ -608,6 +622,8 @@ class TestUSearchEngineExactSearch:
             index_path=os.path.join(tmpdir, "index.usearch"),
             db_path=os.path.join(tmpdir, "messages.db"),
             embedding_dims=128,
+            embedder_provider=EmbedderProvider.OPENAI,
+            embedding_model="test/mock-128",
             exact_search=True,  # Force exact search
         )
         engine = USearchEngine(config=config, embedder=embedder)
@@ -634,6 +650,8 @@ class TestUSearchEngineExactSearch:
             index_path=os.path.join(tmpdir, "index.usearch"),
             db_path=os.path.join(tmpdir, "messages.db"),
             embedding_dims=128,
+            embedder_provider=EmbedderProvider.OPENAI,
+            embedding_model="test/mock-128",
             exact_search=True,
         )
         logger = create_mock_logger()
@@ -651,7 +669,8 @@ class TestUSearchEngineExactSearch:
         """USearchConfig.from_app_config should include exact search settings."""
         mock_config = MagicMock()
         mock_config.workspace_id = "test-project"
-        mock_config.embedder_provider = "openai"
+        mock_config.embedder_provider = EmbedderProvider.OPENAI
+        mock_config.embedding_model = "openai/text-embedding-3-large"
         mock_config.embedding_dims = 3072
         mock_config.qwen_embedding_dims = 4096
         mock_config.usearch_exact_search = True
@@ -676,6 +695,8 @@ class TestUSearchConfigFromDict:
             "index_path": "/tmp/index.usearch",
             "db_path": "/tmp/messages.db",
             "embedding_dims": 256,
+            "embedder_provider": "openai",
+            "embedding_model": "test/mock-256",
             "metric": "l2",
             "connectivity": 32,
             "expansion_add": 256,
@@ -698,7 +719,9 @@ class TestUSearchConfigFromDict:
 
     def test_from_dict_with_defaults(self) -> None:
         """from_dict should use defaults for missing keys."""
-        config = USearchConfig.from_dict({})
+        config = USearchConfig.from_dict(
+            {"embedder_provider": "openai", "embedding_model": "test/mock-3072"}
+        )
 
         assert config.workspace_id == ""
         assert config.index_path == ""
@@ -723,6 +746,8 @@ class TestUSearchEngineInitWithDict:
                 "index_path": os.path.join(tmpdir, "index.usearch"),
                 "db_path": os.path.join(tmpdir, "messages.db"),
                 "embedding_dims": 128,
+                "embedder_provider": "openai",
+                "embedding_model": "test/mock-128",
             }
             embedder = MockEmbedder(dims=128)
             engine = USearchEngine(config=config_dict, embedder=embedder)
@@ -761,6 +786,7 @@ class TestUSearchEngineIndexInit:
         from reflectlog.core.exceptions import InitializationError
 
         config, embedder, _ = temp_engine
+        ensure_embedding_identity(config)
         os.makedirs(os.path.dirname(config.db_path), exist_ok=True)
         os.makedirs(os.path.dirname(config.index_path), exist_ok=True)
         with open(config.index_path, "wb") as handle:
@@ -788,6 +814,7 @@ class TestUSearchEngineIndexInit:
         from reflectlog.core.exceptions import InitializationError
 
         config, embedder, _ = temp_engine
+        ensure_embedding_identity(config)
         os.makedirs(os.path.dirname(config.index_path), exist_ok=True)
         os.makedirs(os.path.dirname(config.db_path), exist_ok=True)
         with open(config.index_path, "wb") as handle:
@@ -813,6 +840,7 @@ class TestUSearchEngineIndexInit:
         from reflectlog.core.exceptions import InitializationError
 
         config, embedder, _ = temp_engine
+        ensure_embedding_identity(config)
         os.makedirs(os.path.dirname(config.index_path), exist_ok=True)
         with open(config.index_path, "wb") as handle:
             handle.write(b"not-an-index")
@@ -832,6 +860,7 @@ class TestUSearchEngineIndexInit:
         from reflectlog.infrastructure.memory_store import MemoryStore
 
         config, embedder, _ = temp_engine
+        ensure_embedding_identity(config)
         store = MemoryStore(db_path=config.db_path)
         _ = store.insert(config.workspace_id, "already stored")
         store.close()
@@ -875,6 +904,7 @@ class TestUSearchEngineIndexInit:
         from reflectlog.infrastructure.memory_store import MemoryStore
 
         config, embedder, _ = temp_engine
+        ensure_embedding_identity(config)
         store = MemoryStore(db_path=config.db_path)
         _ = store.insert(config.workspace_id, "already stored")
         store.close()
@@ -1288,6 +1318,8 @@ class TestUSearchEngineDistanceScoring:
                 index_path=os.path.join(tmpdir, "index.usearch"),
                 db_path=os.path.join(tmpdir, "messages.db"),
                 embedding_dims=128,
+                embedder_provider=EmbedderProvider.OPENAI,
+                embedding_model="test/mock-128",
                 metric="l2",
             )
             embedder = MockEmbedder(dims=128)
@@ -1311,6 +1343,8 @@ class TestUSearchEngineDistanceScoring:
                 index_path=os.path.join(tmpdir, "index.usearch"),
                 db_path=os.path.join(tmpdir, "messages.db"),
                 embedding_dims=128,
+                embedder_provider=EmbedderProvider.OPENAI,
+                embedding_model="test/mock-128",
                 metric="ip",
             )
             embedder = MockEmbedder(dims=128)
@@ -1746,6 +1780,14 @@ class TestAtomicUSearchPublication:
         )
 
         config, embedder, tmpdir = temp_engine
+        config = USearchConfig(
+            workspace_id="test",
+            index_path=os.path.join(tmpdir, "test", "usearch", "vectors.usearch"),
+            db_path=os.path.join(tmpdir, "test", "usearch", "memories.db"),
+            embedding_dims=config.embedding_dims,
+            embedder_provider=config.embedder_provider,
+            embedding_model=config.embedding_model,
+        )
         coordinator = PortalockerStorageCoordinator(tmpdir, timeout=1.0)
         engine = USearchEngine(
             config=config, embedder=embedder, coordinator=coordinator
@@ -1762,6 +1804,7 @@ class TestAtomicUSearchPublication:
         self, temp_engine: tuple[USearchConfig, MockEmbedder, str]
     ) -> None:
         config, embedder, _tmpdir = temp_engine
+        ensure_embedding_identity(config)
         orphan = f"{config.index_path}.{os.getpid()}.9999.tmp"
         foreign = f"{config.index_path}.{os.getppid()}.9999.tmp"
         with open(orphan, "wb") as handle:
@@ -1782,6 +1825,7 @@ class TestAtomicUSearchPublication:
         from reflectlog.infrastructure.usearch_engine import _pid_is_alive
 
         config, embedder, _tmpdir = temp_engine
+        ensure_embedding_identity(config)
         ctx = multiprocessing.get_context("spawn")
         child = ctx.Process(target=_spawn_exit_immediately)
         child.start()
@@ -1847,6 +1891,7 @@ class TestAtomicUSearchPublication:
         from reflectlog.core.exceptions import InitializationError
 
         config, embedder, _tmpdir = temp_engine
+        ensure_embedding_identity(config)
         empty = Index(ndim=config.embedding_dims, metric=config.metric, dtype="f32")
         empty.save(config.index_path)
         with patch(
