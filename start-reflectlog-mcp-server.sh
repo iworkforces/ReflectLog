@@ -103,31 +103,13 @@ ${BLUE}ReflectLog Server${NC}
 Usage: $(basename "$0") [OPTIONS]
 
 Options:
-  --workspace_id <value>    Set the actual unique workspace ID (required)
   --help, -h             Show this help message
-
-Examples:
-  $(basename "$0") --workspace_id my-project-123
-  WORKSPACE_ID=my-project-123 $(basename "$0")
-
-Note: WORKSPACE_ID can be set via --workspace_id argument or
-      WORKSPACE_ID environment variable (argument takes precedence)
 EOF
 }
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --workspace_id)
-            if [[ -z "$2" ]]; then
-                echo -e "${RED}❌ --workspace_id requires a value${NC}"
-                echo ""
-                show_usage
-                exit 1
-            fi
-            export WORKSPACE_ID="$2"
-            shift 2
-            ;;
         --help|-h)
             show_usage
             exit 0
@@ -197,18 +179,6 @@ else
     echo -e "${YELLOW}⚠️  .env file not found, using environment variables only${NC}"
     echo ""
 fi
-
-# Check if WORKSPACE_ID is set (either from argument or environment variable)
-echo -e "${BLUE}Checking WORKSPACE_ID...${NC}"
-if [ -z "$WORKSPACE_ID" ]; then
-    echo -e "${RED}❌ WORKSPACE_ID is not set${NC}"
-    echo ""
-    show_usage
-    exit 1
-else
-    echo -e "${GREEN}✅ WORKSPACE_ID is set: $WORKSPACE_ID${NC}"
-fi
-echo ""
 
 # Display startup information
 echo -e "${BLUE}Starting ReflectLog Server...${NC}"
