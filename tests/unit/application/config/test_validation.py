@@ -8,6 +8,7 @@ from reflectlog.application.config.settings import Config
 from reflectlog.application.config.validation import (
     ConfigurationValidator,
     ValidationError,
+    canonical_workspace_id,
     validate_config,
 )
 from reflectlog.application.utils.security import SecretString
@@ -18,6 +19,7 @@ from reflectlog.core.enums import (
     RerankerEngine,
     TransportMode,
 )
+from reflectlog.core.exceptions import ConfigurationError
 
 # ---------------------------------------------------------------------------
 # ValidationError dataclass
@@ -112,6 +114,16 @@ class TestValidatorLifecycle:
 # ---------------------------------------------------------------------------
 # validate_workspace_id
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestCanonicalWorkspaceId:
+    def test_normalized_length_is_validated(self):
+        assert canonical_workspace_id(f"  {'A' * 64} \t") == "a" * 64
+
+    def test_normalized_overlong_id_is_rejected(self):
+        with pytest.raises(ConfigurationError, match="Invalid WORKSPACE_ID"):
+            canonical_workspace_id(f"  {'A' * 65} \t")
 
 
 @pytest.mark.unit

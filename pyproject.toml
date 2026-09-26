@@ -56,6 +56,8 @@ dependencies = [
     "accelerate>=1.15.0",
     "claude-agent-sdk>=0.2.160",
     "pydantic-core==2.49.0",
+    "torchvision>=0.29.0",
+    "flash-linear-attention>=0.5.2",
 ]
 
 [project.urls]

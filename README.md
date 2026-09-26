@@ -51,6 +51,83 @@ uv run reflectlog
 MCP_AUTH_TOKEN=change-me uv run reflectlog --transport http --port 9103
 ```
 
+### Connect HTTP MCP clients
+
+Choose a secret token and use the same value for the server's `MCP_AUTH_TOKEN`
+and each client's `REFLECTLOG_MCP_TOKEN`. For example, replace `change-me` in
+the command above and export the matching value in the environment that starts
+each client:
+
+```bash
+export REFLECTLOG_MCP_TOKEN='change-me'
+```
+
+The local endpoint is `http://127.0.0.1:9103/mcp`. Each client sends
+`Authorization: Bearer <token>`. A server `.env` file does not set environment
+variables in other client processes. Keep the real token out of tracked config
+files and shell history. For access across hosts, use HTTPS; binding to all
+interfaces requires `ALLOW_PUBLIC_BIND=true`, and plaintext HTTP must not be
+exposed over a network.
+
+Pick the configuration for your client:
+
+- **Claude Code:** Add this to your project's `.mcp.json` (which may be shared).
+  [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+
+  ```json
+  {
+    "mcpServers": {
+      "reflectlog": {
+        "type": "http",
+        "url": "http://127.0.0.1:9103/mcp",
+        "headers": { "Authorization": "Bearer ${REFLECTLOG_MCP_TOKEN}" }
+      }
+    }
+  }
+  ```
+
+  Check with `claude mcp get reflectlog` or `/mcp` inside Claude Code.
+
+- **Codex:** Add this to `~/.codex/config.toml`.
+  [Codex MCP documentation](https://developers.openai.com/codex/extend/mcp#streamable-http-servers).
+
+  ```toml
+  [mcp_servers.reflectlog]
+  url = "http://127.0.0.1:9103/mcp"
+  bearer_token_env_var = "REFLECTLOG_MCP_TOKEN"
+  ```
+
+  Check with `codex mcp list` or `/mcp` inside Codex.
+
+- **Grok Build:** Add this to `~/.grok/config.toml`. Grok expands `${VAR}` in
+  header values. [Grok Build MCP documentation](https://docs.x.ai/build/features/mcp-servers).
+
+  ```toml
+  [mcp_servers.reflectlog]
+  url = "http://127.0.0.1:9103/mcp"
+  headers = { Authorization = "Bearer ${REFLECTLOG_MCP_TOKEN}" }
+  ```
+
+  Check with `grok mcp doctor reflectlog` or `/mcps` inside Grok Build.
+
+- **OpenCode:** Add this entry under `mcp` in `opencode.json`.
+  [OpenCode MCP documentation](https://opencode.ai/docs/mcp-servers/).
+
+  ```json
+  {
+    "mcp": {
+      "reflectlog": {
+        "type": "remote",
+        "url": "http://127.0.0.1:9103/mcp",
+        "oauth": false,
+        "headers": { "Authorization": "Bearer {env:REFLECTLOG_MCP_TOKEN}" }
+      }
+    }
+  }
+  ```
+
+  Check with `opencode mcp list`.
+
 ## Usage
 
 ### MCP Tools

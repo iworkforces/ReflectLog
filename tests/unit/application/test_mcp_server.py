@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import anyio
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 import pytest
 
 from reflectlog.application.config.settings import Config
@@ -104,6 +105,55 @@ class TestFastMCPServerInitialization:
 
 @pytest.mark.unit
 class TestWorkspaceSelection:
+    async def test_health_check_normalizes_workspace_whitespace(self, set_env_vars):
+        config = replace(Config.from_environment(), workspace_id="")
+
+        def create_manager(concrete: Config, _logger: object) -> MagicMock:
+            manager = MagicMock(spec=MemoryManager)
+            manager.config = concrete
+            manager.startup_metrics = None
+            manager.search_engine_status.return_value = {
+                "semantic_engine": "initialized",
+                "tantivy_engine": "initialized",
+            }
+            manager.pending_intent_count.return_value = 0
+            return manager
+
+        with patch(
+            "reflectlog.application.mcp_server.MemoryManager",
+            side_effect=create_manager,
+        ) as factory:
+            server = FastMCPServer(config)
+            client_factory = cast("Callable[[object], Client]", Client)
+            async with client_factory(server.mcp) as client:
+                for workspace_id in ("ReflectLog", "  ReflectLog \t"):
+                    result = await client.call_tool(
+                        "health_check", {"workspace_id": workspace_id}
+                    )
+                    assert (
+                        json.loads(result.content[0].text)["workspace_id"]
+                        == "reflectlog"
+                    )
+                assert factory.call_count == 1
+
+    @pytest.mark.parametrize(
+        "workspace_id",
+        ["../other", "a/b", "/Volumes/Data/oss/oc/ReflectLog", " . ", "  "],
+    )
+    async def test_health_check_rejects_invalid_workspace_id(
+        self, set_env_vars, workspace_id: str
+    ):
+        config = replace(Config.from_environment(), workspace_id="")
+        with patch("reflectlog.application.mcp_server.MemoryManager") as factory:
+            server = FastMCPServer(config)
+            client_factory = cast("Callable[[object], Client]", Client)
+            async with client_factory(server.mcp) as client:
+                with pytest.raises(ToolError, match="Invalid WORKSPACE_ID"):
+                    await client.call_tool(
+                        "health_check", {"workspace_id": workspace_id}
+                    )
+            factory.assert_not_called()
+
     async def test_client_requires_workspace_and_routes_health(self, set_env_vars):
         config = replace(Config.from_environment(), workspace_id="")
         managers: list[MagicMock] = []

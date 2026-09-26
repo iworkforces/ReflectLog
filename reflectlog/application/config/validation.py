@@ -659,12 +659,13 @@ class ConfigurationValidator:
 
 
 def canonical_workspace_id(workspace_id: str) -> str:
+    normalized = workspace_id.strip().lower()
     validator = ConfigurationValidator()
-    if not validator.validate_workspace_id(workspace_id):
+    if not validator.validate_workspace_id(normalized):
         raise WorkspaceConfigurationError(
             f"Invalid WORKSPACE_ID: {validator.errors[0].message.lower()}"
         )
-    return workspace_id.lower()
+    return normalized
 
 
 def _validate_server_config(
