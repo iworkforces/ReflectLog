@@ -109,14 +109,14 @@ def test_wemm_closed_configuration_rejects_unknown_values(
         Config.from_environment()
 
 
-def test_existing_embedding_defaults_remain_unchanged() -> None:
+def test_direct_embedding_defaults_use_wemm() -> None:
     direct = Config(
         workspace_id="defaults",
         openrouter_api_key=SecretString("key"),
     )
 
-    assert direct.embedder_provider is EmbedderProvider.OPENAI
-    assert direct.embedding_model == "openai/text-embedding-3-large"
-    assert direct.embedding_dims == 3072
-    assert direct.qwen_embedding_dims == 4096
+    assert direct.embedder_provider is EmbedderProvider.WEMM
+    assert direct.embedding_model == "tencent/WeMM-Embedding-2B"
+    assert direct.embedding_dims == 2048
+    assert direct.qwen_embedding_dims == 2048
     assert direct.wemm_device is WeMMDevice.AUTO
