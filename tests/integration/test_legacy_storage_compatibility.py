@@ -22,6 +22,7 @@ from reflectlog.application.tools.remove import RemoveTool
 from reflectlog.application.tools.search import SearchTool
 from reflectlog.application.utils.security import SecretString
 from reflectlog.core.enums import (
+    EmbedderProvider,
     EngineReadiness,
     HealthStatus,
     ToolName,
@@ -30,6 +31,7 @@ from reflectlog.core.enums import (
 )
 from reflectlog.core.exceptions import InitializationError, StorageError
 from reflectlog.core.types import ReplacementTransitionRequest
+from reflectlog.infrastructure.embedding_identity import ensure_embedding_identity
 from reflectlog.infrastructure.memory_store import MemoryStore
 from reflectlog.infrastructure.tantivy_engine import TantivyEngine
 from reflectlog.infrastructure.usearch_engine import USearchConfig, USearchEngine
@@ -53,6 +55,8 @@ def _direct_config(tmp_path: str) -> tuple[USearchConfig, str]:
         index_path=os.path.join(usearch_dir, "vectors.usearch"),
         db_path=os.path.join(usearch_dir, "memories.db"),
         embedding_dims=128,
+        embedder_provider=EmbedderProvider.OPENAI,
+        embedding_model="test/mock-128",
     )
     return config, usearch_dir
 
@@ -225,6 +229,7 @@ def test_corrupt_or_missing_hnsw_with_sqlite_rows_fails_closed() -> None:
     embedder = MockEmbedder(dims=128)
     with tempfile.TemporaryDirectory() as tmpdir:
         config, _usearch_dir = _direct_config(tmpdir)
+        ensure_embedding_identity(config)
         store = MemoryStore(db_path=config.db_path)
         kept_id = store.insert(WORKSPACE, LIVE_A)
         store.close()

@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.types import Embeddings
 from reflectlog.infrastructure.usearch_engine import USearchConfig, USearchEngine
 
@@ -54,6 +55,8 @@ def _writer_die_at(
         index_path=index_path,
         db_path=db_path,
         embedding_dims=32,
+        embedder_provider=EmbedderProvider.OPENAI,
+        embedding_model="test/hash-32",
     )
     first = USearchEngine(config=config, embedder=_HashEmbedder())
     first.add(workspace_id, "kept", infer=False)
@@ -96,6 +99,8 @@ def test_kill_at_publish_failpoint_keeps_valid_index(tmp_path: Path, step: str) 
                 index_path=index_path,
                 db_path=db_path,
                 embedding_dims=32,
+                embedder_provider=EmbedderProvider.OPENAI,
+                embedding_model="test/hash-32",
             ),
             embedder=_HashEmbedder(),
         )
