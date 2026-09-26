@@ -85,6 +85,18 @@ def _focused_commands(inject_failure: str | None) -> list[tuple[str, list[str]]]
             ],
         ),
         (
+            "embedding-first-open",
+            [
+                *UV_RUN,
+                "python",
+                "-m",
+                "pytest",
+                "-q",
+                "tests/unit/infrastructure/test_embedding_identity.py::test_first_open_publishes_identity_in_workspace_root",
+                "tests/unit/infrastructure/test_embedding_identity.py::test_matching_open_waits_for_first_publication_to_sync",
+            ],
+        ),
+        (
             "cli-version",
             [*UV_RUN, "reflectlog", "--version"],
         ),
