@@ -217,7 +217,7 @@ reportUnusedClass = "error"
 
 [tool.ruff]
 # Target Python 3.14.7
-target-version = "py3147"
+target-version = "py314"
 
 [tool.ruff.lint]
 # Enable pyupgrade rules for Python 3.14.7+ syntax
