@@ -23,7 +23,7 @@ jobs:
       - name: Focused gates
         env:
           NUMBA_CACHE_DIR: ${{ runner.temp }}/numba-cache
-        run: uv run --frozen --no-sync scripts/run_platform_gates.py --focused --output platform-gates.json
+        run: uv run --frozen --no-sync python scripts/run_platform_gates.py --focused --output platform-gates.json
       - name: Coordinator and USearch tests
         env:
           RUN_USEARCH_CONCURRENCY_TESTS: "1"
