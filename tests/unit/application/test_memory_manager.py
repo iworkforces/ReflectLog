@@ -23,6 +23,10 @@ def _stub_coordinator(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
         return PortalockerStorageCoordinator(str(tmp_path / "indexes"), timeout=1.0)
 
     monkeypatch.setattr(MemoryManager, "_create_coordinator", _factory)
+    monkeypatch.setattr(
+        "reflectlog.application.memory.manager.ensure_embedding_identity",
+        lambda _config, coordinator, *, tantivy_index_path: coordinator,
+    )
 
 
 _ = _stub_coordinator
