@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Generator
 from dataclasses import replace
+from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock, patch
 
@@ -114,15 +115,17 @@ def mock_memory_class(mock_usearch_engine: MagicMock) -> Generator[MagicMock]:
 
 
 @pytest.fixture
-def set_env_vars(monkeypatch: MonkeyPatch) -> dict[str, str]:
+def set_env_vars(monkeypatch: MonkeyPatch, tmp_path: Path) -> dict[str, str]:
     """Set required environment variables for testing.
 
     Args:
         monkeypatch: pytest monkeypatch fixture
+        tmp_path: Per-test workspace storage root
 
     Returns:
         Dictionary of set environment variables
     """
+    monkeypatch.chdir(tmp_path)
     env_vars = {
         "WORKSPACE_ID": "test_project",
         "OPENROUTER_API_KEY": "test_key",
