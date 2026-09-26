@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from pathlib import Path
 import threading
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, PropertyMock, patch
 
 import pytest
 
@@ -22,9 +23,11 @@ from reflectlog.application.memory.search_strategies import (
     calculate_adaptive_overfetch,
 )
 from reflectlog.application.utils.logging import StructuredLogger
+from reflectlog.core.config_adapters import ConfigAdapter
 from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import InitializationError, SearchError
 from reflectlog.core.logging import IStructuredLogger
+from reflectlog.infrastructure.storage_coordinator import PortalockerStorageCoordinator
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -56,6 +59,25 @@ def _make_config(
 
 def _make_logger() -> IStructuredLogger:
     return cast(IStructuredLogger, Mock(spec=StructuredLogger))
+
+
+def _make_manager(config: MagicMock, tmp_path: Path) -> MemoryManager:
+    config.embedding_model = "openai/text-embedding-3-large"
+    config.embedding_dims = 3072
+    with (
+        patch.object(
+            ConfigAdapter, "usearch_index_path", new_callable=PropertyMock
+        ) as index_path,
+        patch("reflectlog.application.memory.manager.USearchEngine"),
+        patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"),
+        patch("reflectlog.application.memory.manager.TantivyEngine"),
+    ):
+        index_path.return_value = str(tmp_path / config.workspace_id / "usearch")
+        return MemoryManager(
+            config,
+            _make_logger(),
+            coordinator=PortalockerStorageCoordinator(str(tmp_path)),
+        )
 
 
 def _make_context(
@@ -252,7 +274,7 @@ class TestCanonicalPipelineIdentity:
             assert name not in utility_mod.__all__
             assert not hasattr(utility_mod, name)
 
-    def test_manager_wires_strategies_pipeline(self) -> None:
+    def test_manager_wires_strategies_pipeline(self, tmp_path: Path) -> None:
         """MemoryManager._init_pipelines() uses search_strategies.SearchPipeline."""
         config = MagicMock()
         config.workspace_id = "test_project"
@@ -267,12 +289,7 @@ class TestCanonicalPipelineIdentity:
         config.fusion_rrf_k = 60
         config.openrouter_api_key.get_secret_value.return_value = "test-key"
 
-        with (
-            patch("reflectlog.application.memory.manager.USearchEngine"),
-            patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"),
-            patch("reflectlog.application.memory.manager.TantivyEngine"),
-        ):
-            manager = MemoryManager(config, _make_logger())
+        manager = _make_manager(config, tmp_path)
 
         assert isinstance(manager._search_pipeline, SearchPipeline)
         assert (
@@ -280,7 +297,9 @@ class TestCanonicalPipelineIdentity:
             == "reflectlog.application.memory.search_strategies"
         )
 
-    def test_search_engine_status_reports_pending_and_ready(self) -> None:
+    def test_search_engine_status_reports_pending_and_ready(
+        self, tmp_path: Path
+    ) -> None:
         pending = MagicMock()
         pending.is_ready.return_value = False
         ready = MagicMock()
@@ -298,12 +317,7 @@ class TestCanonicalPipelineIdentity:
         config.fusion_rrf_k = 60
         config.openrouter_api_key.get_secret_value.return_value = "test-key"
 
-        with (
-            patch("reflectlog.application.memory.manager.USearchEngine"),
-            patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"),
-            patch("reflectlog.application.memory.manager.TantivyEngine"),
-        ):
-            manager = MemoryManager(config, _make_logger())
+        manager = _make_manager(config, tmp_path)
 
         class PendingEngine:
             def is_ready(self) -> bool:
@@ -326,7 +340,9 @@ class TestCanonicalPipelineIdentity:
             "tantivy_engine": "initialized",
         }
 
-    def test_search_engine_status_treats_is_ready_errors_as_pending(self) -> None:
+    def test_search_engine_status_treats_is_ready_errors_as_pending(
+        self, tmp_path: Path
+    ) -> None:
         broken = MagicMock()
         broken.is_ready.side_effect = RuntimeError("peek failed")
         missing = MagicMock()
@@ -344,12 +360,7 @@ class TestCanonicalPipelineIdentity:
         config.fusion_rrf_k = 60
         config.openrouter_api_key.get_secret_value.return_value = "test-key"
 
-        with (
-            patch("reflectlog.application.memory.manager.USearchEngine"),
-            patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"),
-            patch("reflectlog.application.memory.manager.TantivyEngine"),
-        ):
-            manager = MemoryManager(config, _make_logger())
+        manager = _make_manager(config, tmp_path)
 
         manager._semantic_engine = broken
         manager._tantivy_engine = missing
@@ -1249,7 +1260,9 @@ class TestSearchResponsiveness:
         assert tantivy_finished.wait(timeout=_BACKEND_WAIT_TIMEOUT)
 
     @pytest.mark.asyncio
-    async def test_manager_search_index_lookup_stays_off_loop(self) -> None:
+    async def test_manager_search_index_lookup_stays_off_loop(
+        self, tmp_path: Path
+    ) -> None:
         entered = threading.Event()
         loop_progressed = threading.Event()
         loop_thread = threading.get_ident()
@@ -1313,12 +1326,7 @@ class TestSearchResponsiveness:
         config.overfetch_multiplier = 3
         config.openrouter_api_key.get_secret_value.return_value = "test-key"
 
-        with (
-            patch("reflectlog.application.memory.manager.USearchEngine"),
-            patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"),
-            patch("reflectlog.application.memory.manager.TantivyEngine"),
-        ):
-            manager = MemoryManager(config, _make_logger())
+        manager = _make_manager(config, tmp_path)
 
         semantic = BlockingIndexEngine()
         tantivy = MagicMock()
@@ -1367,7 +1375,7 @@ class TestSearchResponsiveness:
         tantivy.search.assert_called_once_with("q", "test_project", expected_overfetch)
 
     @pytest.mark.asyncio
-    async def test_manager_search_recovery_offload(self) -> None:
+    async def test_manager_search_recovery_offload(self, tmp_path: Path) -> None:
         entered = threading.Event()
         release = threading.Event()
         loop_progressed = threading.Event()
@@ -1395,12 +1403,7 @@ class TestSearchResponsiveness:
         config.overfetch_multiplier = 3
         config.openrouter_api_key.get_secret_value.return_value = "test-key"
 
-        with (
-            patch("reflectlog.application.memory.manager.USearchEngine"),
-            patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"),
-            patch("reflectlog.application.memory.manager.TantivyEngine"),
-        ):
-            manager = MemoryManager(config, _make_logger())
+        manager = _make_manager(config, tmp_path)
 
         semantic = MagicMock()
         semantic.search.return_value = [("mem", 0.9, _TS)]
@@ -1456,7 +1459,9 @@ class TestSearchResponsiveness:
         semantic.search.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_manager_search_recovery_initialization_error_aborts(self) -> None:
+    async def test_manager_search_recovery_initialization_error_aborts(
+        self, tmp_path: Path
+    ) -> None:
         config = MagicMock()
         config.workspace_id = "test_project"
         config.embedder_provider = EmbedderProvider.OPENAI
@@ -1477,12 +1482,7 @@ class TestSearchResponsiveness:
         config.overfetch_multiplier = 3
         config.openrouter_api_key.get_secret_value.return_value = "test-key"
 
-        with (
-            patch("reflectlog.application.memory.manager.USearchEngine"),
-            patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings"),
-            patch("reflectlog.application.memory.manager.TantivyEngine"),
-        ):
-            manager = MemoryManager(config, _make_logger())
+        manager = _make_manager(config, tmp_path)
 
         semantic = MagicMock()
         manager._semantic_engine = semantic
