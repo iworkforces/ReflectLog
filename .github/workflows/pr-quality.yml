@@ -3,6 +3,8 @@ name: pr-quality
 on:
   pull_request:
     branches: [develop, main]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
