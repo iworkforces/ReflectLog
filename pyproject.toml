@@ -1,13 +1,13 @@
 [project]
 name = "reflectlog"
-version = "0.4.1"
+version = "0.4.2"
 description = "ReflectLog Is A MCP Server For AI Agent Workspace-based Memories"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
     { name = "iworkforces Engineers" }
 ]
-requires-python = ">=3.14.4"
+requires-python = ">=3.14.7"
 keywords = ["mcp", "semantic-memory", "hybrid-search", "vector-database", "ai-agent", "reflectlog"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -140,7 +140,7 @@ exclude_lines = [
 
 [tool.ty.environment]
 # Target Python version
-python-version = "3.14"
+python-version = "3.14.7"
 # Custom stub paths (equivalent to mypy_path)
 extra-paths = ["stubs"]
 
@@ -216,11 +216,11 @@ reportUnusedFunction = "error"
 reportUnusedClass = "error"
 
 [tool.ruff]
-# Target Python 3.14
-target-version = "py314"
+# Target Python 3.14.7
+target-version = "py3147"
 
 [tool.ruff.lint]
-# Enable pyupgrade rules for Python 3.14+ syntax
+# Enable pyupgrade rules for Python 3.14.7+ syntax
 select = [
     "E",     # pycodestyle errors
     "W",     # pycodestyle warnings
