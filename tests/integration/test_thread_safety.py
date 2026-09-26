@@ -41,6 +41,12 @@ class MockEmbedder(Embeddings):
         """Embed a list of documents."""
         return [self.embed_query(text) for text in texts]
 
+    async def aembed_query(self, text: str) -> list[float]:
+        return self.embed_query(text)
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.embed_documents(texts)
+
 
 def create_test_config(workspace_id: str = "test-thread-safety") -> Config:
     """Create a Config instance for testing."""

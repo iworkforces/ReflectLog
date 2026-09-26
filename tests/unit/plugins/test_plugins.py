@@ -871,7 +871,7 @@ class TestCompositeDiscovery:
                 DiscoveredPlugin(name="b", module_path="m", class_name="B"),
             ]
         )
-        composite = CompositeDiscovery(strategies=[s1, s2])  # type: ignore
+        composite = CompositeDiscovery(strategies=[s1, s2])
         result = await composite.discover()
 
         names = [p.name for p in result]
@@ -894,7 +894,7 @@ class TestCompositeDiscovery:
                 ),
             ]
         )
-        composite = CompositeDiscovery(strategies=[s1, s2])  # type: ignore
+        composite = CompositeDiscovery(strategies=[s1, s2])
         result = await composite.discover()
 
         assert len(result) == 1
