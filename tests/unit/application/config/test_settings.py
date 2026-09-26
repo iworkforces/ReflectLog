@@ -20,7 +20,6 @@ from reflectlog.core.exceptions import ConfigurationError
 # ---------------------------------------------------------------------------
 
 REQUIRED_ENV = {
-    "WORKSPACE_ID": "test-project",
     "OPENROUTER_API_KEY": "sk-test-key-12345",
 }
 
@@ -198,39 +197,33 @@ class TestFromEnvironmentRequired:
     def test_missing_workspace_id(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("WORKSPACE_ID", raising=False)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
-        with pytest.raises(ConfigurationError, match="WORKSPACE_ID"):
-            Config.from_environment()
+        assert Config.from_environment().workspace_id == ""
 
     def test_project_id_env_is_ignored(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("WORKSPACE_ID", raising=False)
         monkeypatch.setenv("PROJECT_ID", "legacy-ws")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
-        with pytest.raises(ConfigurationError, match="WORKSPACE_ID"):
-            Config.from_environment()
+        assert Config.from_environment().workspace_id == ""
 
     def test_empty_workspace_id(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
-        with pytest.raises(ConfigurationError, match="WORKSPACE_ID"):
-            Config.from_environment()
+        assert Config.from_environment().workspace_id == ""
 
     def test_invalid_workspace_id_characters(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "bad/project!")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
-        with pytest.raises(ConfigurationError, match="Invalid WORKSPACE_ID"):
-            Config.from_environment()
+        assert Config.from_environment().workspace_id == ""
 
     def test_workspace_id_too_long(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "a" * 65)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
-        with pytest.raises(ConfigurationError, match="Invalid WORKSPACE_ID"):
-            Config.from_environment()
+        assert Config.from_environment().workspace_id == ""
 
     def test_workspace_id_path_traversal(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "a..b")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
-        with pytest.raises(ConfigurationError, match="path traversal"):
-            Config.from_environment()
+        assert Config.from_environment().workspace_id == ""
 
     def test_missing_openrouter_api_key(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "valid-project")
@@ -258,7 +251,7 @@ class TestFromEnvironmentDefaults:
         for k, v in REQUIRED_ENV.items():
             monkeypatch.setenv(k, v)
         cfg = Config.from_environment()
-        assert cfg.workspace_id == "test-project"
+        assert cfg.workspace_id == ""
         assert isinstance(cfg.openrouter_api_key, SecretString)
         assert cfg.openrouter_api_key.get_secret_value() == "sk-test-key-12345"
         assert cfg.transport == "stdio"
@@ -271,13 +264,13 @@ class TestFromEnvironmentDefaults:
         monkeypatch.setenv("WORKSPACE_ID", "my_project.v2")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
         cfg = Config.from_environment()
-        assert cfg.workspace_id == "my_project.v2"
+        assert cfg.workspace_id == ""
 
     def test_workspace_id_keeps_env_case(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "MyProject")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
         cfg = Config.from_environment()
-        assert cfg.workspace_id == "MyProject"
+        assert cfg.workspace_id == ""
 
 
 # ---------------------------------------------------------------------------
@@ -762,12 +755,19 @@ class TestSingleton:
         cfg2 = get_config()
         assert cfg1 is cfg2
 
-    def test_get_config_raises_without_workspace_id(
+    def test_get_config_allows_missing_workspace_id(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.delenv("WORKSPACE_ID", raising=False)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
-        with pytest.raises(ConfigurationError):
+        assert get_config().workspace_id == ""
+
+    def test_get_config_requires_api_key_without_workspace_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("WORKSPACE_ID", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        with pytest.raises(ConfigurationError, match="OPENROUTER_API_KEY"):
             get_config()
 
     def test_get_config_thread_safety(self, monkeypatch: pytest.MonkeyPatch):
@@ -807,7 +807,7 @@ class TestSingleton:
         for k, v in REQUIRED_ENV.items():
             monkeypatch.setenv(k, v)
         proxy = _LazyConfig()
-        assert proxy.workspace_id == "test-project"
+        assert proxy.workspace_id == ""
 
 
 # ---------------------------------------------------------------------------
@@ -975,7 +975,7 @@ class TestSetupConfigReload:
 
             cfg = setup_config_reload()
             assert isinstance(cfg, Config)
-            assert cfg.workspace_id == "test-project"
+            assert cfg.workspace_id == ""
 
 
 # ---------------------------------------------------------------------------

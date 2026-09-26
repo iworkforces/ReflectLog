@@ -247,10 +247,10 @@ class Config:
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     # Embedding settings
-    embedder_provider: EmbedderProvider = EmbedderProvider.OPENAI
-    embedding_model: str = "openai/text-embedding-3-large"
-    embedding_dims: int = 3072
-    qwen_embedding_dims: int = 4096
+    embedder_provider: EmbedderProvider = EmbedderProvider.WEMM
+    embedding_model: str = "tencent/WeMM-Embedding-2B"
+    embedding_dims: int = 2048
+    qwen_embedding_dims: int = 2048
     wemm_embedding_dims: int = 2048
     wemm_device: WeMMDevice = WeMMDevice.AUTO
 
@@ -743,26 +743,6 @@ class Config:
         Raises:
             ConfigurationError: If required environment variables are missing or invalid.
         """
-        # Validate required environment variables
-        workspace_id = os.environ.get("WORKSPACE_ID")
-        if not workspace_id:
-            raise ConfigurationError(
-                "The WORKSPACE_ID environment variable has not been configured."
-            )
-
-        # Enforce a safe WORKSPACE_ID format to avoid path traversal and
-        # filesystem issues. Keep the rule intentionally strict.
-        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", workspace_id):
-            raise ConfigurationError(
-                "Invalid WORKSPACE_ID: only A-Za-z0-9_.- allowed, max length 64."
-            )
-
-        # Check for path traversal patterns (not caught by regex)
-        if ".." in workspace_id or workspace_id.startswith("/"):
-            raise ConfigurationError(
-                f"Invalid WORKSPACE_ID: path traversal patterns not allowed: {workspace_id}"
-            )
-
         preset = get_active_preset()
         if preset:
             apply_preset_to_env(preset)
@@ -790,7 +770,7 @@ class Config:
         # Create Config instance with all parsed settings
         config = cls(
             # Required settings
-            workspace_id=workspace_id,
+            workspace_id="",
             openrouter_api_key=openrouter_api_key,
             # Parsed configuration sections
             **transport_config,

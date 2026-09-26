@@ -15,6 +15,7 @@ from reflectlog.core.enums import (
     RerankerEngine,
     TransportMode,
 )
+from reflectlog.core.exceptions import ConfigurationError as WorkspaceConfigurationError
 
 if TYPE_CHECKING:
     from reflectlog.application.config.settings import Config
@@ -105,7 +106,7 @@ class ConfigurationValidator:
             )
             return False
 
-        if ".." in workspace_id or workspace_id.startswith("/"):
+        if workspace_id == "." or ".." in workspace_id:
             self.add_error(
                 "WORKSPACE_ID",
                 workspace_id,
@@ -657,12 +658,22 @@ class ConfigurationValidator:
         return "\n".join(lines)
 
 
+def canonical_workspace_id(workspace_id: str) -> str:
+    validator = ConfigurationValidator()
+    if not validator.validate_workspace_id(workspace_id):
+        raise WorkspaceConfigurationError(
+            f"Invalid WORKSPACE_ID: {validator.errors[0].message.lower()}"
+        )
+    return workspace_id.lower()
+
+
 def _validate_server_config(
     validator: ConfigurationValidator,
     config: Config,
 ) -> None:
     """Validate server transport, port, and workspace ID."""
-    _ = validator.validate_workspace_id(config.workspace_id)
+    if config.workspace_id:
+        _ = validator.validate_workspace_id(config.workspace_id)
     _ = validator.validate_transport(config.transport)
     _ = validator.validate_port(config.port)
 

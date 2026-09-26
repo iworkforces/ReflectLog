@@ -158,6 +158,10 @@ class TestValidateWorkspaceId:
         assert v.validate_workspace_id("a..b") is False
         assert "Path traversal" in v.errors[0].message
 
+    def test_current_directory_invalid(self):
+        validator = ConfigurationValidator()
+        assert validator.validate_workspace_id(".") is False
+
     def test_path_traversal_leading_slash(self):
         """Leading slash path traversal is rejected."""
         v = ConfigurationValidator()
@@ -1010,6 +1014,10 @@ class TestValidateConfig:
         cfg = self._make_config(workspace_id="bad@id!")
         errors = validate_config(cfg)
         assert any(e.field == "WORKSPACE_ID" for e in errors)
+
+    def test_unset_workspace_id_is_valid(self):
+        config = self._make_config(workspace_id="")
+        assert validate_config(config) == []
 
     def test_invalid_port(self):
         """Invalid port produces error."""
