@@ -52,6 +52,17 @@ class RerankerEngine(StrEnum):
     NONE = "none"
 
 
+class SearchScoreKind(StrEnum):
+    """Provenance of the final search scores."""
+
+    RERANKER = "reranker"
+    RRF = "rrf"
+    SEMANTIC = "semantic"
+    FULLTEXT = "fulltext"
+    CONCATENATED = "concatenated"
+    NONE = "none"
+
+
 class SearchComponent(StrEnum):
     """Search components whose swallowed failures are counted."""
 

@@ -733,7 +733,7 @@ class TestLazyRerankerProperties:
                 ranked = await manager._search_pipeline._step4_reranking(
                     context, candidates, {}, 4
                 )
-        assert ranked == [("second", 0.9), ("first", 0.1)]
+        assert ranked == ([("second", 0.9), ("first", 0.1)], True)
         assert len(seen) == 1
 
     def test_cross_encoder_reranker_returns_none_when_not_configured(

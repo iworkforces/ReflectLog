@@ -8,7 +8,7 @@ concern-focused module. It implements the 4-step search pipeline:
 4. Reranking (CrossEncoder)
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import time
 from typing import TYPE_CHECKING, Protocol, cast
@@ -29,7 +29,7 @@ from asyncer import (
     create_task_group,
 )
 
-from reflectlog.core.enums import RerankerEngine, SearchComponent
+from reflectlog.core.enums import RerankerEngine, SearchComponent, SearchScoreKind
 from reflectlog.core.exceptions import InitializationError, SearchError
 
 from ..utils.logging import format_fusion_score_status
@@ -76,6 +76,14 @@ class SearchResult:
     timestamp_map: dict[str, str]
     semantic_results: list[tuple[str, float, str]]
     tantivy_results: list[tuple[str, float]]
+    scores: list[float] = field(default_factory=list[float])
+    score_kind: SearchScoreKind = SearchScoreKind.NONE
+
+
+def _reranking_output(
+    original: list[tuple[str, float]], output: list[tuple[str, float]] | None
+) -> tuple[list[tuple[str, float]], bool]:
+    return (original, False) if output is None else (output, True)
 
 
 class RerankerProvider(Protocol):
@@ -225,6 +233,18 @@ class SearchPipeline:
         # A single unfused list keeps backend scores (cosine/BM25), which must
         # not be compared to fusion_ranking_threshold=0.8.
         backends_used = int(bool(semantic_results)) + int(bool(tantivy_results))
+        if backends_used >= 2:
+            score_kind = (
+                SearchScoreKind.RRF
+                if context.enable_rrf_fusion
+                else SearchScoreKind.CONCATENATED
+            )
+        elif semantic_results:
+            score_kind = SearchScoreKind.SEMANTIC
+        elif tantivy_results:
+            score_kind = SearchScoreKind.FULLTEXT
+        else:
+            score_kind = SearchScoreKind.NONE
         if context.enable_rrf_fusion and backends_used >= 2:
             hybrid_results = await self._step3_fusion_threshold(
                 context, hybrid_results, backends_used
@@ -252,9 +272,11 @@ class SearchPipeline:
                     [msg for msg, _ in hybrid_results],
                     context.workspace_id,
                 )
-            hybrid_results = await self._step4_reranking(
+            hybrid_results, reranked = await self._step4_reranking(
                 context, hybrid_results, timestamp_map, rerank_step_num
             )
+            if reranked:
+                score_kind = SearchScoreKind.RERANKER
 
         # Extract final memories
         memories = [msg for msg, _ in hybrid_results[: context.limit]]
@@ -275,6 +297,8 @@ class SearchPipeline:
             timestamp_map=timestamp_map,
             semantic_results=semantic_results,
             tantivy_results=tantivy_results,
+            scores=[score for _, score in hybrid_results[: context.limit]],
+            score_kind=score_kind if memories else SearchScoreKind.NONE,
         )
 
     async def _step1_parallel_search(
@@ -628,7 +652,7 @@ class SearchPipeline:
         results: list[tuple[str, float]],
         timestamp_map: dict[str, str],
         step_num: int,
-    ) -> list[tuple[str, float]]:
+    ) -> tuple[list[tuple[str, float]], bool]:
         """Step 4: Rerank results using the cross-encoder when enabled."""
         if self.config.reranker_engine == RerankerEngine.CROSS_ENCODER:
             return await self._rerank_cross_encoder(
@@ -641,13 +665,14 @@ class SearchPipeline:
             try:
                 reranker = self._memory_manager.openrouter_reranker
                 if reranker is None:
-                    return results
-                return await reranker.rerank_async(
+                    return results, False
+                reranked = await reranker.rerank_async(
                     context.query,
                     results,
                     timestamp_map,
                     top_k=context.limit,
                 )
+                return _reranking_output(results, reranked)
             except Exception as exc:
                 self._record_failure(SearchComponent.OPENROUTER_RERANKER, exc)
                 self.logger.warning(
@@ -657,7 +682,7 @@ class SearchPipeline:
                         "candidate_count": len(results),
                     },
                 )
-        return results
+        return results, False
 
     async def _rerank_cross_encoder(
         self,
@@ -666,13 +691,13 @@ class SearchPipeline:
         step_num: int,
         cross_encoder_reranker: CrossEncoderReranker | None = None,
         timestamp_map: dict[str, str] | None = None,
-    ) -> list[tuple[str, float]]:
+    ) -> tuple[list[tuple[str, float]], bool]:
         """Rerank using CrossEncoder."""
         # Use provided reranker or fetch via _get_reranker
         if cross_encoder_reranker is None:
             cross_encoder_reranker = self._get_cross_encoder_reranker()
             if cross_encoder_reranker is None:
-                return results
+                return results, False
 
         self.logger.info(
             f"STEP {step_num}: CrossEncoder Reranking ({len(results)} candidates)...",
@@ -705,7 +730,10 @@ class SearchPipeline:
                 "CrossEncoder failed; returning fused results",
                 extra={"error": str(exc), "candidate_count": len(results)},
             )
-            return results
+            return results, False
+        reranked_results, produced = _reranking_output(results, reranked_results)
+        if not produced:
+            return results, False
         results = reranked_results
 
         rerank_duration = (time.time() - rerank_start) * 1000
@@ -723,7 +751,7 @@ class SearchPipeline:
             extra={"rerank_duration_ms": rerank_duration},
         )
 
-        return results
+        return results, True
 
     def _log_skip_reranking(self, result_count: int, step_num: int) -> None:
         """Log when reranking is skipped due to 0-1 results."""
