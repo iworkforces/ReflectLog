@@ -132,13 +132,18 @@ Pick the configuration for your client:
 
 ### MCP Tools
 
-ReflectLog provides five MCP tools:
+ReflectLog provides nine MCP tools:
 
-1. `add(memories: list[str], workspace_id: str, dry_run: bool = False) -> dict`: Store memories; returns stored/skipped/replaced counts
+1. `add(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict`: Store memories; returns stored/skipped/replaced counts. Set `allow_replace=False` to skip smart replacement entirely (exact deduplication still applies).
 2. `get_all(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict`: Page stored memories (default cap 1000); includes `total` and `truncated`
 3. `search(query: str, workspace_id: str) -> list[str]`: Hybrid semantic + full-text search
 4. `remove(memories: list[str], workspace_id: str)`: Remove memories by exact match
 5. `health_check(workspace_id: str) -> dict`: Workspace-specific health, including `pending_intent_count` and `search_failures`. The latter reports `count`, `last_failure_at` (UTC ISO timestamp or null), and `exception_type` (class name only or null) for `semantic`, `tantivy`, `cross_encoder`, and `openrouter_reranker`; it never includes exception messages, queries, or memory text. A vector-index refusal that `search` raises is counted under `semantic` as well. Historical search failures do not change the existing overall status logic.
+
+6. `search_records(query: str, workspace_id: str, limit: int | None = None) -> dict`: Returns `results` containing `id`, `memory`, final `score`, and nullable `created_at`, plus `score_kind` and effective `limit`. Queries must contain non-whitespace content and be 1..1000 characters; explicit limits are 1..50 and omitted limits use `search_limit`. Score kinds are `reranker`, `rrf`, `semantic`, `fulltext`, `concatenated`, and `none`; scores are not interchangeable across kinds.
+7. `get_records(ids: list[int], workspace_id: str) -> dict`: Returns `records` (`id`, `memory`, nullable `created_at`) and `missing`. At most 100 positive ids; duplicates collapse in first-seen order. Foreign-workspace ids are missing; empty input is a no-op.
+8. `list_records(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict`: Returns `records`, `total`, `offset`, `limit`, and `truncated`, with identical paging/clamping/cap to `get_all`, ordered by id.
+9. `remove_records(ids: list[int], workspace_id: str) -> dict`: Returns actually `removed` ids and `missing` ids (including concurrent deletion shortfalls). Same id bounds/order/deduplication as `get_records`.
 
 Every tool call, including `health_check`, requires an explicit `workspace_id`.
 `WORKSPACE_ID` in the environment or `.env` is not used as a default. Active

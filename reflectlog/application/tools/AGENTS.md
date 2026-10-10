@@ -32,13 +32,18 @@ Registry lives in `application/mcp_server.py` as `AVAILABLE_TOOL_CLASSES`.
 | Get all | `get_all.py` | `get_page_with_total`; cap `Config.get_all_limit` (default 1000) |
 | Health | `health_check.py` | Read-only; leftovers are not reconciled here |
 | Errors | `base.py` | `InconsistentStateError` is re-raised, not wrapped |
+| Search records | `search_records.py` | Stable ids and final pipeline scores; optional limit 1..50 |
+| Get records | `get_records.py` | Up to 100 positive ids; request order, duplicates collapsed |
+| List records | `list_records.py` | Atomic page/total read; same cap as get_all |
+| Remove records | `remove_records.py` | Actual removed/missing ids; release shared before delete |
 
 ## CONVENTIONS
 
 - Every MCP handler takes `workspace_id`. `FastMCPServer` pins a manager with `WorkspaceRegistry.acquire`, then builds the tool.
 - Tools never touch USearch/Tantivy/SQLite. Go through `MemoryManager` only.
 - Handlers are typed. `get_handler()` returns `Callable[..., Awaitable[...]]`:
-  - `add` → `Awaitable[dict[str, object]]` (`memories: list[str]`, `dry_run: bool`)
+  - `add` → `Awaitable[dict[str, object]]` (`memories: list[str]`, `dry_run: bool`, `allow_replace: bool = True`)
+  - `search_records`, `get_records`, `list_records`, `remove_records` → `Awaitable[dict[str, object]]`
   - `search` → `Awaitable[list[str]]`
   - `remove` → `Awaitable[None]`
   - `get_all` → `Awaitable[dict[str, object]]`
