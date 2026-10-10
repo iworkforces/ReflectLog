@@ -1,0 +1,114 @@
+{
+  "id": "memory-reflectlog",
+  "categories": ["memory"],
+  "name": "ReflectLog Memory",
+  "description": "Replaces OpenClaw's built-in memory with the ReflectLog MCP server: hybrid semantic + full-text recall, audience-partitioned workspaces, and pre-compaction flush through ReflectLog.",
+  "cliCommands": [
+    {
+      "name": "reflectlog",
+      "description": "Inspect, search, export, and import ReflectLog-backed memory",
+      "hasSubcommands": true
+    }
+  ],
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["reflectlog"]
+  },
+  "kind": "memory",
+  "contracts": {
+    "tools": [
+      "memory_forget",
+      "memory_get",
+      "memory_list",
+      "memory_preview",
+      "memory_search",
+      "memory_store"
+    ]
+  },
+  "toolMetadata": {
+    "memory_forget": { "sideEffecting": true },
+    "memory_store": { "sideEffecting": true },
+    "memory_get": { "replaySafe": true },
+    "memory_search": { "replaySafe": true },
+    "memory_list": { "replaySafe": true },
+    "memory_preview": { "replaySafe": true }
+  },
+  "uiHints": {
+    "transport": {
+      "label": "Transport",
+      "placeholder": "http",
+      "help": "How to reach ReflectLog: loopback HTTP (default) or a long-lived stdio child process"
+    },
+    "url": {
+      "label": "ReflectLog MCP URL",
+      "placeholder": "http://127.0.0.1:9103/mcp",
+      "help": "Streamable HTTP endpoint of a ReflectLog server started with --transport http"
+    },
+    "authTokenEnv": {
+      "label": "Token environment variable",
+      "placeholder": "REFLECTLOG_MCP_TOKEN",
+      "help": "Environment variable that holds the ReflectLog MCP_AUTH_TOKEN bearer token; the token itself never goes in config"
+    },
+    "namespace": {
+      "label": "Deployment namespace",
+      "placeholder": "openclaw",
+      "help": "Separates the ReflectLog workspaces of different OpenClaw deployments sharing one server",
+      "advanced": true
+    },
+    "workspaceOverrides": {
+      "label": "Owner workspace overrides",
+      "help": "Map an agent id to an existing ReflectLog workspace for its owner-private memory",
+      "advanced": true
+    },
+    "defaultMaxResults": {
+      "label": "Default results",
+      "placeholder": "6",
+      "help": "Hits returned by memory search when the caller does not ask for a count (1-50)"
+    },
+    "smartReplace": {
+      "label": "Smart replacement",
+      "help": "Let memory_store(replace=true) ask ReflectLog to replace contradicted memories; flush and import always add only",
+      "advanced": true
+    },
+    "stdio": {
+      "label": "Stdio launcher",
+      "help": "Command, args, cwd and env for transport=stdio",
+      "advanced": true
+    },
+    "connectTimeoutMs": { "label": "Connect timeout (ms)", "advanced": true },
+    "requestTimeoutMs": { "label": "Request timeout (ms)", "advanced": true }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "transport": { "type": "string", "enum": ["http", "stdio"], "default": "http" },
+      "url": { "type": "string", "default": "http://127.0.0.1:9103/mcp" },
+      "authTokenEnv": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+        "default": "REFLECTLOG_MCP_TOKEN"
+      },
+      "stdio": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": { "type": "string", "minLength": 1 },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "cwd": { "type": "string", "minLength": 1 },
+          "env": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      },
+      "namespace": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,31}$", "default": "openclaw" },
+      "workspaceOverrides": {
+        "type": "object",
+        "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+        "additionalProperties": { "type": "string", "pattern": "^[a-z0-9_.-]{1,64}$" }
+      },
+      "defaultMaxResults": { "type": "integer", "minimum": 1, "maximum": 50, "default": 6 },
+      "connectTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000, "default": 120000 },
+      "requestTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000, "default": 60000 },
+      "smartReplace": { "type": "boolean", "default": false }
+    }
+  }
+}
