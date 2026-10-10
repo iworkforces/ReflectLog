@@ -208,6 +208,10 @@ class ToolName(StrEnum):
     SEARCH = "search"
     REMOVE = "remove"
     HEALTH_CHECK = "health_check"
+    SEARCH_RECORDS = "search_records"
+    GET_RECORDS = "get_records"
+    LIST_RECORDS = "list_records"
+    REMOVE_RECORDS = "remove_records"
 
 
 class ConfigProfile(StrEnum):
