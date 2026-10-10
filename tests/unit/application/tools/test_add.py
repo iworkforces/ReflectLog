@@ -24,7 +24,7 @@ class TestAddToolHappyPath:
         assert result["stored_count"] == 1
         assert result["dry_run"] is False
         mock_memory_manager.add_memories_async.assert_awaited_once_with(
-            ["Remember this"], dry_run=False
+            ["Remember this"], dry_run=False, allow_replace=True
         )
 
     async def test_add_multiple_memories(
@@ -50,7 +50,7 @@ class TestAddToolHappyPath:
         await handler(["Test memory"], dry_run=True)
 
         mock_memory_manager.add_memories_async.assert_awaited_once_with(
-            ["Test memory"], dry_run=True
+            ["Test memory"], dry_run=True, allow_replace=True
         )
 
     async def test_add_logs_invocation(

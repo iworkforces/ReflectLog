@@ -72,7 +72,7 @@ AVAILABLE_TOOL_CLASSES: dict[str, type[BaseTool]] = {
 }
 
 TOOL_INSTRUCTIONS = {
-    "add": "    • add(memories: list[str], workspace_id: str, dry_run: bool = False) -> dict\n"
+    "add": "    • add(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict\n"
     "      Add memories with semantic embeddings. Empty lists are no-op.\n"
     "      Returns stored/skipped/replaced counts. dry_run previews replacements.",
     "get_all": "    • get_all(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict\n"
@@ -265,11 +265,15 @@ class FastMCPServer:
         return task.result()
 
     async def _add(
-        self, memories: list[str], workspace_id: str, dry_run: bool = False
+        self,
+        memories: list[str],
+        workspace_id: str,
+        dry_run: bool = False,
+        allow_replace: bool = True,
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
             return await self._finish_tool(
-                self._handler("add", manager)(memories, dry_run)
+                self._handler("add", manager)(memories, dry_run, allow_replace)
             )
 
     async def _search(

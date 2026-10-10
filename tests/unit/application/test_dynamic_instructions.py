@@ -134,7 +134,10 @@ class TestToolInstructionSnippets:
         tool = AddTool(mock_config, mock_memory_manager, mock_logger)
         snippet = tool.get_instruction_snippet()
 
-        assert "add(memories: list[str], dry_run: bool = False)" in snippet
+        assert (
+            "add(memories: list[str], dry_run: bool = False, allow_replace: bool = True)"
+            in snippet
+        )
         assert (
             "semantic embeddings" in snippet.lower() or "embeddings" in snippet.lower()
         )

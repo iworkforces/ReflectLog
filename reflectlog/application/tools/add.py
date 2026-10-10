@@ -24,7 +24,7 @@ class AddTool(BaseTool):
     def get_instruction_snippet(self) -> str:
         """Get the instruction snippet for MCP_INSTRUCTIONS."""
         return (
-            "    • add(memories: list[str], dry_run: bool = False) -> dict\n"
+            "    • add(memories: list[str], dry_run: bool = False, allow_replace: bool = True) -> dict\n"
             "      Add memories with semantic embeddings. Empty lists are no-op.\n"
             "      Returns stored/skipped/replaced counts. dry_run previews replacements."
         )
@@ -33,7 +33,9 @@ class AddTool(BaseTool):
     def get_handler(self) -> Callable[..., Awaitable[dict[str, object]]]:
         """Get the async tool handler function."""
 
-        async def add(memories: list[str], dry_run: bool = False) -> dict[str, object]:
+        async def add(
+            memories: list[str], dry_run: bool = False, allow_replace: bool = True
+        ) -> dict[str, object]:
             """Add memories to the memory store with parallel processing (async).
 
             This tool stores one or more text memories in the memory store using
@@ -118,7 +120,9 @@ class AddTool(BaseTool):
 
             # Store memories using async method for better concurrency
             try:
-                result = await self.memory.add_memories_async(memories, dry_run=dry_run)
+                result = await self.memory.add_memories_async(
+                    memories, dry_run=dry_run, allow_replace=allow_replace
+                )
 
                 stored_count = result.stored_count
                 skipped_count = result.skipped_count

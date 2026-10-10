@@ -304,7 +304,7 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
     get_all_params = list(signature(get_all.get_handler()).parameters)
     remove_params = list(signature(remove.get_handler()).parameters)
     health_params = list(signature(health.get_handler()).parameters)
-    assert add_params == ["memories", "dry_run"]
+    assert add_params == ["memories", "dry_run", "allow_replace"]
     assert search_params == ["query"]
     assert get_all_params == ["limit", "offset"]
     assert remove_params == ["memories"]
