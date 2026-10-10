@@ -243,6 +243,7 @@ class IMemoryManager(Protocol):
         self,
         memories: list[str],
         dry_run: bool = False,
+        allow_replace: bool = True,
     ) -> object:
         """Add memories through the 3-phase pipeline."""
         ...

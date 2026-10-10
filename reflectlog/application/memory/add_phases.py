@@ -1280,7 +1280,9 @@ class AddPipeline:
         self.config = config
         self.logger: IStructuredLogger = logger
 
-    async def execute(self, memories: list[str], dry_run: bool = False) -> AddResult:
+    async def execute(
+        self, memories: list[str], dry_run: bool = False, allow_replace: bool = True
+    ) -> AddResult:
         """Execute the 3-phase add pipeline.
 
         Args:
@@ -1314,7 +1316,13 @@ class AddPipeline:
             phase1_result = await self._phase1.execute(memories)
 
             # Phase 2: Parallel smart replacement detection
-            phase2_result = await self._phase2.execute(phase1_result.unique_memories)
+            phase2_result = (
+                await self._phase2.execute(phase1_result.unique_memories)
+                if allow_replace
+                else Phase2Result(
+                    replacement_map={}, total_replacements=0, duration=0.0
+                )
+            )
 
             persist_memories, skipped_storage = _persist_list_for_add(
                 unique_memories=phase1_result.unique_memories,

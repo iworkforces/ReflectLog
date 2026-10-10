@@ -901,7 +901,7 @@ class MemoryManager:
         return self.add_memories(messages)
 
     async def add_memories_async(
-        self, memories: list[str], dry_run: bool = False
+        self, memories: list[str], dry_run: bool = False, allow_replace: bool = True
     ) -> AddResult:
         """Add multiple memories with phased parallel processing (Sprint 2.2).
 
@@ -932,7 +932,7 @@ class MemoryManager:
             # Pick up (and verify) a vector file published since the index was
             # opened before the pipeline journals anything. Search does the same.
             await asyncify(self._refresh_engines)()
-        return await self._add_pipeline.execute(memories, dry_run)
+        return await self._add_pipeline.execute(memories, dry_run, allow_replace)
 
     async def add_messages_async(
         self, messages: list[str], dry_run: bool = False
