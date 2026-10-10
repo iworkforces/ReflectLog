@@ -297,6 +297,10 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
         "search",
         "remove",
         "health_check",
+        "search_records",
+        "get_records",
+        "list_records",
+        "remove_records",
     ]
 
     add_params = list(signature(add.get_handler()).parameters)

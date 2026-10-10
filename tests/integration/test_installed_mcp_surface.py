@@ -7,13 +7,17 @@ from reflectlog.application.tools.add import AddTool
 from reflectlog.application.utils.validation import validate_memories
 
 
-def test_five_registered_tools() -> None:
+def test_nine_registered_tools() -> None:
     assert set(AVAILABLE_TOOL_CLASSES) == {
         "add",
         "get_all",
         "search",
         "remove",
         "health_check",
+        "search_records",
+        "get_records",
+        "list_records",
+        "remove_records",
     }
     assert AVAILABLE_TOOL_CLASSES["add"] is AddTool
 

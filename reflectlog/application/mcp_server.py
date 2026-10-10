@@ -17,13 +17,18 @@ from fastmcp.utilities.logging import get_logger
 from pydantic import Field
 
 from reflectlog.application.config.settings import Config, get_config
+from reflectlog.application.constants import MAX_RECORD_IDS, MAX_SEARCH_RECORDS_LIMIT
 from reflectlog.application.memory.manager import MemoryManager
 from reflectlog.application.memory.workspace_registry import WorkspaceRegistry
 from reflectlog.application.tools.add import AddTool
 from reflectlog.application.tools.get_all import GetAllTool
+from reflectlog.application.tools.get_records import GetRecordsTool
 from reflectlog.application.tools.health_check import HealthCheckTool
+from reflectlog.application.tools.list_records import ListRecordsTool
 from reflectlog.application.tools.remove import RemoveTool
+from reflectlog.application.tools.remove_records import RemoveRecordsTool
 from reflectlog.application.tools.search import SearchTool
+from reflectlog.application.tools.search_records import SearchRecordsTool
 from reflectlog.core.enums import EmbedderProvider, TransportMode
 from reflectlog.core.exceptions import ConfigurationError
 from reflectlog.core.prompts import build_instructions
@@ -69,6 +74,10 @@ AVAILABLE_TOOL_CLASSES: dict[str, type[BaseTool]] = {
     "search": SearchTool,
     "remove": RemoveTool,
     "health_check": HealthCheckTool,
+    "search_records": SearchRecordsTool,
+    "get_records": GetRecordsTool,
+    "list_records": ListRecordsTool,
+    "remove_records": RemoveRecordsTool,
 }
 
 TOOL_INSTRUCTIONS = {
@@ -87,6 +96,10 @@ TOOL_INSTRUCTIONS = {
     "      Removes all occurrences of each memory. Silently ignores non-existent memories.",
     "health_check": "    • health_check(workspace_id: str) -> dict[str, Any]\n"
     "      Get server health status including component initialization state.",
+    "search_records": "    • search_records(query: str, workspace_id: str, limit: int | None = None) -> dict\n      Search stable ids with final scores and score_kind. Limit 1..50.",
+    "get_records": "    • get_records(ids: list[int], workspace_id: str) -> dict\n      Resolve up to 100 positive ids, reporting missing ids.",
+    "list_records": "    • list_records(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict\n      Page records in id order with a total; same cap as get_all.",
+    "remove_records": "    • remove_records(ids: list[int], workspace_id: str) -> dict\n      Report actually removed and missing ids.",
 }
 
 
@@ -228,6 +241,10 @@ class FastMCPServer:
             "get_all": self._get_all,
             "remove": self._remove,
             "health_check": self._health_check,
+            "search_records": self._search_records,
+            "get_records": self._get_records,
+            "list_records": self._list_records,
+            "remove_records": self._remove_records,
         }
 
     def tool_fn(self, name: str) -> Callable[..., object]:
@@ -302,6 +319,47 @@ class FastMCPServer:
     async def _remove(self, memories: list[str], workspace_id: str) -> None:
         async with self._registry.acquire(workspace_id) as manager:
             await self._finish_tool(self._handler("remove", manager)(memories))
+
+    async def _search_records(
+        self,
+        query: Annotated[str, Field(min_length=1, max_length=1000)],
+        workspace_id: str,
+        limit: Annotated[int | None, Field(ge=1, le=MAX_SEARCH_RECORDS_LIMIT)] = None,
+    ) -> dict[str, object]:
+        async with self._registry.acquire(workspace_id) as manager:
+            return await self._finish_tool(
+                self._handler("search_records", manager)(query, limit)
+            )
+
+    async def _get_records(
+        self,
+        ids: Annotated[
+            list[Annotated[int, Field(ge=1)]], Field(max_length=MAX_RECORD_IDS)
+        ],
+        workspace_id: str,
+    ) -> dict[str, object]:
+        async with self._registry.acquire(workspace_id) as manager:
+            return await self._finish_tool(self._handler("get_records", manager)(ids))
+
+    async def _list_records(
+        self, workspace_id: str, limit: int | None = None, offset: int = 0
+    ) -> dict[str, object]:
+        async with self._registry.acquire(workspace_id) as manager:
+            return await self._finish_tool(
+                self._handler("list_records", manager)(limit, offset)
+            )
+
+    async def _remove_records(
+        self,
+        ids: Annotated[
+            list[Annotated[int, Field(ge=1)]], Field(max_length=MAX_RECORD_IDS)
+        ],
+        workspace_id: str,
+    ) -> dict[str, object]:
+        async with self._registry.acquire(workspace_id) as manager:
+            return await self._finish_tool(
+                self._handler("remove_records", manager)(ids)
+            )
 
     async def _health_check(self, workspace_id: str) -> dict[str, Any]:
         async with self._registry.acquire(workspace_id) as manager:

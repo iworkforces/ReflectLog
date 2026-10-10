@@ -241,6 +241,10 @@ class TestDynamicInstructionsIntegration:
             "search",
             "remove",
             "health_check",
+            "search_records",
+            "get_records",
+            "list_records",
+            "remove_records",
         }
         for tool in tools:
             assert isinstance(tool, _SchemaTool)
