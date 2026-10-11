@@ -1,16 +1,29 @@
-"""Demonstration test: Add 10 memories, get_all, and search."""
+import inspect
+from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
+
+from reflectlog.application.memory.add_phases import AddResult
+from reflectlog.application.memory.manager import (
+    MemoryManager,
+    RecordSearchResult,
+    ScoredMemoryRecord,
+)
+from reflectlog.core.enums import SearchScoreKind
+from tests.test_get_all_memories import AddResponse, Page, SearchResponse
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_demo_workflow(
-    add_tool, get_all_tool, search_tool, mcp_server, create_search_results
-):
-    """Demonstration: Add 10 memories, retrieve all, and search."""
-
-    # Prepare 10 memories
+    add_memories_tool: Callable[..., object],
+    get_all_memories_tool: Callable[..., object],
+    search_memories_tool: Callable[..., object],
+) -> None:
     memories = [
         "Python tutorial for beginners",
         "Advanced Python programming",
@@ -23,104 +36,38 @@ async def test_demo_workflow(
         "Docker containerization",
         "Python automation scripts",
     ]
+    workspace = "test_project"
+    rows = [
+        ScoredMemoryRecord(id=i, content=memory, score=1.0, created_at=None)
+        for i, memory in enumerate(memories, 1)
+    ]
 
-    print("\n" + "=" * 70)
-    print("📝 STEP 1: Adding 10 memories to memory store")
-    print("=" * 70)
-    for i, mem in enumerate(memories, 1):
-        print(f"  {i}. {mem}")
+    async def search(query: str, limit: int | None = None) -> RecordSearchResult:
+        matching = tuple(row for row in rows if query.lower() in row.content.lower())
+        return RecordSearchResult(matching[:limit], SearchScoreKind.NONE)
 
-    # Setup mock behavior for add
-    stored_memories = []
-
-    def add_side_effect(*, memories=None, **_kwargs):
-        memories = memories or []
-        stored_memories.extend(memories)
-        print(f"\n✅ Successfully added {len(memories)} memorie(s) to store")
-        return memories
-
-    mcp_server.memory_manager.memory.add_batch.side_effect = add_side_effect
-
-    # Add memories
-    await add_tool(memories)
-
-    print(f"\n📊 Total memories in store: {len(stored_memories)}")
-
-    # Setup mock behavior for get_all
-    def get_all_side_effect(*_args, **_kwargs):
-        return stored_memories.copy()
-
-    mcp_server.memory_manager.memory.get_all.side_effect = get_all_side_effect
-
-    print("\n" + "=" * 70)
-    print("📥 STEP 2: Retrieving ALL memories with get_all()")
-    print("=" * 70)
-
-    # Get all memories
-    all_memories = await get_all_tool()
-
-    print(f"\n✅ Retrieved {len(all_memories)} memorie(s):")
-    for i, mem in enumerate(all_memories, 1):
-        print(f"  {i}. {mem}")
-
-    # Verify all memories retrieved
-    assert len(all_memories) == 10
-    assert all_memories == memories
-
-    # Setup mock behavior for search
-    def search_side_effect(query, **kwargs):
-        # Simulate semantic + substring search
-        matching = [mem for mem in stored_memories if query.lower() in mem.lower()]
-        return create_search_results(matching)
-
-    mcp_server.memory_manager.memory.search.side_effect = search_side_effect
-
-    print("\n" + "=" * 70)
-    print("🔍 STEP 3: Searching for 'Python' memories")
-    print("=" * 70)
-
-    # Disable reranking/fusion for deterministic test results
-    mcp_server.memory_manager.config.reranker_engine = "none"
-    mcp_server.memory_manager.config.enable_rrf_fusion = False
-    mcp_server.memory_manager.config.search_limit = len(memories)
-
-    # Search for Python memories
-    python_results = await search_tool("Python")
-
-    print(f"\n✅ Found {len(python_results)} memorie(s) containing 'Python':")
-    for i, mem in enumerate(python_results, 1):
-        print(f"  {i}. {mem}")
-
-    # Verify search results
-    assert len(python_results) == 6
-    assert "Python tutorial for beginners" in python_results
-    assert "Advanced Python programming" in python_results
-    assert "Python data science guide" in python_results
-    assert "Python machine learning" in python_results
-    assert "Python web scraping" in python_results
-    assert "Python automation scripts" in python_results
-
-    # Search for JavaScript
-    print("\n" + "=" * 70)
-    print("🔍 BONUS: Searching for 'JavaScript' memories")
-    print("=" * 70)
-
-    js_results = await search_tool("JavaScript")
-
-    print(f"\n✅ Found {len(js_results)} memorie(s) containing 'JavaScript':")
-    for i, mem in enumerate(js_results, 1):
-        print(f"  {i}. {mem}")
-
-    assert len(js_results) == 1
-    assert "JavaScript fundamentals" in js_results
-
-    print("\n" + "=" * 70)
-    print("🎉 DEMO COMPLETE - All operations successful!")
-    print("=" * 70)
-    print(f"""
-Summary:
-  • Added: {len(memories)} memories
-  • Retrieved: {len(all_memories)} memories via get_all()
-  • Found: {len(python_results)} Python-related memories
-  • Found: {len(js_results)} JavaScript-related memories
-    """)
+    with (
+        patch.object(
+            MemoryManager, "add_memories_async", return_value=AddResult(stored_count=10)
+        ),
+        patch.object(
+            MemoryManager, "get_page_records_with_total", return_value=(rows, 10)
+        ),
+        patch.object(MemoryManager, "search_records", side_effect=search),
+    ):
+        added = add_memories_tool(memories, workspace_id=workspace)
+        assert inspect.isawaitable(added)
+        assert AddResponse.model_validate(await added).stored_count == 10
+        listed = get_all_memories_tool(workspace_id=workspace)
+        assert inspect.isawaitable(listed)
+        page = Page.model_validate(await listed)
+        assert [record.memory for record in page.records] == memories
+        for query, expected in (("Python", 6), ("JavaScript", 1)):
+            searched = search_memories_tool(query, workspace_id=workspace, limit=10)
+            assert inspect.isawaitable(searched)
+            response = SearchResponse.model_validate(await searched)
+            assert len(response.results) == expected
+            assert {row.memory for row in response.results} == {
+                memory for memory in memories if query in memory
+            }
+            print(query, response.model_dump())

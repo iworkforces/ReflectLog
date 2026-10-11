@@ -388,41 +388,38 @@ def get_tool_func(
 
     def _get_tool(tool_name: str) -> Callable[..., object]:
         """Get tool function by name."""
-        for tool in mcp_server.tools:
-            if tool.get_name() == tool_name:
-                return tool.get_handler()
-        raise ValueError(f"Tool '{tool_name}' not found")
+        return mcp_server.tool_fn(tool_name)
 
     return _get_tool
 
 
 @pytest.fixture
-def add_tool(
+def add_memories_tool(
     get_tool_func: Callable[[str], Callable[..., object]],
 ) -> Callable[..., object]:
-    """Get the add tool function."""
-    return get_tool_func("add")
+    """Get the add_memories tool function."""
+    return get_tool_func("add_memories")
 
 
 @pytest.fixture
-def get_all_tool(
+def get_all_memories_tool(
     get_tool_func: Callable[[str], Callable[..., object]],
 ) -> Callable[..., object]:
-    """Get the get_all tool function."""
-    return get_tool_func("get_all")
+    """Get the get_all_memories tool function."""
+    return get_tool_func("get_all_memories")
 
 
 @pytest.fixture
-def search_tool(
+def search_memories_tool(
     get_tool_func: Callable[[str], Callable[..., object]],
 ) -> Callable[..., object]:
-    """Get the search tool function."""
-    return get_tool_func("search")
+    """Get the search_memories tool function."""
+    return get_tool_func("search_memories")
 
 
 @pytest.fixture
-def remove_tool(
+def delete_memories_tool(
     get_tool_func: Callable[[str], Callable[..., object]],
 ) -> Callable[..., object]:
-    """Get the remove tool function."""
-    return get_tool_func("remove")
+    """Get the delete_memories tool function."""
+    return get_tool_func("delete_memories")
