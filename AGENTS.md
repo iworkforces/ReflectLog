@@ -1,12 +1,12 @@
 # ReflectLog Knowledge Base
 
-**Generated:** 2026-09-28
-**Commit:** aaebf3c
+**Generated:** 2026-10-11
+**Commit:** 4159261
 **Branch:** develop
 
 ## OVERVIEW
 
-Python 3.14 MCP memory server. One `MemoryManager` per workspace. USearch + SQLite identity + Tantivy FTS + raw RRF, optional local FlagReranker. Local WeMM is the field default; env load still defaults to OpenAI. LLM is for smart replacement only.
+Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`; stdio and sse are gone). One `MemoryManager` per workspace. USearch + SQLite identity + Tantivy FTS + raw RRF, optional local FlagReranker or remote OpenRouter rerank. Local WeMM is the field default; env load still defaults to OpenAI. LLM is for smart replacement only. A separate TypeScript OpenClaw plugin lives in `integrations/openclaw/`.
 
 ## STRUCTURE
 
@@ -20,8 +20,10 @@ Python 3.14 MCP memory server. One `MemoryManager` per workspace. USearch + SQLi
 │   ├── plugins/         # Present; not wired at startup
 │   └── utility/         # HTTP pool, Numba scoring, OS credentials
 ├── tests/               # unit/ mirrors package; integration uses real engines
+├── integrations/openclaw/  # TypeScript plugin: pnpm + vitest; no root script or CI
 ├── stubs/               # ty extra-paths + pyright stubPath
 ├── scripts/             # Copied git hooks + platform gates + ad-hoc
+├── .github/workflows/   # pr-quality, platform-storage, cd (release)
 └── start-*.sh           # Local lint / typecheck / pytest wrappers
 ```
 
@@ -44,6 +46,8 @@ Python 3.14 MCP memory server. One `MemoryManager` per workspace. USearch + SQLi
 | Embeddings | `infrastructure/embeddings/` | WeMM local + Qwen OpenRouter + LRU |
 | HTTP | `utility/http.py` | `HttpClientFactory` |
 | Score math | `utility/scoring.py` | Numba RRF / min-max / recency |
+| OpenClaw plugin | `integrations/openclaw/` | MCP client for the five tools; see child guide |
+| Release | `.github/workflows/cd.yml` | Tags `v<pyproject version>` after CI passes on `main` |
 
 ## CODE MAP
 
@@ -102,22 +106,27 @@ uv sync
 ./start-lint.sh --check
 ./start-unittest.sh --coverage
 uv run reflectlog --transport http --port 9103
+(cd integrations/openclaw && pnpm check)   # TypeScript plugin: typecheck + vitest + build
 ```
 
 ## NOTES
 
 - Installed script: `reflectlog = reflectlog.server:main`. `mcp_server.main` is a thinner second entry.
 - `ty` + pyright include `tests`; tests execution env relaxes mock noise.
-- Default pytest paths omit `tests/load/` and root `tests/test_*.py`.
-- Hooks: edit `scripts/git-hooks/`, install via `scripts/setup-git-hooks.sh`. Pre-push = typecheck + lint `--all` (writes). No pytest in hooks.
+- Default pytest paths (`tests/unit`, `tests/integration`, `tests/security`) omit `tests/load/` and root `tests/test_*.py`. `start-unittest.sh --parallel` and `-k` run `pytest tests` instead, which bypasses that list.
+- Hooks: edit `scripts/git-hooks/`, install via `scripts/setup-git-hooks.sh`. Pre-push = typecheck + lint `--all` (writes). No pytest in hooks. `--all` never fails the push on leftover lint; CI `--check` is the gate.
+- pyright reads `pyrightconfig.json` (strict, `pythonPlatform` Darwin); the `[tool.pyright]` block in `pyproject.toml` is ignored. ty reads `[tool.ty]`. Neither checks `scripts/`; ruff does.
 - `pr-quality.yml`: Ubuntu typecheck + lint `--check` + coverage. PRs to `develop`/`main`, push to `main` only.
 - `platform-storage.yml`: macOS/Ubuntu/Windows storage gates. Push to `develop` does not run `pr-quality`.
-- CLI version is `importlib.metadata.version("reflectlog")` (`0.5.0` when installed). Fallback `"0.0.0"` if the package is not installed.
+- `cd.yml`: after both workflows pass on a `main` push, tags and releases `v<pyproject version>`.
+- CLI version: `reflectlog/version.py` reads `importlib.metadata.version("reflectlog")`, falling back to `"0.0.0"` when not installed. The number itself comes from `pyproject.toml`.
+- Python: `requires-python >=3.14.7`, `.python-version` is 3.14.8, CI uses 3.14.7.
+- `integrations/openclaw` is not run by any root script or workflow; run its `pnpm` scripts by hand.
 - Lease, generation, and embedding-identity rules: `docs/storage-coordination.md`.
 
 ## GUIDANCE HIERARCHY
 
-Children: `reflectlog/{application,core,infrastructure,plugins,utility}` and `tests/` mirrors.
+Children: `reflectlog/{application,core,infrastructure,plugins,utility}`, `integrations/openclaw` (TypeScript, own toolchain), and `tests/` mirrors.
 Deep: `memory/fusion`, `memory/reranking` (pointer), `utility/platforms`, `infrastructure/embeddings`, `infrastructure/search` (marker).
 `workspace_registry.py` and `embedding_identity.py` stay in their parent guides.
 No guides on empty `infrastructure/{llm,memory,reranking}`.

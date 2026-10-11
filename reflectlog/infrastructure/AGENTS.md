@@ -1,7 +1,7 @@
 # Infrastructure Layer
 
-**Generated:** 2026-09-28
-**Commit:** aaebf3c
+**Generated:** 2026-10-11
+**Commit:** 4159261
 **Branch:** develop
 
 ## OVERVIEW
@@ -16,14 +16,17 @@ infrastructure/
 ├── usearch_engine.py           # HNSW + SQLite SoT
 ├── tantivy_engine.py           # FTS + tombstones
 ├── memory_store.py             # Identity + journal
+├── index_integrity.py          # Pure SQLite-vs-HNSW id-set comparison
 ├── cross_encoder_reranker.py   # Local FlagReranker; sigmoid default
+├── openrouter_reranker.py      # Remote POST /rerank; RERANKER_ENGINE=openrouter
 ├── reranker_post_processor.py  # CE + temporal compose
 ├── smart_replacer.py           # LLM replacement
 ├── llm_provider_base.py        # OpenAI provider base
 ├── embeddings/                 # ONLY populated child
 │   ├── cached_embeddings.py
 │   ├── qwen3_embedding.py
-│   └── wemm_embedding.py
+│   ├── wemm_embedding.py
+│   └── wemm_service.py         # Shared refcounted WeMM instance
 ├── search/                     # empty marker + guide
 ├── llm/                        # empty marker (no guide)
 ├── memory/                     # empty marker (no guide)
@@ -39,11 +42,14 @@ infrastructure/
 | Embed identity | `embedding_identity.py` | `ensure_embedding_identity` before HNSW open |
 | FTS | `tantivy_engine.py` | Tombstone+commit; `compact()` only |
 | Identity/journal | `memory_store.py` | unique `(workspace_id, content)` |
-| CE Step 4 | `cross_encoder_reranker.py` | `rerank` always scores |
+| CE Step 4 | `cross_encoder_reranker.py` | `rerank`: `[]` for empty input, pass-through when disabled, else score → normalize → CE threshold → recency |
+| Remote rerank | `openrouter_reranker.py` | `RERANKER_ENGINE=openrouter`; reuses `RerankerPostProcessor` |
+| Index drift | `index_integrity.py` | `evaluate_index_integrity` → `IndexIntegrityReport` |
 | Embed cache | `embeddings/cached_embeddings.py` | SHA-256 LRU |
 
 ## CONVENTIONS
 
+- `index_integrity.py` is pure id-set math: SQLite ids vs live vector keys. Only same-workspace pending journal rows excuse a difference; a non-empty journal is never a blanket pass. No I/O, and reports carry ids and counts, never memory text.
 - First-create HNSW is in-memory only (`Index(...)`). No live `Index.save`. Commit is temp+validate+`os.replace`.
 - Tantivy rewrite: `_rewrite_index_in_place`. `_rebuild_index_with_docs` deleted.
 - MemoryStore schema: `_create_memories_schema` / `_create_archive_schema` / `_create_transition_schema` only. No `_create_schema`.
