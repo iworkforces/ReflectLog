@@ -1,7 +1,7 @@
 # Memory Package
 
-**Generated:** 2026-09-28
-**Commit:** aaebf3c
+**Generated:** 2026-10-11
+**Commit:** 4159261
 **Branch:** develop
 
 ## OVERVIEW
@@ -16,6 +16,7 @@ memory/
 ├── search_strategies.py       # 4-step SearchPipeline
 ├── engine_factory.py          # Exists; unused at runtime
 ├── match_utils.py             # has_exact_match only
+├── search_health.py           # SearchFailureRecorder: counts + exception type name
 ├── replacement_recovery.py    # Restart converge of unfinished intents
 ├── fusion/                    # RanxFusionEngine (see child guide)
 └── reranking/                 # Pointer only (see child guide)
@@ -39,7 +40,8 @@ memory/
 - 4-step search: parallel backends → RRF/concat → fusion threshold → CE if >1 hit.
 - Embed outside exclusive. Phase 3: journal → persist NEW + commit → delete OLD → extra commit → publish generation after converge → leftover ADD complete → replace complete.
 - Identity is SQLite unique `(workspace_id, content)`. Tantivy `en_stem` is not exact match.
-- `match_utils` exports `has_exact_match` only. `escape_tantivy_query` removed from this package (Tantivy engine still escapes internally).
+- `match_utils` exports `has_exact_match` only. Query escaping is `TantivyEngine._escape_tantivy_query`, a private staticmethod.
+- `SearchFailureRecorder` counts failures per component under its own lock and keeps only the exception type name and a UTC time. Counters stay internal; there is no MCP health tool.
 - Search: backends take short SHARED leases. No manager SHARED across embed/CE.
 - Dual-backend search outage (or semantic error + empty FTS) raises `SearchError`. Tantivy delete shortfall after USearch success raises `InconsistentStateError`.
 
