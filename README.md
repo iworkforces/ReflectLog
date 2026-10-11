@@ -275,6 +275,17 @@ memory, and startup time increase substantially from 2B to 4B to 9B. Start with
 checkpoint generally requires server-class resources or an appropriately sized
 accelerator; it is not a realistic default for memory-constrained laptops.
 
+Real checkpoint tests are opt-in and are never part of normal CI:
+
+```bash
+RUN_LOCAL_MODEL_TESTS=1 WEMM_TEST_MODEL=tencent/WeMM-Embedding-2B \
+  uv run python -m pytest tests/integration/test_wemm_embeddings_integration.py
+RUN_LOCAL_MODEL_TESTS=1 WEMM_TEST_MODEL=tencent/WeMM-Embedding-4B \
+  uv run python -m pytest tests/integration/test_wemm_embeddings_integration.py
+RUN_LOCAL_MODEL_TESTS=1 WEMM_TEST_MODEL=tencent/WeMM-Embedding-9B \
+  uv run python -m pytest tests/integration/test_wemm_embeddings_integration.py
+```
+
 Each workspace records its embedding provider, model selector, and effective
 vector dimensions in `.reflectlog.embedding-identity.json`. Reopening with the
 same identity is supported. Changing `EMBEDDER_PROVIDER`, `EMBEDDING_MODEL`, or
@@ -282,8 +293,9 @@ effective dimensions requires an offline rebuild, even if the new embedder has
 the same vector width. A model selector does not pin an upstream checkpoint
 revision; manage checkpoint revisions separately.
 
-If the old environment remains compatible, obtain and verify a complete
-export of memory content for each workspace before stopping it. Stop all
+If the old environment remains compatible, use `get_all_memories` to obtain
+and verify a complete export of memory content for each workspace before
+stopping it. Stop all
 ReflectLog processes, then archive the complete workspace directory, including
 SQLite database and WAL files, vector and full-text indexes, pending intents,
 and metadata sidecars. Keep this archive intact; a content export alone does
@@ -299,16 +311,57 @@ restoring only one of them from a backup, it is refused with an error that says
 to restore a consistent backup or rebuild offline; nothing is repaired automatically.
 See [storage coordination](docs/storage-coordination.md) for recovery details.
 
-Real checkpoint tests are opt-in and are never part of normal CI:
+#### Salvaging content from an archived workspace
 
-```bash
-RUN_LOCAL_MODEL_TESTS=1 WEMM_TEST_MODEL=tencent/WeMM-Embedding-2B \
-  uv run python -m pytest tests/integration/test_wemm_embeddings_integration.py
-RUN_LOCAL_MODEL_TESTS=1 WEMM_TEST_MODEL=tencent/WeMM-Embedding-4B \
-  uv run python -m pytest tests/integration/test_wemm_embeddings_integration.py
-RUN_LOCAL_MODEL_TESTS=1 WEMM_TEST_MODEL=tencent/WeMM-Embedding-9B \
-  uv run python -m pytest tests/integration/test_wemm_embeddings_integration.py
-```
+`reflectlog salvage` reads active content from an archived workspace without
+starting the server or loading an embedding model. It needs no credentials or
+environment configuration, and leaves the archive unchanged. Use it when the
+old environment can't open the workspace, or to export from a stopped archive.
+
+1. Stop all ReflectLog processes using the workspace. Storage is under
+   `indexes/` relative to the server's working directory, with one directory
+   per workspace. Copy the complete `indexes/<workspace_id>/` directory to a
+   safe archive location, including `usearch/memories.db`, any
+   `usearch/memories.db-wal` and `usearch/memories.db-shm` files, and the
+   `.reflectlog.embedding-identity.json` and `.reflectlog.storage-generation`
+   sidecars. Keep the archive intact.
+2. Export one archived workspace directory, not the whole `indexes/` root:
+
+   ```bash
+   uv run reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
+   ```
+
+   `--workspace-id` is required and is never inferred. `NEW_DIR` must not
+   exist, even as a dangling symlink; its parent must exist, and it must be
+   outside the archive. The command inspects a disposable SQLite copy, with
+   committed WAL content visible, and does not replay the journal.
+3. Check `manifest.json` and confirm that `INCOMPLETE` is absent. Only then is
+   the bundle complete. `memories.jsonl` has one object per observed active
+   memory, sorted by `source_id`, with `content`, `source_created_at`, and
+   `source_id`. If `rebuild_ready` is false, keep the original archive for
+   investigation and decide manually before rebuilding: pending, unknown, or
+   foreign-workspace journal evidence, or a missing or unsupported journal,
+   leaves intent unresolved. Pending `new_content` is never exported as active
+   content. An interrupted run may leave `INCOMPLETE`; treat that directory as
+   unusable and delete it before retrying. Existing exports aren't overwritten.
+4. Start the server with the chosen embedder in a fresh working directory
+   (a new `indexes/` root), or use a workspace id whose directory doesn't exist
+   yet. The target must be a separate, empty workspace. Never write into the
+   archived directory or reuse its identity sidecar.
+5. Re-add the JSONL `content` values with the existing `add_memories` tool,
+   passing the target `workspace_id` and `allow_replace=False`. Exact
+   deduplication still applies. Keep each batch within `MAX_ADD_BATCH`
+   (default 100 memories) and `MAX_ADD_CHARS` (default 500000 total characters).
+   Verify `get_all_memories`'s `total` against the manifest's `records.count`.
+
+Content salvage doesn't preserve original memory ids or `created_at` timestamps
+in the rebuilt workspace. Re-added memories receive new ids and timestamps at
+re-add time. Vectors and the full-text index are rebuilt from content;
+replacement/archive history and completed journal rows aren't restored. The
+new workspace records its own embedding identity. The five MCP tools are
+unchanged; there is no import tool. See
+[offline content salvage](docs/storage-coordination.md#offline-content-salvage)
+for the manifest, publication, and failure contract.
 
 ## Architecture
 
@@ -349,6 +402,9 @@ ReflectLog/
 
 # Run server (workspace_id required on every tool call)
 ./start-reflectlog-mcp-server.sh
+
+# Export content from an archived, stopped workspace
+uv run reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
 ```
 
 ### Testing
