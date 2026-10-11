@@ -17,7 +17,7 @@ openclaw/
 ├── pnpm-workspace.yaml    # Settings only (no `packages:`)
 ├── tsconfig{,.build}.json # Typecheck src+tests / emit src -> dist
 ├── src/                   # Flat modules + reflectlog/ (client, parse, types)
-└── tests/                 # unit/*.test.ts + support/fake-client.ts
+└── tests/                 # unit/*.test.ts + support/fake-client.ts + support/tracked-fs.ts
 ```
 
 `dist/` is gitignored. Never commit it.
@@ -32,7 +32,8 @@ openclaw/
 | Every ReflectLog call | `src/service.ts` | `MemoryService`: limits, validation, injection check |
 | Agent tools | `src/tools.ts` | Six `memory_*` tools; TypeBox params + Zod input |
 | Provider, CLI | `src/provider.ts`, `src/cli.ts` | Native search/get/health runtime; `reflectlog` subcommands |
-| Flush, import | `src/flush.ts`, `src/flush-ledger.ts`, `src/importer.ts` | Pre-compaction plan with in-process dedup; markdown to entries |
+| Flush | `src/flush.ts`, `src/flush-ledger.ts`, `src/flush-coordinator.ts` | Plan; reserve/pin/success-TTL ledger; per-waiter authority; owned by `MemoryService` |
+| Import | `src/importer.ts`, `src/import-run.ts`, `src/import-archive.ts`, `src/import-receipt.ts` | Capture/split/classify; orchestration; exclusive archive writer; receipt/journal model |
 | MCP client | `src/reflectlog/mcp-client.ts` | Connect, handshake, retry policy |
 | Contracts | `src/reflectlog/types.ts` | `ReflectLogClient`, `ReflectLogError` codes; refs live in `src/references.ts` |
 
@@ -55,17 +56,20 @@ openclaw/
 
 - Never retry a mutation after it may have been sent; surface `outcome_unknown`. Reads and `dry_run` adds retry once.
 - Never call `ReflectLogClient` outside `MemoryService`. Tools, provider, and CLI go through `getService()`.
-- Call `guard.assertCurrent()` before a backend call and after each await in service paths.
-- Never put the token in config, logs, or CLI output. Never log memory text. Text matching `looksLikePromptInjection` is rejected before any I/O.
-- Never set `allowReplace` from flush (`tools.ts` gates on `memoryFlush === undefined`) or import (`cli.ts` passes `false`).
+- Call `guard.assertCurrent()` before a backend call and after each await in service paths. After an awaited mutation, use `#assertMutationCurrent`: a revoked caller gets `outcome_unknown`, never the result or a pre-dispatch code.
+- Never put the token in config, logs, or CLI output. Never log memory text. Text matching `looksLikePromptInjection` is rejected before any remote mutation; an explicitly requested `--archive` still keeps captured raw bytes (including rejected text) under `sources/`.
+- Flush goes through `MemoryService.flush` (always add-only); import passes `allowReplace: false` in `import-run.ts`. Never enable replacement for either.
 - Workspace overrides: not `.` or `..`, not the derived-id shape, unique. Refs never resolve outside the scope that issued them.
+- Never rename/delete live import sources or overwrite an archive.
+- Never treat paginated export verification as a snapshot or infer per-entry success from aggregate counts.
+- A mutation failure is retryable only with proof it failed before dispatch.
 
 ## SYNC HAZARDS
 
 - Config schema exists three times: Zod `configSchema`, `configJsonSchema` (`config.ts`), and `openclaw.plugin.json`. Only manifest == `configJsonSchema` is tested; Zod `superRefine` rules are absent from the JSON Schema.
 - `plugin.ts` pairs tool factories with `MEMORY_TOOL_NAMES` by index. Reorder both or neither.
 - The version literal `"0.1.0"` in `mcp-client.ts` must match `package.json`. Host pins live in `devDependencies.openclaw`, `peerDependencies`, `openclaw.build`, `openclaw.compat`, and `minimumReleaseAgeExclude`.
-- `flushLedger` in `tools.ts` is module-level process state (6 h TTL).
+- Flush ledger lives per `MemoryService`: default 512 entries, 6 h success TTL from settlement; pending/unknown pinned. `plugin.ts` lifecycle retirement disposes it; process-local only.
 
 ## COMMANDS
 
