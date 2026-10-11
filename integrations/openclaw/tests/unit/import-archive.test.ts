@@ -173,6 +173,55 @@ describe("ImportArchive", () => {
     await expect(ImportArchive.create({ workspaceDir: dir, now: NOW, fs })).rejects.toMatchObject({ stage: "stamp" });
     expect(await exists(join(dir, stampDir))).toBe(false);
   });
+  it.each(["open", "sync", "close"] as const)("restores INCOMPLETE when the post-unlink directory %s fails", async (op) => {
+    const fs = new TrackedArchiveFs();
+    const archive = await ImportArchive.create({ workspaceDir: dir, now: NOW, fs });
+    await archive.writeReceipt(receipt());
+    const marker = join(archive.path, "INCOMPLETE");
+    const markerText = await readFile(marker, "utf8");
+    const cause = new Error(`post-unlink ${op} failed`);
+    let fired = false;
+    fs.fail = (event) => {
+      if (!fired && event.op === op && event.path === archive.path
+        && fs.events.some((previous) => previous.op === "unlink" && previous.path === marker)) {
+        fired = true;
+        return cause;
+      }
+      return undefined;
+    };
+    await expect(archive.publish()).rejects.toMatchObject({ code: "archive_publish", cause });
+    expect(await exists(marker)).toBe(true);
+    expect(await readFile(marker, "utf8")).toBe(markerText);
+    expect(await exists(archive.receiptPath)).toBe(true);
+    expect(await isComplete(archive.path)).toBe(false);
+    expect(fs.leaked()).toEqual([]);
+  });
+
+  it("preserves both errors when restoring the marker after publication failure also fails", async () => {
+    const fs = new TrackedArchiveFs();
+    const archive = await ImportArchive.create({ workspaceDir: dir, now: NOW, fs });
+    await archive.writeReceipt(receipt());
+    const publishCause = new Error("post-unlink sync failed");
+    const restoreCause = new Error("marker restore denied");
+    let failedSync = false;
+    fs.fail = (event) => {
+      if (!fs.events.some((previous) => previous.op === "unlink")) return undefined;
+      if (!failedSync && event.op === "sync" && event.directory) {
+        failedSync = true;
+        return publishCause;
+      }
+      return event.op === "open" && event.path.endsWith("INCOMPLETE") ? restoreCause : undefined;
+    };
+    const failure = await archive.publish().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ImportArchiveError);
+    expect(failure).toMatchObject({ code: "archive_publish" });
+    if (!(failure instanceof ImportArchiveError)) throw new Error("expected archive failure");
+    expect(failure.message).toMatch(/marker.*could not be restored/i);
+    expect(failure.cause).toBeInstanceOf(AggregateError);
+    if (!(failure.cause instanceof AggregateError)) throw new Error("expected both causes");
+    expect(failure.cause.errors).toEqual([publishCause, restoreCause]);
+    expect(fs.leaked()).toEqual([]);
+  });
   it("treats unsupported directory fsync as best effort but fails on file fsync", async () => {
     const unsupported = new TrackedArchiveFs();
     unsupported.fail = (event) => event.op === "sync" && event.directory

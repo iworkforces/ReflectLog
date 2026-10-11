@@ -307,6 +307,22 @@ describe("runImport", () => {
       expect(await exists(join(archiveDir(), "INCOMPLETE"))).toBe(true);
       await untouched();
     });
+    it("reports an incomplete archive on disk when directory sync fails after marker removal", async () => {
+      let fired = false;
+      fs.fail = (event) => {
+        if (!fired && event.op === "sync" && event.directory && event.path === archiveDir()
+          && fs.events.some((previous) => previous.op === "unlink")) {
+          fired = true;
+          return new Error("post-unlink sync failed");
+        }
+        return undefined;
+      };
+      const result = await run();
+      expect(result).toMatchObject({ ok: false, archive: { status: "incomplete", errorCode: "archive_publish" } });
+      expect(await exists(join(archiveDir(), "INCOMPLETE"))).toBe(true);
+      expect(await exists(join(archiveDir(), "receipt.json"))).toBe(true);
+      await untouched();
+    });
     it("does not overwrite an archive that already holds this timestamp", async () => {
       await mkdir(archiveDir(), { recursive: true });
       await writeFile(join(archiveDir(), "receipt.json"), "same-second receipt");

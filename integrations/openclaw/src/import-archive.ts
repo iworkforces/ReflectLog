@@ -29,6 +29,7 @@ export const SOURCES_DIR = "sources";
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
+const INCOMPLETE_TEXT = "This archive is incomplete. It is complete only when receipt.json exists and this file is absent.\n";
 const SAFE_SOURCE_PATH = /^(?:MEMORY\.md|memory\.md|memory\/[^/\\\0]+\.md)$/;
 /** Directory fsync is unsupported on some platforms; these codes mean "cannot", not "failed". */
 const DIRECTORY_SYNC_UNSUPPORTED: ReadonlySet<string> = new Set(["EISDIR", "EPERM", "EINVAL"]);
@@ -131,7 +132,7 @@ export class ImportArchive {
       await within("marker", "cannot create the INCOMPLETE marker", async () => {
         await archive.#writeExclusive(
           join(path, INCOMPLETE_MARKER),
-          "This archive is incomplete. It is complete only when receipt.json exists and this file is absent.\n",
+          INCOMPLETE_TEXT,
         );
         await archive.#syncDirectory(path);
         await archive.#syncDirectory(parent);
@@ -200,7 +201,19 @@ export class ImportArchive {
     await within("publish", "cannot publish the archive", async () => {
       await this.#syncDirectory(this.path);
       await this.#fs.unlink(join(this.path, INCOMPLETE_MARKER));
-      await this.#syncDirectory(this.path);
+      try {
+        await this.#syncDirectory(this.path);
+      } catch (cause) {
+        try {
+          await this.#writeExclusive(join(this.path, INCOMPLETE_MARKER), INCOMPLETE_TEXT);
+          await this.#syncDirectory(this.path);
+        } catch (restoreCause) {
+          throw new ImportArchiveError("publish", "cannot publish the archive; the INCOMPLETE marker could not be restored", {
+            cause: new AggregateError([cause, restoreCause], "archive publication and marker restoration failed"),
+          });
+        }
+        throw new ImportArchiveError("publish", "cannot publish the archive", { cause });
+      }
     });
   }
 
