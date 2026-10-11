@@ -31,7 +31,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
-MCP_TRANSPORT="${MCP_TRANSPORT:-stdio}"
+MCP_TRANSPORT="${MCP_TRANSPORT:-http}"
 MCP_PORT="${MCP_PORT:-9103}"
 PROFILE_TYPE="${PROFILE_TYPE:-all}"
 PROFILE_QUERIES="${PROFILE_QUERIES:-1000}"
@@ -60,38 +60,21 @@ mkdir -p "$PROFILE_DIR"
 
 PROFILE_CMD="profile-stats-$TIMESTAMP.prof"
 
-if [ "$MCP_TRANSPORT" == "stdio" ]; then
-    echo "   ⚠️  Warning: Profiling stdio transport may interfere with parent process"
-    echo "   Consider using HTTP transport for accurate profiling"
-fi
-
 PROFILER_RUN="$PYTHONPROF=1 cProfile -s time -o \"$PROFILE_DIR/$PROFILE_CMD\""
 
 if [[ "$PROFILE_TYPE" == "search" || "$PROFILE_TYPE" == "all" ]]; then
     for ((i=1; i<=PROFILE_QUERIES; i++)); do
-        if [[ "$MCP_TRANSPORT" == "stdio" ]]; then
-            echo "   Query $i/$PROFILE_QUERIES (using stdio)..."
-        else
-            echo "   Query $i/$PROFILE_QUERIES (using HTTP)..."
-        fi
+        echo "   Query $i/$PROFILE_QUERIES (using HTTP)..."
     done
 fi
 
 if [[ "$PROFILE_TYPE" == "add" || "$PROFILE_TYPE" == "all" ]]; then
-    if [[ "$MCP_TRANSPORT" == "stdio" ]]; then
-        echo "   Adding $PROFILE_MESSAGES messages (using stdio)..."
-    else
-        echo "   Adding $PROFILE_MESSAGES messages (using HTTP)..."
-    fi
+    echo "   Adding $PROFILE_MESSAGES messages (using HTTP)..."
 fi
 
 if [[ "$PROFILE_TYPE" == "all" ]]; then
     for ((i=1; i<=PROFILE_QUERIES; i++)); do
-        if [[ "$MCP_TRANSPORT" == "stdio" ]]; then
-            echo "   Mixed operation $i/$PROFILE_QUERIES (using stdio)..."
-        else
-            echo "   Mixed operation $i/$PROFILE_QUERIES (using HTTP)..."
-        fi
+        echo "   Mixed operation $i/$PROFILE_QUERIES (using HTTP)..."
     done
 fi
 
@@ -99,14 +82,8 @@ echo "✓ Profiling started..."
 echo ""
 
 case "$MCP_TRANSPORT" in
-    http|sse|streamable-http)
+    http|streamable-http)
         uv run reflectlog --transport "$MCP_TRANSPORT" --port "$MCP_PORT" "$PROFILER_RUN" "$@"
-        ;;
-
-    stdio)
-        echo "   ⚠️  Profiling stdio mode is experimental"
-        echo "   Results may include parent process overhead"
-        uv run reflectlog "$PROFILER_RUN" "$@"
         ;;
 esac
 
