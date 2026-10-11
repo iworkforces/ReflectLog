@@ -13,18 +13,18 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 
-class RemoveRecordsTool(BaseTool):
+class DeleteMemoriesTool(BaseTool):
     @override
     def get_name(self) -> str:
-        return ToolName.REMOVE_RECORDS
+        return ToolName.DELETE_MEMORIES
 
     @override
     def get_instruction_snippet(self) -> str:
-        return "    • remove_records(ids) -> dict\n      Remove up to 100 positive ids; report actually removed and missing ids."
+        return "    • delete_memories(ids: list[int], workspace_id: str) -> dict\n      Remove up to 100 positive ids; report actually removed and missing ids."
 
     @override
     def get_handler(self) -> Callable[..., Awaitable[dict[str, object]]]:
-        async def remove_records(
+        async def delete_memories(
             ids: Annotated[
                 list[Annotated[int, Field(ge=1)]], Field(max_length=MAX_RECORD_IDS)
             ],
@@ -34,6 +34,11 @@ class RemoveRecordsTool(BaseTool):
             try:
                 self.log_invocation(self.get_name(), count=len(ids))
                 removed, missing = await asyncify(self.memory.delete_records)(ids)
+                self.log_completion(
+                    self.get_name(),
+                    removed_count=len(removed),
+                    missing_count=len(missing),
+                )
                 return {"removed": removed, "missing": missing}
             except Exception as e:
                 self._raise_tool_error(
@@ -44,4 +49,4 @@ class RemoveRecordsTool(BaseTool):
                     count=len(ids),
                 )
 
-        return remove_records
+        return delete_memories

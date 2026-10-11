@@ -20,15 +20,11 @@ from reflectlog.application.config.settings import Config, get_config
 from reflectlog.application.constants import MAX_RECORD_IDS, MAX_SEARCH_RECORDS_LIMIT
 from reflectlog.application.memory.manager import MemoryManager
 from reflectlog.application.memory.workspace_registry import WorkspaceRegistry
-from reflectlog.application.tools.add import AddTool
-from reflectlog.application.tools.get_all import GetAllTool
-from reflectlog.application.tools.get_records import GetRecordsTool
-from reflectlog.application.tools.health_check import HealthCheckTool
-from reflectlog.application.tools.list_records import ListRecordsTool
-from reflectlog.application.tools.remove import RemoveTool
-from reflectlog.application.tools.remove_records import RemoveRecordsTool
-from reflectlog.application.tools.search import SearchTool
-from reflectlog.application.tools.search_records import SearchRecordsTool
+from reflectlog.application.tools.add_memories import AddMemoriesTool
+from reflectlog.application.tools.delete_memories import DeleteMemoriesTool
+from reflectlog.application.tools.get_all_memories import GetAllMemoriesTool
+from reflectlog.application.tools.get_memory_by_id import GetMemoryByIdTool
+from reflectlog.application.tools.search_memories import SearchMemoriesTool
 from reflectlog.core.enums import EmbedderProvider, TransportMode
 from reflectlog.core.exceptions import ConfigurationError
 from reflectlog.core.prompts import build_instructions
@@ -69,37 +65,23 @@ class _BearerTokenMiddleware(Middleware):
 
 # Canonical registry of available MCP tool implementations.
 AVAILABLE_TOOL_CLASSES: dict[str, type[BaseTool]] = {
-    "add": AddTool,
-    "get_all": GetAllTool,
-    "search": SearchTool,
-    "remove": RemoveTool,
-    "health_check": HealthCheckTool,
-    "search_records": SearchRecordsTool,
-    "get_records": GetRecordsTool,
-    "list_records": ListRecordsTool,
-    "remove_records": RemoveRecordsTool,
+    "add_memories": AddMemoriesTool,
+    "search_memories": SearchMemoriesTool,
+    "get_all_memories": GetAllMemoriesTool,
+    "get_memory_by_id": GetMemoryByIdTool,
+    "delete_memories": DeleteMemoriesTool,
 }
 
 TOOL_INSTRUCTIONS = {
-    "add": "    • add(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict\n"
+    "add_memories": "    • add_memories(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict\n"
     "      Add memories with semantic embeddings. Empty lists are no-op.\n"
     "      Returns stored/skipped/replaced counts. dry_run previews replacements.",
-    "get_all": "    • get_all(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict\n"
-    "      Page stored memories. Default cap 1000. Returns memories, "
+    "get_all_memories": "    • get_all_memories(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict\n"
+    "      Page stored records. Default cap 1000. Returns records, "
     "total, offset, limit, truncated.",
-    "search": "    • search(query: str, workspace_id: str) -> list[str]\n"
-    "      Hybrid semantic + full-text search. Finds semantically similar\n"
-    "      memories using vector embeddings (limit: configurable, default 5).",
-    "remove": "    • remove(memories: list[str], workspace_id: str)\n"
-    "      Remove memories using exact string matching (case-sensitive).\n"
-    "      Uses USearch (source of truth) with Python-level exact matching.\n"
-    "      Removes all occurrences of each memory. Silently ignores non-existent memories.",
-    "health_check": "    • health_check(workspace_id: str) -> dict[str, Any]\n"
-    "      Get server health status including component initialization state.",
-    "search_records": "    • search_records(query: str, workspace_id: str, limit: int | None = None) -> dict\n      Search stable ids with final scores and score_kind. Limit 1..50.",
-    "get_records": "    • get_records(ids: list[int], workspace_id: str) -> dict\n      Resolve up to 100 positive ids, reporting missing ids.",
-    "list_records": "    • list_records(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict\n      Page records in id order with a total; same cap as get_all.",
-    "remove_records": "    • remove_records(ids: list[int], workspace_id: str) -> dict\n      Report actually removed and missing ids.",
+    "search_memories": "    • search_memories(query: str, workspace_id: str, limit: int | None = None) -> dict\n      Search stable ids with final scores and score_kind. Limit 1..50.",
+    "get_memory_by_id": "    • get_memory_by_id(id: int, workspace_id: str) -> dict\n      Return a record or null when missing in this workspace.",
+    "delete_memories": "    • delete_memories(ids: list[int], workspace_id: str) -> dict\n      Report actually removed and missing ids.",
 }
 
 
@@ -236,15 +218,11 @@ class FastMCPServer:
 
     def _handlers(self) -> dict[str, Callable[..., Awaitable[object]]]:
         return {
-            "add": self._add,
-            "search": self._search,
-            "get_all": self._get_all,
-            "remove": self._remove,
-            "health_check": self._health_check,
-            "search_records": self._search_records,
-            "get_records": self._get_records,
-            "list_records": self._list_records,
-            "remove_records": self._remove_records,
+            "add_memories": self._add_memories,
+            "search_memories": self._search_memories,
+            "get_all_memories": self._get_all_memories,
+            "get_memory_by_id": self._get_memory_by_id,
+            "delete_memories": self._delete_memories,
         }
 
     def tool_fn(self, name: str) -> Callable[..., object]:
@@ -281,7 +259,7 @@ class FastMCPServer:
             raise
         return task.result()
 
-    async def _add(
+    async def _add_memories(
         self,
         memories: list[str],
         workspace_id: str,
@@ -290,10 +268,10 @@ class FastMCPServer:
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
             return await self._finish_tool(
-                self._handler("add", manager)(memories, dry_run, allow_replace)
+                self._handler("add_memories", manager)(memories, dry_run, allow_replace)
             )
 
-    async def _search(
+    async def _search_memories(
         self,
         query: Annotated[
             str,
@@ -304,52 +282,32 @@ class FastMCPServer:
             ),
         ],
         workspace_id: str,
-    ) -> list[str]:
-        async with self._registry.acquire(workspace_id) as manager:
-            return await self._finish_tool(self._handler("search", manager)(query))
-
-    async def _get_all(
-        self, workspace_id: str, limit: int | None = None, offset: int = 0
-    ) -> dict[str, object]:
-        async with self._registry.acquire(workspace_id) as manager:
-            return await self._finish_tool(
-                self._handler("get_all", manager)(limit, offset)
-            )
-
-    async def _remove(self, memories: list[str], workspace_id: str) -> None:
-        async with self._registry.acquire(workspace_id) as manager:
-            await self._finish_tool(self._handler("remove", manager)(memories))
-
-    async def _search_records(
-        self,
-        query: Annotated[str, Field(min_length=1, max_length=1000)],
-        workspace_id: str,
         limit: Annotated[int | None, Field(ge=1, le=MAX_SEARCH_RECORDS_LIMIT)] = None,
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
             return await self._finish_tool(
-                self._handler("search_records", manager)(query, limit)
+                self._handler("search_memories", manager)(query, limit)
             )
 
-    async def _get_records(
-        self,
-        ids: Annotated[
-            list[Annotated[int, Field(ge=1)]], Field(max_length=MAX_RECORD_IDS)
-        ],
-        workspace_id: str,
-    ) -> dict[str, object]:
-        async with self._registry.acquire(workspace_id) as manager:
-            return await self._finish_tool(self._handler("get_records", manager)(ids))
-
-    async def _list_records(
+    async def _get_all_memories(
         self, workspace_id: str, limit: int | None = None, offset: int = 0
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
             return await self._finish_tool(
-                self._handler("list_records", manager)(limit, offset)
+                self._handler("get_all_memories", manager)(limit, offset)
             )
 
-    async def _remove_records(
+    async def _get_memory_by_id(
+        self,
+        id: Annotated[int, Field(ge=1)],
+        workspace_id: str,
+    ) -> dict[str, object]:
+        async with self._registry.acquire(workspace_id) as manager:
+            return await self._finish_tool(
+                self._handler("get_memory_by_id", manager)(id)
+            )
+
+    async def _delete_memories(
         self,
         ids: Annotated[
             list[Annotated[int, Field(ge=1)]], Field(max_length=MAX_RECORD_IDS)
@@ -358,12 +316,8 @@ class FastMCPServer:
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
             return await self._finish_tool(
-                self._handler("remove_records", manager)(ids)
+                self._handler("delete_memories", manager)(ids)
             )
-
-    async def _health_check(self, workspace_id: str) -> dict[str, Any]:
-        async with self._registry.acquire(workspace_id) as manager:
-            return await self._finish_tool(self._handler("health_check", manager)())
 
     @asynccontextmanager
     async def _lifespan(self, _server: FastMCP) -> AsyncGenerator[None]:
@@ -426,7 +380,7 @@ class FastMCPServer:
             available_names: List of canonical tool identifiers that ship with the server.
 
         Returns:
-            Tuple of (selected tool names, invalid tool names).
+            Tuple of (selected tool names in canonical order, invalid tool names).
         """
         allowed = self.config.allowed_tools
 
@@ -434,18 +388,17 @@ class FastMCPServer:
             return available_names, []
 
         available_set = set(available_names)
-        selected: list[str] = []
+        selected: set[str] = set()
         invalid: list[str] = []
 
         for token in allowed:
             canonical = self._canonicalize_tool_token(token, available_set)
             if canonical:
-                if canonical not in selected:
-                    selected.append(canonical)
+                selected.add(canonical)
             else:
                 invalid.append(token)
 
-        return selected, invalid
+        return [name for name in available_names if name in selected], invalid
 
     @staticmethod
     def _canonicalize_tool_token(token: str, available_set: set[str]) -> str | None:
@@ -601,7 +554,7 @@ class FastMCPServer:
         """Store startup timing metrics on the memory manager.
 
         Called by server.py after initialization to record per-phase timing
-        data that the health_check tool exposes to callers.
+        metadata retained on workspace managers.
 
         Args:
             metrics: Mapping of phase name to elapsed seconds.

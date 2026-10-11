@@ -8,7 +8,6 @@ import tantivy
 from usearch.index import Index
 
 from reflectlog.application.memory.manager import MemoryManager
-from reflectlog.application.tools.health_check import HealthCheckTool
 from reflectlog.core.exceptions import InitializationError
 from reflectlog.infrastructure.memory_store import read_memory_store_snapshot
 from reflectlog.infrastructure.tantivy_engine import TantivyEngine
@@ -321,14 +320,12 @@ async def test_failed_embedding_keeps_unpublished_bootstrap(
     with patch.object(
         MockEmbedder, "embed_documents", side_effect=RuntimeError("offline")
     ):
-        degraded, logger = create_memory_manager(config)
+        degraded, _ = create_memory_manager(config)
     engine = degraded._semantic_engine
     assert isinstance(engine, USearchEngine)
     try:
         assert degraded.get_all() == [NEW]
         assert degraded.pending_intent_count() == 1
-        health = await HealthCheckTool(config, degraded, logger).get_handler()()
-        assert health["pending_intent_count"] == 1
         assert not Path(engine.config.index_path).exists()
         engine.verify_index_integrity()
     finally:

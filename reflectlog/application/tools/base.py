@@ -70,7 +70,7 @@ class BaseTool(ABC):
                 '    • signature\\n      description line 1\\n      description line 2'
 
         Example:
-            '    • add(messages: list[str])\\n      Add messages with semantic embeddings.'
+            '    • add_memories(memories: list[str], workspace_id: str)\\n      Add memories with semantic embeddings.'
         """
         pass
 

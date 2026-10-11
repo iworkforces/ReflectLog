@@ -1525,6 +1525,28 @@ class TestCloseErrorPaths:
         with pytest.raises(StorageError, match="closed"):
             manager.add_memories(["too late"])
 
+    @pytest.mark.parametrize("pending", [[], ["add", "delete", "replace"]])
+    def test_pending_intent_count_reads_journal_without_reconciling(
+        self, mock_config: Config, mock_logger: LogCapture, pending: list[str]
+    ) -> None:
+        manager, engine, _ = _make_manager(mock_config, mock_logger)
+        engine.memory_store.list_pending_transitions.return_value = pending
+        engine.memory_store.list_pending_transitions.reset_mock()
+        with patch.object(manager, "reconcile_pending_replacements") as reconcile:
+            count = manager.pending_intent_count()
+        assert count == len(pending)
+        engine.memory_store.list_pending_transitions.assert_called_once_with()
+        reconcile.assert_not_called()
+
+    def test_startup_metrics_remain_optional_manager_metadata(
+        self, mock_config: Config, mock_logger: LogCapture
+    ) -> None:
+        manager, _, _ = _make_manager(mock_config, mock_logger)
+        assert manager.startup_metrics is None
+        metrics = {"total_startup": 0.25}
+        manager.startup_metrics = metrics
+        assert manager.startup_metrics == metrics
+
     def test_pending_intent_count_propagates_list_failure(
         self, mock_config: Config, mock_logger: LogCapture
     ):

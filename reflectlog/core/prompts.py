@@ -84,7 +84,13 @@ and RRF fusion ranking.
 Available Tools:"""
 
 # Canonical ordering for consistent instruction generation
-TOOL_ORDER: list[str] = ["add", "get_all", "search", "remove", "health_check"]
+TOOL_ORDER: list[str] = [
+    "add_memories",
+    "search_memories",
+    "get_all_memories",
+    "get_memory_by_id",
+    "delete_memories",
+]
 
 
 def build_instructions(tool_snippets: list[tuple[str, str]]) -> str:
@@ -102,7 +108,7 @@ def build_instructions(tool_snippets: list[tuple[str, str]]) -> str:
         If no tools are provided, returns instructions with "(No tools available)".
 
     Example:
-        >>> snippets = [("add", "    • add(memories: list[str])\\n      ...")]
+        >>> snippets = [("add_memories", "    • add_memories(memories: list[str])\\n      ...")]
         >>> instructions = build_instructions(snippets)
     """
     if not tool_snippets:
@@ -121,42 +127,3 @@ def build_instructions(tool_snippets: list[tuple[str, str]]) -> str:
     tool_section = "\n\n".join(snippet for _, snippet in sorted_snippets)
 
     return f"{INSTRUCTIONS_HEADER}\n{tool_section}"
-
-
-# Fallback: static fallback with all tools (for direct imports)
-# This generates the same output as the previous static MCP_INSTRUCTIONS
-MCP_INSTRUCTIONS = build_instructions(
-    [
-        (
-            "add",
-            "    • add(memories: list[str], dry_run: bool = False) -> dict\n"
-            "      Add memories with semantic embeddings. Empty lists are no-op.\n"
-            "      Returns stored/skipped/replaced counts. dry_run previews replacements.",
-        ),
-        (
-            "get_all",
-            "    • get_all(limit: int | None = None, offset: int = 0) -> dict\n"
-            "      Page stored memories. Default cap 1000. Returns memories, "
-            "total, offset, limit, truncated.",
-        ),
-        (
-            "search",
-            "    • search(query: str) -> list[str]\n"
-            "      Hybrid semantic + full-text search. Finds semantically similar\n"
-            "      memories using vector embeddings (limit: configurable, default 5).",
-        ),
-        (
-            "remove",
-            "    • remove(memories: list[str])\n"
-            "      Remove memories using exact string matching (case-sensitive).\n"
-            "      Uses semantic search to find candidates, then exact match filter.\n"
-            "      Removes all occurrences of each memory. Silently ignores non-existent memories.",
-        ),
-        (
-            "health_check",
-            "    • health_check() -> HealthCheckResult\n"
-            "      Returns server health status and configuration. No parameters required.\n"
-            "      Provides overall_status, workspace_id, engine states, and feature flags.",
-        ),
-    ]
-)

@@ -64,7 +64,7 @@ async def test_benchmark_measures_real_mcp_tools_without_setup_calls(
     try:
         async with Client(seed_server.mcp) as client:
             await client.call_tool(
-                "add", {"workspace_id": workspace_id, "memories": [unrelated]}
+                "add_memories", {"workspace_id": workspace_id, "memories": [unrelated]}
             )
     finally:
         await seed_server.aclose()
@@ -74,7 +74,9 @@ async def test_benchmark_measures_real_mcp_tools_without_setup_calls(
         reopened = FastMCPServer(server_config)
         try:
             async with Client(reopened.mcp) as client:
-                page = await client.call_tool("get_all", {"workspace_id": workspace_id})
+                page = await client.call_tool(
+                    "get_all_memories", {"workspace_id": workspace_id}
+                )
         finally:
             await reopened.aclose()
         assert report["workspace_id"] == workspace_id
@@ -83,20 +85,28 @@ async def test_benchmark_measures_real_mcp_tools_without_setup_calls(
         assert report["measured_seconds"] > 0
         assert report["requests_per_second"] > 0
         assert report["cleanup_errors"] == 0
-        assert set(report["tools"]) == {"add", "search", "get_all", "health_check"}
+        assert set(report["tools"]) == {
+            "add_memories",
+            "search_memories",
+            "get_all_memories",
+            "get_memory_by_id",
+            "delete_memories",
+        }
         assert all(
-            metric["count"] == 4
+            metric["count"] == (8 if name == "get_all_memories" else 4)
             and metric["errors"] == 0
             and metric["mean_ms"] > 0
             and 0 < metric["p50_ms"] <= metric["p95_ms"]
             and metric["p95_ms"] > 0
-            for metric in report["tools"].values()
+            for name, metric in report["tools"].items()
         )
         assert page.structured_content is not None
         assert page.structured_content["total"] == 1
-        memories = page.structured_content["memories"]
-        assert isinstance(memories, list)
-        assert memories == [unrelated]
+        records = page.structured_content["records"]
+        assert isinstance(records, list)
+        assert len(records) == 1
+        assert isinstance(records[0], dict)
+        assert records[0]["memory"] == unrelated
     finally:
         await server.aclose()
 
@@ -110,17 +120,22 @@ async def test_benchmark_keeps_clients_open_until_every_cleanup_finishes(
     release_slow = anyio.Event()
     client_closed = anyio.Event()
     original_exit = Client.__aexit__
-    original_remove = FastMCPServer._remove
+    original_remove = FastMCPServer._delete_memories
 
     async def remove(
-        server: FastMCPServer, memories: list[str], workspace_id: str
-    ) -> None:
+        server: FastMCPServer, ids: list[int], workspace_id: str
+    ) -> dict[str, object]:
+        async with server._registry.acquire(workspace_id) as manager:
+            rows, _ = manager.get_records(ids)
+        memories = [row.content for row in rows]
+        if not any(memory.endswith(" seed") for memory in memories):
+            return await original_remove(server, ids, workspace_id)
         if "worker 0 seed" in memories[0]:
             fast_removed.set()
         else:
             await fast_removed.wait()
             await release_slow.wait()
-        await original_remove(server, memories, workspace_id)
+        return await original_remove(server, ids, workspace_id)
 
     async def tracked_exit(
         client: Client,
@@ -143,7 +158,7 @@ async def test_benchmark_keeps_clients_open_until_every_cleanup_finishes(
 
     premature_exit = False
     report = None
-    with patch.object(FastMCPServer, "_remove", remove):
+    with patch.object(FastMCPServer, "_delete_memories", remove):
         server = FastMCPServer(server_config)
     try:
         with patch.object(Client, "__aexit__", tracked_exit):
@@ -165,23 +180,28 @@ async def test_benchmark_keeps_clients_open_until_every_cleanup_finishes(
 async def test_benchmark_counts_mcp_tool_errors(
     server_config: Config, deterministic_embeddings: None
 ) -> None:
-    async def failed_health(
-        _server: FastMCPServer, workspace_id: str
+    async def failed_lookup(
+        _server: FastMCPServer, id: int, workspace_id: str
     ) -> dict[str, object]:
-        raise RuntimeError("health unavailable")
+        raise RuntimeError("lookup unavailable")
 
-    with patch.object(FastMCPServer, "_health_check", failed_health):
+    with patch.object(FastMCPServer, "_get_memory_by_id", failed_lookup):
         server = FastMCPServer(server_config)
     try:
         report = await run_benchmark(
             server.mcp, "benchmark-errors", clients=1, iterations=1
         )
-        assert report["tools"]["health_check"]["count"] == 1
-        assert report["tools"]["health_check"]["errors"] == 1
+        assert report["tools"]["get_memory_by_id"]["count"] == 1
+        assert report["tools"]["get_memory_by_id"]["errors"] == 1
         assert report["cleanup_errors"] == 0
         assert all(
             report["tools"][name]["errors"] == 0
-            for name in ("add", "search", "get_all")
+            for name in (
+                "add_memories",
+                "search_memories",
+                "get_all_memories",
+                "delete_memories",
+            )
         )
     finally:
         await server.aclose()
@@ -192,13 +212,13 @@ async def test_benchmark_counts_mcp_tool_errors(
 async def test_benchmark_counts_timed_out_tool_and_cleans_up(
     server_config: Config, deterministic_embeddings: None
 ) -> None:
-    async def slow_health(
-        _server: FastMCPServer, workspace_id: str
+    async def slow_lookup(
+        _server: FastMCPServer, id: int, workspace_id: str
     ) -> dict[str, object]:
         await anyio.sleep(1)
         return {"workspace_id": workspace_id}
 
-    with patch.object(FastMCPServer, "_health_check", slow_health):
+    with patch.object(FastMCPServer, "_get_memory_by_id", slow_lookup):
         server = FastMCPServer(server_config)
     workspace_id = "benchmark-timeout"
     try:
@@ -208,11 +228,13 @@ async def test_benchmark_counts_timed_out_tool_and_cleans_up(
         reopened = FastMCPServer(server_config)
         try:
             async with Client(reopened.mcp) as client:
-                page = await client.call_tool("get_all", {"workspace_id": workspace_id})
+                page = await client.call_tool(
+                    "get_all_memories", {"workspace_id": workspace_id}
+                )
         finally:
             await reopened.aclose()
-        assert report["tools"]["health_check"]["errors"] == 1
-        assert report["tools"]["health_check"]["count"] == 1
+        assert report["tools"]["get_memory_by_id"]["errors"] == 1
+        assert report["tools"]["get_memory_by_id"]["count"] == 1
         assert report["cleanup_errors"] == 0
         assert page.structured_content is not None
         assert page.structured_content["total"] == 0
@@ -226,11 +248,11 @@ async def test_benchmark_reports_cleanup_tool_error(
     server_config: Config, deterministic_embeddings: None
 ) -> None:
     async def failed_remove(
-        _server: FastMCPServer, memories: list[str], workspace_id: str
-    ) -> None:
+        _server: FastMCPServer, ids: list[int], workspace_id: str
+    ) -> dict[str, object]:
         raise RuntimeError("remove unavailable")
 
-    with patch.object(FastMCPServer, "_remove", failed_remove):
+    with patch.object(FastMCPServer, "_delete_memories", failed_remove):
         server = FastMCPServer(server_config)
     try:
         report = await run_benchmark(
@@ -247,11 +269,16 @@ async def test_benchmark_bounds_cleanup_tool_call(
     server_config: Config, deterministic_embeddings: None
 ) -> None:
     async def slow_remove(
-        _server: FastMCPServer, memories: list[str], workspace_id: str
-    ) -> None:
-        await anyio.sleep(1)
+        server: FastMCPServer, ids: list[int], workspace_id: str
+    ) -> dict[str, object]:
+        async with server._registry.acquire(workspace_id) as manager:
+            rows, _ = manager.get_records(ids)
+        if any(row.content.endswith(" seed") for row in rows):
+            await anyio.sleep(1)
+        return await original_delete(server, ids, workspace_id)
 
-    with patch.object(FastMCPServer, "_remove", slow_remove):
+    original_delete = FastMCPServer._delete_memories
+    with patch.object(FastMCPServer, "_delete_memories", slow_remove):
         server = FastMCPServer(server_config)
     try:
         report = await run_benchmark(
@@ -273,12 +300,12 @@ async def test_benchmark_cleans_seed_after_warmup_error(
     server_config: Config, deterministic_embeddings: None
 ) -> None:
     async def slow_search(
-        _server: FastMCPServer, query: str, workspace_id: str
-    ) -> list[str]:
+        _server: FastMCPServer, query: str, workspace_id: str, limit: int | None = None
+    ) -> dict[str, object]:
         await anyio.sleep(1)
-        return []
+        return {"results": [], "score_kind": "semantic", "limit": limit or 5}
 
-    with patch.object(FastMCPServer, "_search", slow_search):
+    with patch.object(FastMCPServer, "_search_memories", slow_search):
         server = FastMCPServer(server_config)
     workspace_id = "benchmark-warmup-timeout"
     try:
@@ -296,7 +323,9 @@ async def test_benchmark_cleans_seed_after_warmup_error(
         reopened = FastMCPServer(server_config)
         try:
             async with Client(reopened.mcp) as client:
-                page = await client.call_tool("get_all", {"workspace_id": workspace_id})
+                page = await client.call_tool(
+                    "get_all_memories", {"workspace_id": workspace_id}
+                )
         finally:
             await reopened.aclose()
         assert page.structured_content is not None
@@ -311,18 +340,18 @@ async def test_benchmark_reports_cleanup_error_when_warmup_fails(
     server_config: Config, deterministic_embeddings: None
 ) -> None:
     async def failed_search(
-        _server: FastMCPServer, query: str, workspace_id: str
-    ) -> list[str]:
-        raise RuntimeError("search unavailable")
+        _server: FastMCPServer, query: str, workspace_id: str, limit: int | None = None
+    ) -> dict[str, object]:
+        raise RuntimeError("warmup search unavailable")
 
     async def failed_remove(
-        _server: FastMCPServer, memories: list[str], workspace_id: str
-    ) -> None:
+        _server: FastMCPServer, ids: list[int], workspace_id: str
+    ) -> dict[str, object]:
         raise RuntimeError("remove unavailable")
 
     with (
-        patch.object(FastMCPServer, "_search", failed_search),
-        patch.object(FastMCPServer, "_remove", failed_remove),
+        patch.object(FastMCPServer, "_search_memories", failed_search),
+        patch.object(FastMCPServer, "_delete_memories", failed_remove),
     ):
         server = FastMCPServer(server_config)
     try:
@@ -332,7 +361,8 @@ async def test_benchmark_reports_cleanup_error_when_warmup_fails(
             )
         assert failure.value.__notes__ == ["benchmark cleanup_errors=2"]
         assert any(
-            isinstance(error, RuntimeError) and "warmup search" in str(error)
+            isinstance(error, RuntimeError)
+            and "MCP tool returned an error" in str(error)
             for error in failure.value.exceptions
         )
     finally:

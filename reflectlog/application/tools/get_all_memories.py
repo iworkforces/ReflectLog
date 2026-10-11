@@ -11,18 +11,18 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 
-class ListRecordsTool(BaseTool):
+class GetAllMemoriesTool(BaseTool):
     @override
     def get_name(self) -> str:
-        return ToolName.LIST_RECORDS
+        return ToolName.GET_ALL_MEMORIES
 
     @override
     def get_instruction_snippet(self) -> str:
-        return "    • list_records(limit=None, offset=0) -> dict\n      Page stable-id records in id order with a total; same cap as get_all."
+        return "    • get_all_memories(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict\n      Page stable-id records in id order with a total; limit=0 returns the total only."
 
     @override
     def get_handler(self) -> Callable[..., Awaitable[dict[str, object]]]:
-        async def list_records(
+        async def get_all_memories(
             limit: int | None = None, offset: int = 0
         ) -> dict[str, object]:
             start = max(0, offset)
@@ -35,6 +35,19 @@ class ListRecordsTool(BaseTool):
                 records, total = await asyncify(
                     self.memory.get_page_records_with_total
                 )(limit=page_size, offset=start)
+                # limit=0 is the connectivity probe; an empty page is expected.
+                if page_size and start + len(records) < total:
+                    self.logger.warning(
+                        "get_all_memories truncated",
+                        extra={
+                            "tool": self.get_name(),
+                            "returned": len(records),
+                            "total": total,
+                            "offset": start,
+                            "limit": page_size,
+                        },
+                    )
+                self.log_completion(self.get_name(), count=len(records), total=total)
                 return {
                     "records": [
                         {
@@ -59,4 +72,4 @@ class ListRecordsTool(BaseTool):
                     offset=start,
                 )
 
-        return list_records
+        return get_all_memories

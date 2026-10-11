@@ -166,7 +166,7 @@ async def test_signal_shutdown_drains_real_storage_and_reopens(
         client_factory = cast("Callable[[object], Client]", Client)
         async with client_factory(server.mcp) as client:
             _ = await client.call_tool(
-                "add",
+                "add_memories",
                 {"workspace_id": "durable", "memories": ["shutdown survives restart"]},
             )
 
@@ -204,7 +204,9 @@ async def test_signal_shutdown_drains_real_storage_and_reopens(
 
         reopened = FastMCPServer(config)
         async with client_factory(reopened.mcp) as client:
-            page = await client.call_tool("get_all", {"workspace_id": "durable"})
+            page = await client.call_tool(
+                "get_all_memories", {"workspace_id": "durable"}
+            )
             assert "shutdown survives restart" in page.content[0].text
 
 

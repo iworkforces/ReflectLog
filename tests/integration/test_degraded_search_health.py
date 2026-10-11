@@ -11,7 +11,6 @@ import pytest
 from reflectlog.application.config.settings import Config
 from reflectlog.application.memory.manager import MemoryManager
 from reflectlog.application.memory.workspace_registry import WorkspaceRegistry
-from reflectlog.application.tools.health_check import HealthCheckTool
 from reflectlog.core.enums import RerankerEngine, SearchComponent
 from reflectlog.core.exceptions import SearchError
 from reflectlog.core.search_health import SearchFailureSnapshot
@@ -53,24 +52,23 @@ def manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[MemoryM
         cleanup_manager(active)
 
 
-async def health(manager: MemoryManager) -> dict[str, object]:
-    return await HealthCheckTool(
-        manager.config, manager, manager.logger
-    ).get_handler()()
+async def health(manager: MemoryManager) -> dict[str, dict[str, int | str | None]]:
+    return manager.search_failure_snapshot().to_dict()
 
 
 def assert_failures(
-    payload: dict[str, object], counts: dict[SearchComponent, int]
+    payload: dict[str, dict[str, int | str | None]], counts: dict[SearchComponent, int]
 ) -> None:
-    records = payload["search_failures"]
-    assert isinstance(records, dict)
+    records = payload
     assert set(records) == {component.value for component in SearchComponent}
     for component in SearchComponent:
         record = records[component.value]
         assert set(record) == {"count", "last_failure_at", "exception_type"}
         assert record["count"] == counts.get(component, 0)
         if component in counts:
-            timestamp = datetime.fromisoformat(record["last_failure_at"])
+            raw_timestamp = record["last_failure_at"]
+            assert isinstance(raw_timestamp, str)
+            timestamp = datetime.fromisoformat(raw_timestamp)
             assert timestamp.utcoffset() == timedelta(0)
             assert record["exception_type"] == (
                 "OSError"

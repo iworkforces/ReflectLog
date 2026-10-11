@@ -1,4 +1,4 @@
-"""Add tool implementation for ReflectLog Server."""
+"""Implementation of the add_memories tool for ReflectLog Server."""
 
 from typing import TYPE_CHECKING, override
 
@@ -12,19 +12,19 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 
-class AddTool(BaseTool):
+class AddMemoriesTool(BaseTool):
     """Tool for adding memories to memory storage."""
 
     @override
     def get_name(self) -> str:
         """Get the tool name."""
-        return ToolName.ADD
+        return ToolName.ADD_MEMORIES
 
     @override
     def get_instruction_snippet(self) -> str:
         """Get the instruction snippet for MCP_INSTRUCTIONS."""
         return (
-            "    • add(memories: list[str], dry_run: bool = False, allow_replace: bool = True) -> dict\n"
+            "    • add_memories(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict\n"
             "      Add memories with semantic embeddings. Empty lists are no-op.\n"
             "      Returns stored/skipped/replaced counts. dry_run previews replacements."
         )
@@ -33,7 +33,7 @@ class AddTool(BaseTool):
     def get_handler(self) -> Callable[..., Awaitable[dict[str, object]]]:
         """Get the async tool handler function."""
 
-        async def add(
+        async def add_memories(
             memories: list[str], dry_run: bool = False, allow_replace: bool = True
         ) -> dict[str, object]:
             """Add memories to the memory store with parallel processing (async).
@@ -71,7 +71,7 @@ class AddTool(BaseTool):
             """
             # Handle empty list gracefully (no-op, no error)
             if not memories:
-                self.log_invocation(ToolName.ADD, count=0)
+                self.log_invocation(ToolName.ADD_MEMORIES, count=0)
                 self.logger.info("Add called with empty list, nothing to store")
                 return {
                     "stored_count": 0,
@@ -91,18 +91,23 @@ class AddTool(BaseTool):
                 )
 
             if not is_valid:
-                self.log_error(ToolName.ADD, ValueError(error_msg), count=len(memories))
+                self.log_error(
+                    ToolName.ADD_MEMORIES, ValueError(error_msg), count=len(memories)
+                )
                 raise ValueError(f"Invalid memory: {error_msg}")
 
             # Log invocation and operation header
             mode_str = "DRY_RUN" if dry_run else "LIVE"
             self.log_invocation(
-                ToolName.ADD, count=len(memories), mode=mode_str, dry_run=dry_run
+                ToolName.ADD_MEMORIES,
+                count=len(memories),
+                mode=mode_str,
+                dry_run=dry_run,
             )
 
             total_chars = sum(len(m) for m in memories)
             start_time = self._log_operation_header(
-                "add",
+                "add_memories",
                 f"ADD OPERATION: Storing {len(memories)} memory(ies) "
                 f"({total_chars:,} total characters)",
                 memory_count=len(memories),
@@ -112,7 +117,7 @@ class AddTool(BaseTool):
             self.logger.info(
                 f"  {len(memories)} memory payload(s), {total_chars:,} characters",
                 extra={
-                    "tool": "add",
+                    "tool": "add_memories",
                     "memory_count": len(memories),
                     "total_characters": total_chars,
                 },
@@ -130,7 +135,7 @@ class AddTool(BaseTool):
 
                 self.logger.info(
                     "─" * 50,
-                    extra={"tool": "add", "section": "summary"},
+                    extra={"tool": "add_memories", "section": "summary"},
                 )
 
                 # Build summary message
@@ -147,7 +152,7 @@ class AddTool(BaseTool):
                     self.logger.info(
                         f"ADD SUMMARY: {summary}",
                         extra={
-                            "tool": "add",
+                            "tool": "add_memories",
                             "stored_count": stored_count,
                             "replaced_count": replaced_count,
                             "skipped_count": skipped_count,
@@ -157,7 +162,7 @@ class AddTool(BaseTool):
                     self.logger.info(
                         f"ADD COMPLETE: All {stored_count} memory(ies) stored successfully",
                         extra={
-                            "tool": "add",
+                            "tool": "add_memories",
                             "stored_count": stored_count,
                         },
                     )
@@ -166,22 +171,22 @@ class AddTool(BaseTool):
                     self.logger.info(
                         f"  {len(result.replacements)} replacement(s)",
                         extra={
-                            "tool": "add",
+                            "tool": "add_memories",
                             "action": "replacement",
                             "replacement_count": len(result.replacements),
                         },
                     )
 
-                duration_ms = self._log_operation_footer("add", start_time)
+                duration_ms = self._log_operation_footer("add_memories", start_time)
 
                 avg_time = duration_ms / len(memories) if memories else 0
                 self.logger.info(
                     f"  {avg_time:.0f}ms/memory avg",
-                    extra={"tool": "add", "avg_ms_per_memory": avg_time},
+                    extra={"tool": "add_memories", "avg_ms_per_memory": avg_time},
                 )
 
                 self.log_completion(
-                    ToolName.ADD, requested=len(memories), stored=stored_count
+                    ToolName.ADD_MEMORIES, requested=len(memories), stored=stored_count
                 )
                 return {
                     "stored_count": stored_count,
@@ -201,7 +206,7 @@ class AddTool(BaseTool):
 
             except Exception as e:
                 self._raise_tool_error(
-                    "add",
+                    "add_memories",
                     e,
                     error_cls=StorageError,
                     message="Failed to add memories to memory store",
@@ -209,4 +214,4 @@ class AddTool(BaseTool):
                 )
                 raise
 
-        return add
+        return add_memories

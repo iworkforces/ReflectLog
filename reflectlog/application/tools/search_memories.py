@@ -12,18 +12,18 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 
-class SearchRecordsTool(BaseTool):
+class SearchMemoriesTool(BaseTool):
     @override
     def get_name(self) -> str:
-        return ToolName.SEARCH_RECORDS
+        return ToolName.SEARCH_MEMORIES
 
     @override
     def get_instruction_snippet(self) -> str:
-        return "    • search_records(query, limit=None) -> dict\n      Search with stable ids, final scores and score_kind. Limit 1..50."
+        return "    • search_memories(query: str, workspace_id: str, limit: int | None = None) -> dict\n      Search with stable ids, final scores and score_kind. Limit 1..50."
 
     @override
     def get_handler(self) -> Callable[..., Awaitable[dict[str, object]]]:
-        async def search_records(
+        async def search_memories(
             query: Annotated[str, Field(min_length=1, max_length=1000)],
             limit: Annotated[
                 int | None, Field(ge=1, le=MAX_SEARCH_RECORDS_LIMIT)
@@ -40,14 +40,34 @@ class SearchRecordsTool(BaseTool):
                 self.log_invocation(
                     self.get_name(), query_length=len(query), limit=page_size
                 )
+                start_time = self._log_operation_header(
+                    self.get_name(), "SEARCH OPERATION"
+                )
+                if self.config.log_search_results_verbose:
+                    self.logger.info("Query length", extra={"query_length": len(query)})
                 result = await self.memory.search_records(query, limit=page_size)
+                result_count = len(result.records)
+                if self.config.log_search_results_verbose:
+                    self.logger.info(
+                        "FINAL RESULTS", extra={"result_count": result_count}
+                    )
+                    self.logger.info(
+                        "Returning results"
+                        if result_count
+                        else "No matching memories found",
+                        extra={"result_count": result_count},
+                    )
+                _ = self._log_operation_footer(self.get_name(), start_time)
+                self.log_completion(
+                    self.get_name(), query_length=len(query), result_count=result_count
+                )
                 return {
                     "results": [
                         {
                             "id": row.id,
                             "memory": row.content,
                             "score": row.score,
-                            "created_at": row.created_at,
+                            "created_at": row.created_at or None,
                         }
                         for row in result.records
                     ],
@@ -63,4 +83,4 @@ class SearchRecordsTool(BaseTool):
                     query_length=len(query),
                 )
 
-        return search_records
+        return search_memories

@@ -49,7 +49,7 @@ class TestServerInitializationErrors:
         try:
             assert server.config.workspace_id == ""
             with pytest.raises(TypeError, match="workspace_id"):
-                await server.registered_tools["health_check"].fn()
+                await server.registered_tools["get_all_memories"].fn()
         finally:
             await server.aclose()
 
@@ -80,7 +80,7 @@ class TestServerInitializationErrors:
         mock_usearch_engine_class.assert_not_called()
         try:
             with pytest.raises(Exception) as exc_info:
-                await server.registered_tools["get_all"].fn(
+                await server.registered_tools["get_all_memories"].fn(
                     workspace_id=set_env_vars["WORKSPACE_ID"]
                 )
         finally:
@@ -90,8 +90,8 @@ class TestServerInitializationErrors:
 
 
 @pytest.mark.unit
-class TestAddToolErrorHandling:
-    """Test error handling in add tool."""
+class TestAddMemoriesToolErrorHandling:
+    """Test error handling in add_memories tool."""
 
     @pytest.mark.asyncio
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
@@ -105,7 +105,7 @@ class TestAddToolErrorHandling:
         mock_usearch_engine: MagicMock,
         set_env_vars: dict[str, str],
     ):
-        """Test add tool handles memory storage failures."""
+        """Test add_memories tool handles memory storage failures."""
         # Configure CachedEmbeddings mock
         mock_cached_embedder = MagicMock()
         mock_cached_embedder.embedder = MagicMock()
@@ -126,10 +126,12 @@ class TestAddToolErrorHandling:
         from reflectlog.application.mcp_server import FastMCPServer
 
         mcp_server = FastMCPServer()
-        add_tool = mcp_server.registered_tools["add"].fn
+        add_memories_tool = mcp_server.registered_tools["add_memories"].fn
 
         with pytest.raises(StorageError) as exc_info:
-            await add_tool(["Test message"], workspace_id=set_env_vars["WORKSPACE_ID"])
+            await add_memories_tool(
+                ["Test message"], workspace_id=set_env_vars["WORKSPACE_ID"]
+            )
 
         assert "Failed to add memories" in str(exc_info.value)
         assert "Storage failure" in str(exc_info.value)
@@ -146,7 +148,7 @@ class TestAddToolErrorHandling:
         mock_usearch_engine: MagicMock,
         set_env_vars: dict[str, str],
     ):
-        """Test add tool validation error with non-string message."""
+        """Test add_memories tool validation error with non-string message."""
         # Configure CachedEmbeddings mock
         mock_cached_embedder = MagicMock()
         mock_cached_embedder.embedder = MagicMock()
@@ -157,10 +159,10 @@ class TestAddToolErrorHandling:
         from reflectlog.application.mcp_server import FastMCPServer
 
         mcp_server = FastMCPServer()
-        add_tool = mcp_server.registered_tools["add"].fn
+        add_memories_tool = mcp_server.registered_tools["add_memories"].fn
 
         with pytest.raises(ValueError) as exc_info:
-            await add_tool(
+            await add_memories_tool(
                 [123, "Valid message"], workspace_id=set_env_vars["WORKSPACE_ID"]
             )
 
@@ -178,7 +180,7 @@ class TestAddToolErrorHandling:
         mock_usearch_engine: MagicMock,
         set_env_vars: dict[str, str],
     ):
-        """Test add tool validation error with empty string."""
+        """Test add_memories tool validation error with empty string."""
         # Configure CachedEmbeddings mock
         mock_cached_embedder = MagicMock()
         mock_cached_embedder.embedder = MagicMock()
@@ -189,17 +191,17 @@ class TestAddToolErrorHandling:
         from reflectlog.application.mcp_server import FastMCPServer
 
         mcp_server = FastMCPServer()
-        add_tool = mcp_server.registered_tools["add"].fn
+        add_memories_tool = mcp_server.registered_tools["add_memories"].fn
 
         with pytest.raises(ValueError) as exc_info:
-            await add_tool([""], workspace_id=set_env_vars["WORKSPACE_ID"])
+            await add_memories_tool([""], workspace_id=set_env_vars["WORKSPACE_ID"])
 
         assert "contains only whitespace" in str(exc_info.value).lower()
 
 
 @pytest.mark.unit
-class TestGetAllToolErrorHandling:
-    """Test error handling in get_all tool."""
+class TestGetAllMemoriesToolErrorHandling:
+    """Test error handling in get_all_memories tool."""
 
     @pytest.mark.asyncio
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
@@ -213,31 +215,33 @@ class TestGetAllToolErrorHandling:
         mock_usearch_engine: MagicMock,
         set_env_vars: dict[str, str],
     ):
-        """Test get_all tool handles retrieval failures."""
+        """Test get_all_memories tool handles retrieval failures."""
         # Configure CachedEmbeddings mock
         mock_cached_embedder = MagicMock()
         mock_cached_embedder.embedder = MagicMock()
         mock_cached_embedder_class.return_value = mock_cached_embedder
 
-        # Configure mock to raise exception on get_all
-        mock_usearch_engine.get_all.side_effect = Exception("Retrieval failure")
+        # Configure mock to raise exception on page reads
+        mock_usearch_engine.memory_store.get_page_records.side_effect = Exception(
+            "Retrieval failure"
+        )
         mock_usearch_engine_class.return_value = mock_usearch_engine
 
         from reflectlog.application.mcp_server import FastMCPServer
 
         mcp_server = FastMCPServer()
-        get_all_tool = mcp_server.registered_tools["get_all"].fn
+        get_all_memories_tool = mcp_server.registered_tools["get_all_memories"].fn
 
         with pytest.raises(StorageError) as exc_info:
-            await get_all_tool(workspace_id=set_env_vars["WORKSPACE_ID"])
+            await get_all_memories_tool(workspace_id=set_env_vars["WORKSPACE_ID"])
 
-        assert "Failed to retrieve memories" in str(exc_info.value)
+        assert "Failed to list memory records" in str(exc_info.value)
         assert "Retrieval failure" in str(exc_info.value)
 
 
 @pytest.mark.unit
-class TestSearchToolErrorHandling:
-    """Test error handling in search tool."""
+class TestSearchMemoriesToolErrorHandling:
+    """Test error handling in search_memories tool."""
 
     @pytest.mark.asyncio
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
@@ -251,7 +255,7 @@ class TestSearchToolErrorHandling:
         mock_usearch_engine: MagicMock,
         set_env_vars: dict[str, str],
     ):
-        """Test search tool handles search failures."""
+        """Test search_memories tool handles search failures."""
         # Configure CachedEmbeddings mock
         mock_cached_embedder = MagicMock()
         mock_cached_embedder.embedder = MagicMock()
@@ -264,21 +268,23 @@ class TestSearchToolErrorHandling:
         from reflectlog.application.mcp_server import FastMCPServer
 
         mcp_server = FastMCPServer()
-        search_tool = mcp_server.registered_tools["search"].fn
+        search_memories_tool = mcp_server.registered_tools["search_memories"].fn
 
-        with pytest.raises(SearchError, match="Failed to search memory store"):
-            await search_tool("test query", workspace_id=set_env_vars["WORKSPACE_ID"])
+        with pytest.raises(SearchError, match="Failed to search memory records"):
+            await search_memories_tool(
+                "test query", workspace_id=set_env_vars["WORKSPACE_ID"]
+            )
 
 
 @pytest.mark.unit
-class TestRemoveToolErrorHandling:
-    """Test error handling in remove tool."""
+class TestDeleteMemoriesToolErrorHandling:
+    """Test error handling in delete_memories tool."""
 
     @pytest.mark.asyncio
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
     @patch("reflectlog.application.memory.manager.USearchEngine")
     @patch("reflectlog.application.memory.manager.CachedEmbeddings")
-    async def test_remove_with_empty_list(
+    async def test_delete_with_empty_list(
         self,
         mock_cached_embedder_class: MagicMock,
         mock_usearch_engine_class: MagicMock,
@@ -286,7 +292,7 @@ class TestRemoveToolErrorHandling:
         mock_usearch_engine: MagicMock,
         set_env_vars: dict[str, str],
     ):
-        """Test remove tool with empty list (no-op)."""
+        """Test delete_memories tool with empty list (no-op)."""
         # Configure CachedEmbeddings mock
         mock_cached_embedder = MagicMock()
         mock_cached_embedder.embedder = MagicMock()
@@ -297,10 +303,10 @@ class TestRemoveToolErrorHandling:
         from reflectlog.application.mcp_server import FastMCPServer
 
         mcp_server = FastMCPServer()
-        remove_tool = mcp_server.registered_tools["remove"].fn
+        delete_memories_tool = mcp_server.registered_tools["delete_memories"].fn
 
         # Should not raise any errors
-        await remove_tool([], workspace_id=set_env_vars["WORKSPACE_ID"])
+        await delete_memories_tool([], workspace_id=set_env_vars["WORKSPACE_ID"])
 
         # Verify delete was never called
         mock_usearch_engine.delete.assert_not_called()
@@ -309,7 +315,7 @@ class TestRemoveToolErrorHandling:
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
     @patch("reflectlog.application.memory.manager.USearchEngine")
     @patch("reflectlog.application.memory.manager.CachedEmbeddings")
-    async def test_remove_memory_delete_failure(
+    async def test_delete_memory_delete_failure(
         self,
         mock_cached_embedder_class: MagicMock,
         mock_usearch_engine_class: MagicMock,
@@ -317,7 +323,7 @@ class TestRemoveToolErrorHandling:
         mock_usearch_engine: MagicMock,
         set_env_vars: dict[str, str],
     ):
-        """Test remove tool handles delete failures."""
+        """Test delete_memories tool handles delete failures."""
         # Configure CachedEmbeddings mock
         mock_cached_embedder = MagicMock()
         mock_cached_embedder.embedder = MagicMock()
@@ -331,21 +337,25 @@ class TestRemoveToolErrorHandling:
         from reflectlog.application.mcp_server import FastMCPServer
 
         mcp_server = FastMCPServer()
-        remove_tool = mcp_server.registered_tools["remove"].fn
+        delete_memories_tool = mcp_server.registered_tools["delete_memories"].fn
 
-        with pytest.raises(StorageError) as exc_info:
-            await remove_tool(
-                ["Test message"], workspace_id=set_env_vars["WORKSPACE_ID"]
-            )
+        with (
+            patch(
+                "reflectlog.application.memory.manager.MemoryManager.delete_records",
+                side_effect=StorageError("Delete failure"),
+            ),
+            pytest.raises(StorageError) as exc_info,
+        ):
+            await delete_memories_tool([1], workspace_id=set_env_vars["WORKSPACE_ID"])
 
-        assert "Failed to remove memories" in str(exc_info.value)
+        assert "Failed to remove memory records" in str(exc_info.value)
         assert "Delete failure" in str(exc_info.value)
 
     @pytest.mark.asyncio
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
     @patch("reflectlog.application.memory.manager.USearchEngine")
     @patch("reflectlog.application.memory.manager.CachedEmbeddings")
-    async def test_remove_memory_not_found(
+    async def test_delete_memory_not_found(
         self,
         mock_cached_embedder_class: MagicMock,
         mock_usearch_engine_class: MagicMock,
@@ -353,7 +363,7 @@ class TestRemoveToolErrorHandling:
         mock_usearch_engine: MagicMock,
         set_env_vars: dict[str, str],
     ):
-        """Test remove tool when memory is not found."""
+        """Test delete_memories tool when the id is not found."""
         # Configure CachedEmbeddings mock
         mock_cached_embedder = MagicMock()
         mock_cached_embedder.embedder = MagicMock()
@@ -366,12 +376,17 @@ class TestRemoveToolErrorHandling:
         from reflectlog.application.mcp_server import FastMCPServer
 
         mcp_server = FastMCPServer()
-        remove_tool = mcp_server.registered_tools["remove"].fn
+        delete_memories_tool = mcp_server.registered_tools["delete_memories"].fn
 
         # Should not raise any errors, just silently skip
-        await remove_tool(
-            ["Nonexistent memory"], workspace_id=set_env_vars["WORKSPACE_ID"]
-        )
+        with patch(
+            "reflectlog.application.memory.manager.MemoryManager.get_records",
+            return_value=([], [99]),
+        ):
+            result = await delete_memories_tool(
+                [99], workspace_id=set_env_vars["WORKSPACE_ID"]
+            )
+        assert result == {"removed": [], "missing": [99]}
 
         # Verify delete was never called
         mock_usearch_engine.delete.assert_not_called()

@@ -34,7 +34,7 @@ async def test_records_workflow_real_engines(
                 "execute",
                 AsyncMock(side_effect=AssertionError("must not replace")),
             ) as replace_phase:
-                added = await server._add(
+                added = await server._add_memories(
                     [
                         "Python astronomy notebook",
                         "Python gardening notebook",
@@ -45,7 +45,7 @@ async def test_records_workflow_real_engines(
                 )
                 assert added["stored_count"] == 3
                 assert added["replaced_count"] == 0
-                results = await server._search_records("Python", workspace, limit=3)
+                results = await server._search_memories("Python", workspace, limit=3)
                 hits = results["results"]
                 assert isinstance(hits, list)
                 assert hits
@@ -57,20 +57,35 @@ async def test_records_workflow_real_engines(
                     ids.append(hit["id"])
                 assert results["score_kind"] in {"rrf", "semantic", "fulltext"}
                 assert results["limit"] == 3
-                resolved = await server._get_records(ids, workspace)
-                assert resolved["missing"] == []
-                page = await server._list_records(workspace, limit=2)
+                for hit, id in zip(hits, ids, strict=True):
+                    resolved = await server._get_memory_by_id(id, workspace)
+                    record = resolved["record"]
+                    assert isinstance(record, dict)
+                    assert record["id"] == id
+                    assert record["memory"] == hit["memory"]
+                missing_id = max(ids) + 1
+                assert await server._get_memory_by_id(missing_id, workspace) == {
+                    "record": None
+                }
+                assert await server._get_memory_by_id(ids[0], "foreign-workspace") == {
+                    "record": None
+                }
+                empty_page = await server._get_all_memories(workspace, limit=0)
+                assert empty_page["records"] == []
+                assert empty_page["total"] == 3
+                page = await server._get_all_memories(workspace, limit=2)
                 assert page["total"] == 3
                 assert page["truncated"] is True
-                assert await server._remove_records([ids[0]], workspace) == {
+                assert await server._delete_memories(
+                    [ids[0], missing_id], workspace
+                ) == {
                     "removed": [ids[0]],
-                    "missing": [],
+                    "missing": [missing_id],
                 }
-                assert await server._get_records([ids[0]], workspace) == {
-                    "records": [],
-                    "missing": [ids[0]],
+                assert await server._get_memory_by_id(ids[0], workspace) == {
+                    "record": None,
                 }
-                again = await server._add(
+                again = await server._add_memories(
                     ["Python astronomy notebook updated"],
                     workspace,
                     allow_replace=False,

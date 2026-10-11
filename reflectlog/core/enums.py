@@ -183,7 +183,7 @@ class WeMMDevice(StrEnum):
 
 
 class EngineReadiness(StrEnum):
-    """Public search-engine readiness reported by health checks."""
+    """Search-engine readiness reported by ``MemoryManager.search_engine_status``."""
 
     INITIALIZED = "initialized"
     PENDING = "pending"
@@ -192,26 +192,14 @@ class EngineReadiness(StrEnum):
     UNKNOWN = "unknown"
 
 
-class HealthStatus(StrEnum):
-    """Overall server health reported by ``health_check``."""
-
-    HEALTHY = "healthy"
-    DEGRADED = "degraded"
-    UNHEALTHY = "unhealthy"
-
-
 class ToolName(StrEnum):
     """Registered MCP tool identifiers."""
 
-    ADD = "add"
-    GET_ALL = "get_all"
-    SEARCH = "search"
-    REMOVE = "remove"
-    HEALTH_CHECK = "health_check"
-    SEARCH_RECORDS = "search_records"
-    GET_RECORDS = "get_records"
-    LIST_RECORDS = "list_records"
-    REMOVE_RECORDS = "remove_records"
+    ADD_MEMORIES = "add_memories"
+    SEARCH_MEMORIES = "search_memories"
+    GET_ALL_MEMORIES = "get_all_memories"
+    GET_MEMORY_BY_ID = "get_memory_by_id"
+    DELETE_MEMORIES = "delete_memories"
 
 
 class ConfigProfile(StrEnum):
