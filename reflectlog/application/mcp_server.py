@@ -25,7 +25,7 @@ from reflectlog.application.tools.delete_memories import DeleteMemoriesTool
 from reflectlog.application.tools.get_all_memories import GetAllMemoriesTool
 from reflectlog.application.tools.get_memory_by_id import GetMemoryByIdTool
 from reflectlog.application.tools.search_memories import SearchMemoriesTool
-from reflectlog.core.enums import EmbedderProvider, TransportMode
+from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import ConfigurationError
 from reflectlog.core.prompts import build_instructions
 
@@ -436,7 +436,7 @@ class FastMCPServer:
 
     def _install_http_auth(self) -> None:
         """Attach bearer middleware when a token is configured for HTTP."""
-        if self._http_auth_installed or self.config.transport == TransportMode.STDIO:
+        if self._http_auth_installed:
             return
         auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
         if not auth_token:
@@ -453,11 +453,6 @@ class FastMCPServer:
         """
         transport = self.config.transport
 
-        if transport == TransportMode.STDIO:
-            self.logger.info("Running MCP server with stdio transport")
-            self.mcp.run(transport=TransportMode.STDIO)
-            return
-
         allow_public = os.environ.get("ALLOW_PUBLIC_BIND", "false").lower() == "true"
         if self._is_unspecified_bind(self.config.host) and not allow_public:
             raise ConfigurationError(
@@ -465,9 +460,7 @@ class FastMCPServer:
             )
         auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
         if not auth_token:
-            raise ConfigurationError(
-                "MCP_AUTH_TOKEN is required for non-stdio transports"
-            )
+            raise ConfigurationError("MCP_AUTH_TOKEN is required to run the MCP server")
         self._install_http_auth()
         self.logger.info(
             f"Running MCP server with {transport} transport",

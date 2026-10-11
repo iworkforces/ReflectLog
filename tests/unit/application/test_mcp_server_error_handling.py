@@ -433,45 +433,15 @@ class TestRunMethodCoverage:
         # Verify run was called
         mock_run.assert_called_once()
 
-    @patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}, clear=False)
-    @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
-    @patch("reflectlog.application.memory.manager.USearchEngine")
-    @patch("reflectlog.application.memory.manager.CachedEmbeddings")
-    def test_run_method_with_stdio_transport(
-        self,
-        mock_cached_embedder_class: MagicMock,
-        mock_usearch_engine_class: MagicMock,
-        mock_embeddings: MagicMock,
-        mock_usearch_engine: MagicMock,
-        set_env_vars: dict[str, str],
-    ):
-        """Test run() method with stdio transport."""
-        # Configure CachedEmbeddings mock
-        mock_cached_embedder = MagicMock()
-        mock_cached_embedder.embedder = MagicMock()
-        mock_cached_embedder_class.return_value = mock_cached_embedder
-
-        mock_usearch_engine_class.return_value = mock_usearch_engine
-
-        from reflectlog.application.mcp_server import FastMCPServer
-
-        mcp_server = FastMCPServer()
-        mock_run = MagicMock()
-        object.__setattr__(mcp_server.mcp, "run", mock_run)
-
-        mcp_server.run()
-
-        mock_run.assert_called_once()
-
     @patch.dict(
         os.environ,
-        {"MCP_TRANSPORT": "sse", "MCP_AUTH_TOKEN": "test-token"},
+        {"MCP_TRANSPORT": "streamable-http", "MCP_AUTH_TOKEN": "test-token"},
         clear=False,
     )
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
     @patch("reflectlog.application.memory.manager.USearchEngine")
     @patch("reflectlog.application.memory.manager.CachedEmbeddings")
-    def test_run_method_with_sse_transport(
+    def test_run_method_with_streamable_http_transport(
         self,
         mock_cached_embedder_class: MagicMock,
         mock_usearch_engine_class: MagicMock,
@@ -479,7 +449,7 @@ class TestRunMethodCoverage:
         mock_usearch_engine: MagicMock,
         set_env_vars: dict[str, str],
     ):
-        """Test run() method with SSE transport."""
+        """Test run() method with streamable HTTP transport."""
         # Configure CachedEmbeddings mock
         mock_cached_embedder = MagicMock()
         mock_cached_embedder.embedder = MagicMock()
@@ -495,7 +465,13 @@ class TestRunMethodCoverage:
 
         mcp_server.run()
 
-        mock_run.assert_called_once()
+        mock_run.assert_called_once_with(
+            transport="streamable-http",
+            port=mcp_server.config.port,
+            host=mcp_server.config.host,
+            path=mcp_server.config.path,
+            uvicorn_config={"timeout_graceful_shutdown": None},
+        )
 
     @patch.dict(
         os.environ,
@@ -540,6 +516,31 @@ class TestRunMethodCoverage:
 
 @pytest.mark.unit
 class TestHttpAuthAndBind:
+    @pytest.mark.parametrize("token", ["test-token", ""])
+    def test_default_config_installs_auth_only_with_token(
+        self, monkeypatch: pytest.MonkeyPatch, token: str
+    ) -> None:
+        from fastmcp import FastMCP
+
+        from reflectlog.application.config.settings import Config
+        from reflectlog.application.mcp_server import (
+            FastMCPServer,
+            _BearerTokenMiddleware,
+        )
+        from reflectlog.application.utils.security import SecretString
+
+        monkeypatch.setenv("MCP_AUTH_TOKEN", token)
+        with patch.object(FastMCP, "add_middleware", autospec=True) as add_middleware:
+            server = FastMCPServer(
+                Config(workspace_id="test", openrouter_api_key=SecretString("k"))
+            )
+            server._install_http_auth()
+        if token:
+            add_middleware.assert_called_once()
+            assert isinstance(add_middleware.call_args.args[1], _BearerTokenMiddleware)
+        else:
+            add_middleware.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_bearer_middleware_rejects_and_accepts(self) -> None:
         from fastmcp.exceptions import ToolError
