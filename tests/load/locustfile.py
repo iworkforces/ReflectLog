@@ -12,8 +12,26 @@ from uuid import uuid4
 import anyio
 from fastmcp import Client, FastMCP
 from fastmcp.client.transports import StreamableHttpTransport
+from pydantic import BaseModel
 
-TOOLS = ("add", "search", "get_all", "health_check")
+from tests.test_get_all_memories import (
+    AddResponse,
+    DeleteResponse,
+    GetResponse,
+    Page,
+    SearchResponse,
+    all_records,
+    parse_response,
+)
+
+RESPONSE_MODELS: dict[str, type[BaseModel]] = {
+    "add_memories": AddResponse,
+    "search_memories": SearchResponse,
+    "get_all_memories": Page,
+    "get_memory_by_id": GetResponse,
+    "delete_memories": DeleteResponse,
+}
+TOOLS = tuple(RESPONSE_MODELS)
 
 
 class ToolMetrics(TypedDict):
@@ -68,62 +86,112 @@ async def run_benchmark(
         prefix = f"reflectlog benchmark {workspace_id} run {run_id} worker {worker_id}"
         seed = f"{prefix} seed"
         memories = [seed, *(f"{prefix} item {i}" for i in range(iterations))]
+
+        async def measured(name: str, args: dict[str, object]) -> BaseModel | None:
+            started_at = perf_counter()
+            try:
+                with anyio.fail_after(timeout_seconds):
+                    result = await client.call_tool(name, args, raise_on_error=False)
+                response = parse_response(result, RESPONSE_MODELS[name])
+                if isinstance(response, GetResponse) and response.record is None:
+                    raise ValueError("Benchmark record missing")
+                if isinstance(response, DeleteResponse) and response.missing:
+                    raise ValueError("Benchmark deletion missed records")
+                return response
+            except Exception:
+                failures[name] += 1
+                return None
+            finally:
+                samples[name].append((perf_counter() - started_at) * 1000)
+
         try:
             async with warmup_lock:
                 warmed_at = perf_counter()
                 warmup_calls: tuple[tuple[str, dict[str, object]], ...] = (
-                    ("add", {"workspace_id": workspace_id, "memories": [seed]}),
-                    ("search", {"workspace_id": workspace_id, "query": seed}),
+                    (
+                        "add_memories",
+                        {
+                            "workspace_id": workspace_id,
+                            "memories": [seed],
+                            "allow_replace": False,
+                        },
+                    ),
+                    ("search_memories", {"workspace_id": workspace_id, "query": seed}),
+                    ("get_all_memories", {"workspace_id": workspace_id, "limit": 0}),
                 )
                 for name, args in warmup_calls:
                     with anyio.fail_after(timeout_seconds):
                         result = await client.call_tool(
                             name, args, raise_on_error=False
                         )
-                    if result.is_error:
-                        raise RuntimeError(f"warmup {name} failed")
+                    parse_response(result, RESPONSE_MODELS[name])
+                with anyio.fail_after(timeout_seconds):
+                    seeds = await all_records(client, workspace_id)
+                seed_id = next(row.id for row in seeds if row.memory == seed)
                 warmup_ms.append((perf_counter() - warmed_at) * 1000)
             ready[worker_id].set()
             await start.wait()
 
             for iteration in range(iterations):
                 memory = memories[iteration + 1]
-                measured_calls: tuple[tuple[str, dict[str, object]], ...] = (
-                    ("add", {"workspace_id": workspace_id, "memories": [memory]}),
-                    ("search", {"workspace_id": workspace_id, "query": memory}),
-                    ("get_all", {"workspace_id": workspace_id, "limit": 10}),
-                    ("health_check", {"workspace_id": workspace_id}),
+                await measured(
+                    "add_memories",
+                    {
+                        "workspace_id": workspace_id,
+                        "memories": [memory],
+                        "allow_replace": False,
+                    },
                 )
-                for name, args in measured_calls:
-                    started_at = perf_counter()
-                    try:
-                        with anyio.fail_after(timeout_seconds):
-                            result = await client.call_tool(
-                                name, args, raise_on_error=False
-                            )
-                    except Exception:
-                        failures[name] += 1
-                    else:
-                        if result.is_error:
-                            failures[name] += 1
-                    finally:
-                        samples[name].append((perf_counter() - started_at) * 1000)
+                searched = await measured(
+                    "search_memories",
+                    {"workspace_id": workspace_id, "query": memory, "limit": 50},
+                )
+                page = await measured(
+                    "get_all_memories", {"workspace_id": workspace_id, "limit": 10}
+                )
+                await measured(
+                    "get_all_memories", {"workspace_id": workspace_id, "limit": 0}
+                )
+                candidates = (
+                    searched.results if isinstance(searched, SearchResponse) else []
+                )
+                ids = [row.id for row in candidates if row.memory == memory]
+                if not ids and isinstance(page, Page):
+                    ids = [row.id for row in page.records if row.memory == memory]
+                await measured(
+                    "get_memory_by_id",
+                    {"workspace_id": workspace_id, "id": ids[0] if ids else seed_id},
+                )
+                await measured(
+                    "delete_memories", {"workspace_id": workspace_id, "ids": ids}
+                )
+                if not ids:
+                    failures["get_memory_by_id"] += 1
+                    failures["delete_memories"] += 1
             finished[worker_id].set()
             await cleanup_start.wait()
         finally:
             with anyio.CancelScope(shield=True):
                 try:
                     with anyio.fail_after(timeout_seconds):
-                        result = await client.call_tool(
-                            "remove",
-                            {"workspace_id": workspace_id, "memories": memories},
-                            raise_on_error=False,
-                        )
+                        records = await all_records(client, workspace_id)
+                        ids = [row.id for row in records if row.memory in memories]
+                        for offset in range(0, len(ids), 100):
+                            batch = ids[offset : offset + 100]
+                            deleted = parse_response(
+                                await client.call_tool(
+                                    "delete_memories",
+                                    {"workspace_id": workspace_id, "ids": batch},
+                                    raise_on_error=False,
+                                ),
+                                DeleteResponse,
+                            )
+                            if set(deleted.removed) != set(batch) or deleted.missing:
+                                raise ValueError(
+                                    "Benchmark cleanup did not remove its records"
+                                )
                 except Exception:
                     cleanup_errors += 1
-                else:
-                    if result.is_error:
-                        cleanup_errors += 1
 
     elapsed = 0.0
     client_stack = AsyncExitStack()
