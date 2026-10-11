@@ -22,13 +22,14 @@ import pytest
 
 from reflectlog.application.config.settings import Config
 from reflectlog.application.memory.manager import MemoryManager
-from reflectlog.application.tools.get_all import GetAllTool
+from reflectlog.application.tools.get_all_memories import GetAllMemoriesTool
 from reflectlog.application.utils.logging import StructuredLogger
 from reflectlog.application.utils.security import SecretString
 from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import StorageError
 from reflectlog.core.logging import IStructuredLogger
 from reflectlog.core.types import Embeddings
+from reflectlog.infrastructure.memory_store import MemoryRecord, MemoryStore
 from reflectlog.infrastructure.usearch_engine import USearchEngine
 
 pytestmark = pytest.mark.skipif(
@@ -395,20 +396,20 @@ class TestCoherentPage:
         monkeypatch.chdir(tmp_path)
         config = replace(create_test_config("coherent-mcp"), get_all_limit=2)
         manager = create_memory_manager(config)
-        handler = GetAllTool(config, manager, manager.logger).get_handler()
+        handler = GetAllMemoriesTool(config, manager, manager.logger).get_handler()
         page_read = threading.Event()
         release_read = threading.Event()
         writer_at_lease = threading.Event()
         writer_done = threading.Event()
-        original_get_all = USearchEngine.get_all
+        original_get_all = MemoryStore.get_page_records
         original_exclusive = manager._exclusive_workspace
 
         def paused_get_all(
-            engine: USearchEngine,
+            engine: MemoryStore,
             workspace_id: str,
             limit: int | None = None,
             offset: int = 0,
-        ) -> list[str]:
+        ) -> list[MemoryRecord]:
             page = original_get_all(engine, workspace_id, limit=limit, offset=offset)
             page_read.set()
             assert release_read.wait(timeout=20.0)
@@ -422,8 +423,10 @@ class TestCoherentPage:
 
         try:
             assert manager.add_memories(["first", "second", "third"]) == 3
+            initial_rows, _ = manager.get_page_records_with_total()
+            second = initial_rows[1]
             with monkeypatch.context() as patcher:
-                patcher.setattr(USearchEngine, "get_all", paused_get_all)
+                patcher.setattr(MemoryStore, "get_page_records", paused_get_all)
                 patcher.setattr(manager, "_exclusive_workspace", signaled_exclusive)
 
                 def add_row() -> int:
@@ -442,22 +445,34 @@ class TestCoherentPage:
                     finally:
                         release_read.set()
                     assert await asyncio.wait_for(response, timeout=20.0) == {
-                        "memories": ["second"],
+                        "records": [
+                            {
+                                "id": second.id,
+                                "memory": "second",
+                                "created_at": second.created_at,
+                            }
+                        ],
                         "total": 3,
                         "offset": 1,
                         "limit": 1,
                         "truncated": True,
                     }
                     assert writer.result(timeout=20.0) == 1
+            final_rows, _ = manager.get_page_records_with_total()
             assert await handler(limit=99, offset=2) == {
-                "memories": ["third", "fourth"],
+                "records": [
+                    {"id": row.id, "memory": text, "created_at": row.created_at}
+                    for row, text in zip(
+                        final_rows[2:], ["third", "fourth"], strict=True
+                    )
+                ],
                 "total": 4,
                 "offset": 2,
                 "limit": 2,
                 "truncated": False,
             }
             assert await handler(limit=0, offset=99) == {
-                "memories": [],
+                "records": [],
                 "total": 4,
                 "offset": 99,
                 "limit": 0,

@@ -149,9 +149,9 @@ class TestConfigAdapter:
     # -- IServerConfig properties --
 
     def test_transport_default(self, minimal_config: Config) -> None:
-        """Default transport is 'stdio'."""
+        """Default transport is 'http'."""
         adapter = ConfigAdapter(minimal_config)
-        assert adapter.transport == "stdio"
+        assert adapter.transport == "http"
 
     def test_host_default(self, minimal_config: Config) -> None:
         """Default host is 127.0.0.1."""
@@ -456,7 +456,7 @@ class TestServerConfigAdapter:
     def test_defaults(self, minimal_config: Config) -> None:
         """All defaults match Config defaults."""
         adapter = ServerConfigAdapter(minimal_config)
-        assert adapter.transport == "stdio"
+        assert adapter.transport == "http"
         assert adapter.host == "127.0.0.1"
         assert adapter.port == 9103
         assert adapter.path == "/mcp"

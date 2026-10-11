@@ -43,9 +43,9 @@ from reflectlog.application.memory.add_phases import (
 )
 from reflectlog.application.memory.manager import MemoryManager
 from reflectlog.application.memory.workspace_registry import WorkspaceRegistry
-from reflectlog.application.tools.add import AddTool
-from reflectlog.application.tools.remove import RemoveTool
-from reflectlog.application.tools.search import SearchTool
+from reflectlog.application.tools.add_memories import AddMemoriesTool
+from reflectlog.application.tools.delete_memories import DeleteMemoriesTool
+from reflectlog.application.tools.search_memories import SearchMemoriesTool
 from reflectlog.application.utils.logging import StructuredLogger
 from reflectlog.core.exceptions import InitializationError, SearchError, StorageError
 from reflectlog.core.logging import IStructuredLogger
@@ -407,7 +407,9 @@ class TestRefusalOfEveryOperationWhenLazy:
         _assert_no_memory_text_logged(logger)
 
     @pytest.mark.parametrize("drift", [Drift.MISSING_VECTOR, Drift.SWAPPED_IDS])
-    @pytest.mark.parametrize("tool_name", ["add", "search", "remove"])
+    @pytest.mark.parametrize(
+        "tool_name", ["add_memories", "search_memories", "delete_memories"]
+    )
     async def test_tool_wrapped_error_carries_the_operator_text(
         self, tmp_path: Path, drift: Drift, tool_name: str
     ) -> None:
@@ -419,17 +421,23 @@ class TestRefusalOfEveryOperationWhenLazy:
             call: Awaitable[object]
             expected: tuple[type[Exception], ...]
             match tool_name:
-                case "add":
-                    call = AddTool(config, manager, logger).get_handler()([FRESH])
+                case "add_memories":
+                    call = AddMemoriesTool(config, manager, logger).get_handler()(
+                        [FRESH]
+                    )
                     expected = (StorageError,)
-                case "search":
-                    call = SearchTool(config, manager, logger).get_handler()(
+                case "search_memories":
+                    call = SearchMemoriesTool(config, manager, logger).get_handler()(
                         CONTENTS["alpha"]
                     )
                     expected = (SearchError,)
                 case _:
-                    call = RemoveTool(config, manager, logger).get_handler()(
-                        [CONTENTS["alpha"]]
+                    rows, _ = manager.get_page_records_with_total()
+                    alpha_id = next(
+                        row.id for row in rows if row.content == CONTENTS["alpha"]
+                    )
+                    call = DeleteMemoriesTool(config, manager, logger).get_handler()(
+                        [alpha_id]
                     )
                     expected = (StorageError,)
             with pytest.raises(expected) as caught:

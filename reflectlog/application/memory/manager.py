@@ -29,7 +29,7 @@ Example:
 """
 
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import os
 import threading
 import time
@@ -73,6 +73,7 @@ from ...core.enums import (
     EngineReadiness,
     RerankerEngine,
     SearchComponent,
+    SearchScoreKind,
     TransitionKind,
     WeMMModel,
 )
@@ -94,6 +95,7 @@ from .search_health import SearchFailureRecorder
 from .search_strategies import (
     SearchContext,
     SearchPipeline,
+    SearchResult,
     calculate_adaptive_overfetch,
 )
 
@@ -102,7 +104,12 @@ if TYPE_CHECKING:
 
     from ...core.logging import IStructuredLogger
     from ...core.search_health import SearchFailureSnapshot
-    from ...core.types import Embeddings, ISemanticSearchEngine, ReplacementTransition
+    from ...core.types import (
+        Embeddings,
+        ISemanticSearchEngine,
+        IStoredMemory,
+        ReplacementTransition,
+    )
     from ..config.settings import Config
     from .fusion.base import FusionEngine
 
@@ -125,6 +132,20 @@ class _ReadyEngine(Protocol):
 @runtime_checkable
 class _RefreshableEngine(Protocol):
     def refresh(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class ScoredMemoryRecord:
+    id: int
+    content: str
+    score: float
+    created_at: str | None
+
+
+@dataclass(frozen=True)
+class RecordSearchResult:
+    records: tuple[ScoredMemoryRecord, ...]
+    score_kind: SearchScoreKind
 
 
 @final
@@ -901,7 +922,7 @@ class MemoryManager:
         return self.add_memories(messages)
 
     async def add_memories_async(
-        self, memories: list[str], dry_run: bool = False
+        self, memories: list[str], dry_run: bool = False, allow_replace: bool = True
     ) -> AddResult:
         """Add multiple memories with phased parallel processing (Sprint 2.2).
 
@@ -932,7 +953,7 @@ class MemoryManager:
             # Pick up (and verify) a vector file published since the index was
             # opened before the pipeline journals anything. Search does the same.
             await asyncify(self._refresh_engines)()
-        return await self._add_pipeline.execute(memories, dry_run)
+        return await self._add_pipeline.execute(memories, dry_run, allow_replace)
 
     async def add_messages_async(
         self, messages: list[str], dry_run: bool = False
@@ -1025,9 +1046,14 @@ class MemoryManager:
             Cancelling this await does not abort native USearch or Tantivy
             work already running in a worker thread.
         """
+        return (await self._search_result(query, limit)).memories
+
+    async def _search_result(
+        self, query: str, limit: int | None = None
+    ) -> SearchResult:
         self._ensure_open()
         if not query.strip():
-            return []
+            return SearchResult([], {}, [], [])
         try:
             await asyncify(self._preflight_vector_index)()
         except InitializationError as refusal:
@@ -1089,7 +1115,83 @@ class MemoryManager:
             context, include_timestamp_map=False
         )
 
-        return result.memories
+        return result
+
+    async def search_records(
+        self, query: str, limit: int | None = None
+    ) -> RecordSearchResult:
+        result = await self._search_result(query, limit)
+
+        def resolve() -> RecordSearchResult:
+            with self._shared_workspace(), self._lock:
+                self._ensure_open()
+                self._refresh_engines()
+                rows = self._semantic_engine.memory_store.get_records_by_contents(
+                    self.workspace_id, result.memories
+                )
+                by_content = {row.content: row for row in rows}
+                records = tuple(
+                    ScoredMemoryRecord(
+                        id=by_content[content].id,
+                        content=content,
+                        score=score,
+                        created_at=by_content[content].created_at or None,
+                    )
+                    for content, score in zip(
+                        result.memories, result.scores, strict=True
+                    )
+                    if content in by_content
+                )
+                return RecordSearchResult(
+                    records, result.score_kind if records else SearchScoreKind.NONE
+                )
+
+        return await asyncify(resolve)()
+
+    def get_records(self, ids: list[int]) -> tuple[list[IStoredMemory], list[int]]:
+        ordered_ids = list(dict.fromkeys(ids))
+        if not ordered_ids:
+            return [], []
+        with self._shared_workspace(), self._lock:
+            self._ensure_open()
+            self._refresh_engines()
+            rows = self._semantic_engine.memory_store.get_batch(ordered_ids)
+            records = [
+                rows[record_id]
+                for record_id in ordered_ids
+                if record_id in rows
+                and rows[record_id].workspace_id == self.workspace_id
+            ]
+            found = {row.id for row in records}
+            return records, [
+                record_id for record_id in ordered_ids if record_id not in found
+            ]
+
+    def get_page_records_with_total(
+        self, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[IStoredMemory], int]:
+        with self._shared_workspace(), self._lock:
+            self._ensure_open()
+            self._refresh_engines()
+            store = self._semantic_engine.memory_store
+            return list(
+                store.get_page_records(self.workspace_id, limit, offset)
+            ), store.count(self.workspace_id)
+
+    def delete_records(self, ids: list[int]) -> tuple[list[int], list[int]]:
+        records, _ = self.get_records(ids)
+        deleted: set[str] = (
+            set(self.delete_memories([row.content for row in records]))
+            if records
+            else set()
+        )
+        removed = [row.id for row in records if row.content in deleted]
+        removed_ids = set(removed)
+        return removed, [
+            record_id
+            for record_id in dict.fromkeys(ids)
+            if record_id not in removed_ids
+        ]
 
     def _semantic_index_size(self) -> int:
         """Return the workspace memory count used to size overfetch."""

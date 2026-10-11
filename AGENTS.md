@@ -31,6 +31,7 @@ Python 3.14 MCP memory server. One `MemoryManager` per workspace. USearch + SQLi
 |------|----------|-------|
 | CLI + signals | `reflectlog/server.py` | Warmup; persist on SIGINT/SIGTERM/SIGBREAK |
 | MCP + auth | `application/mcp_server.py` | Tools via `MemoryManager` only |
+| MCP surface | `application/tools/` | `add_memories`, `search_memories`, `get_all_memories`, `get_memory_by_id`, `delete_memories`; explicit `workspace_id` |
 | Memory facade | `application/memory/manager.py` | Locks, journal, public API |
 | Workspace pin | `application/memory/workspace_registry.py` | `acquire()` per tool call; idle TTL 900s |
 | Embedding identity | `infrastructure/embedding_identity.py` | Sidecar before HNSW open |

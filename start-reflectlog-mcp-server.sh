@@ -185,7 +185,7 @@ echo -e "${BLUE}Starting ReflectLog Server...${NC}"
 if [ ! -z "$MCP_TRANSPORT" ]; then
     echo -e "${CYAN}Transport: $MCP_TRANSPORT${NC}"
 else
-    echo -e "${CYAN}Transport: stdio (default)${NC}"
+    echo -e "${CYAN}Transport: http (default)${NC}"
 fi
 echo -e "${CYAN}Command: uv run reflectlog${NC}"
 echo ""

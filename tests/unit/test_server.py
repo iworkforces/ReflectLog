@@ -52,6 +52,7 @@ class TestCLIArgumentParsing:
 
             # Verify server was created and run
             mock_server_class.assert_called_once()
+            assert os.environ.get("MCP_TRANSPORT") == "http"
 
     @patch.dict(os.environ, {}, clear=True)
     @patch("reflectlog.server.signal.signal")
@@ -82,25 +83,34 @@ class TestCLIArgumentParsing:
     @patch("reflectlog.server.signal.signal")
     @patch("reflectlog.server.warmup_numba_functions")
     @patch("reflectlog.server.FastMCPServer")
-    def test_transport_stdio_argument(
+    def test_transport_streamable_http_argument(
         self,
         mock_server_class: MagicMock,
         mock_warmup: MagicMock,
         mock_signal: MagicMock,
     ):
-        """Test --transport stdio argument."""
+        """Test --transport streamable-http argument."""
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
 
         from reflectlog.server import main
 
-        with patch("sys.argv", ["reflectlog", "--transport", "stdio"]):
+        with patch("sys.argv", ["reflectlog", "--transport", "streamable-http"]):
             try:
                 main()
             except SystemExit:
                 pass
 
-            assert os.environ.get("MCP_TRANSPORT") == "stdio"
+            assert os.environ.get("MCP_TRANSPORT") == "streamable-http"
+
+    @pytest.mark.parametrize("transport", ["stdio", "sse"])
+    def test_removed_transport_rejected(self, transport: str) -> None:
+        from reflectlog.server import parse_args
+
+        with patch("sys.argv", ["reflectlog", "--transport", transport]):
+            with pytest.raises(SystemExit) as exc_info:
+                parse_args()
+        assert exc_info.value.code == 2
 
     @patch.dict(os.environ, {}, clear=True)
     @patch("reflectlog.server.signal.signal")
@@ -311,7 +321,7 @@ assert not heavy, sorted(heavy)
 class TestEnvironmentConfiguration:
     """Test environment variable configuration."""
 
-    @patch.dict(os.environ, {"MCP_TRANSPORT": "sse"}, clear=True)
+    @patch.dict(os.environ, {"MCP_TRANSPORT": "streamable-http"}, clear=True)
     @patch("reflectlog.server.signal.signal")
     @patch("reflectlog.server.warmup_numba_functions")
     @patch("reflectlog.server.FastMCPServer")
@@ -334,9 +344,13 @@ class TestEnvironmentConfiguration:
                 pass
 
             # Environment variable should still be set
-            assert os.environ.get("MCP_TRANSPORT") == "sse"
+            assert os.environ.get("MCP_TRANSPORT") == "streamable-http"
 
-    @patch.dict(os.environ, {"MCP_TRANSPORT": "stdio", "MCP_PORT": "5000"}, clear=True)
+    @patch.dict(
+        os.environ,
+        {"MCP_TRANSPORT": "streamable-http", "MCP_PORT": "5000"},
+        clear=True,
+    )
     @patch("reflectlog.server.signal.signal")
     @patch("reflectlog.server.warmup_numba_functions")
     @patch("reflectlog.server.FastMCPServer")
@@ -428,7 +442,7 @@ class TestOutputStreams:
     @patch("reflectlog.server.signal.signal")
     @patch("reflectlog.server.warmup_numba_functions")
     @patch("reflectlog.server.FastMCPServer")
-    def test_stdio_transport_uses_stderr(
+    def test_default_transport_uses_stdout(
         self,
         mock_server_class: MagicMock,
         mock_warmup: MagicMock,
@@ -436,21 +450,21 @@ class TestOutputStreams:
         mock_stdout: MagicMock,
         mock_stderr: MagicMock,
     ):
-        """Test stdio transport redirects output to stderr."""
+        """Test default HTTP startup output goes to stdout."""
         mock_server = MagicMock()
         mock_server_class.return_value = mock_server
 
         from reflectlog.server import main
 
-        with patch("sys.argv", ["reflectlog", "--transport", "stdio"]):
+        with patch("sys.argv", ["reflectlog"]):
             try:
                 main()
             except SystemExit:
                 pass
 
-            # For stdio, sys.stdout should be redirected to stderr
-            # (This tests the logging configuration)
-            assert os.environ.get("MCP_TRANSPORT") == "stdio"
+            assert os.environ.get("MCP_TRANSPORT") == "http"
+            mock_stdout.write.assert_any_call("Transport: http")
+            mock_stderr.write.assert_not_called()
 
     @patch.dict(os.environ, {"WORKSPACE_ID": "test_project"}, clear=True)
     @patch("reflectlog.server.signal.signal")

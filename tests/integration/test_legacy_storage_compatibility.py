@@ -14,26 +14,28 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from reflectlog.application.config.settings import Config
-from reflectlog.application.memory.manager import MemoryManager
-from reflectlog.application.tools.add import AddTool
-from reflectlog.application.tools.get_all import GetAllTool
-from reflectlog.application.tools.health_check import HealthCheckTool
-from reflectlog.application.tools.remove import RemoveTool
-from reflectlog.application.tools.search import SearchTool
+from reflectlog.application.memory.manager import (
+    MemoryManager,
+    RecordSearchResult,
+    ScoredMemoryRecord,
+)
+from reflectlog.application.tools.add_memories import AddMemoriesTool
+from reflectlog.application.tools.delete_memories import DeleteMemoriesTool
+from reflectlog.application.tools.get_all_memories import GetAllMemoriesTool
+from reflectlog.application.tools.get_memory_by_id import GetMemoryByIdTool
+from reflectlog.application.tools.search_memories import SearchMemoriesTool
 from reflectlog.application.utils.security import SecretString
 from reflectlog.core.enums import (
     EmbedderProvider,
-    EngineReadiness,
-    HealthStatus,
+    SearchScoreKind,
     ToolName,
     TransitionKind,
     TransitionStatus,
 )
 from reflectlog.core.exceptions import InitializationError, StorageError
-from reflectlog.core.search_health import SearchFailureSnapshot
 from reflectlog.core.types import ReplacementTransitionRequest
 from reflectlog.infrastructure.embedding_identity import ensure_embedding_identity
-from reflectlog.infrastructure.memory_store import MemoryStore
+from reflectlog.infrastructure.memory_store import MemoryRecord, MemoryStore
 from reflectlog.infrastructure.tantivy_engine import TantivyEngine
 from reflectlog.infrastructure.usearch_engine import USearchConfig, USearchEngine
 from tests.integration.test_memory_manager_usearch import (
@@ -266,49 +268,48 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
     logger = MagicMock()
     memory = MagicMock(spec=MemoryManager)
     memory.add_memories_async = AsyncMock()
-    memory.search = AsyncMock(return_value=[LIVE_A])
-    memory.get_page_with_total = MagicMock(return_value=([LIVE_A], 1))
-    memory.search_engine_status = MagicMock(
-        return_value={
-            "semantic_engine": EngineReadiness.INITIALIZED,
-            "tantivy_engine": EngineReadiness.INITIALIZED,
-        }
+    row = MemoryRecord(1, config.workspace_id, LIVE_A, "2026-08-22T00:00:00+00:00")
+    memory.search_records = AsyncMock(
+        return_value=RecordSearchResult(
+            (ScoredMemoryRecord(row.id, row.content, 0.9, row.created_at),),
+            SearchScoreKind.SEMANTIC,
+        )
     )
-    memory.pending_intent_count = MagicMock(return_value=0)
-    memory.search_failure_snapshot = MagicMock(return_value=SearchFailureSnapshot())
-    memory.startup_metrics = None
+    memory.get_page_records_with_total = MagicMock(return_value=([row], 1))
+    memory.get_records = MagicMock(return_value=([row], []))
+    memory.delete_records = MagicMock(return_value=([], []))
 
-    add = AddTool(config, memory, logger)
-    search = SearchTool(config, memory, logger)
-    get_all = GetAllTool(config, memory, logger)
-    remove = RemoveTool(config, memory, logger)
-    health = HealthCheckTool(config, memory, logger)
+    add = AddMemoriesTool(config, memory, logger)
+    search = SearchMemoriesTool(config, memory, logger)
+    get_all = GetAllMemoriesTool(config, memory, logger)
+    remove = DeleteMemoriesTool(config, memory, logger)
+    get_by_id = GetMemoryByIdTool(config, memory, logger)
 
-    assert [tool.get_name() for tool in (add, search, get_all, remove, health)] == [
-        ToolName.ADD,
-        ToolName.SEARCH,
-        ToolName.GET_ALL,
-        ToolName.REMOVE,
-        ToolName.HEALTH_CHECK,
+    assert [tool.get_name() for tool in (add, search, get_all, remove, get_by_id)] == [
+        ToolName.ADD_MEMORIES,
+        ToolName.SEARCH_MEMORIES,
+        ToolName.GET_ALL_MEMORIES,
+        ToolName.DELETE_MEMORIES,
+        ToolName.GET_MEMORY_BY_ID,
     ]
     assert [str(name) for name in ToolName] == [
-        "add",
-        "get_all",
-        "search",
-        "remove",
-        "health_check",
+        "add_memories",
+        "search_memories",
+        "get_all_memories",
+        "get_memory_by_id",
+        "delete_memories",
     ]
 
     add_params = list(signature(add.get_handler()).parameters)
     search_params = list(signature(search.get_handler()).parameters)
     get_all_params = list(signature(get_all.get_handler()).parameters)
     remove_params = list(signature(remove.get_handler()).parameters)
-    health_params = list(signature(health.get_handler()).parameters)
-    assert add_params == ["memories", "dry_run"]
-    assert search_params == ["query"]
+    id_params = list(signature(get_by_id.get_handler()).parameters)
+    assert add_params == ["memories", "dry_run", "allow_replace"]
+    assert search_params == ["query", "limit"]
     assert get_all_params == ["limit", "offset"]
-    assert remove_params == ["memories"]
-    assert health_params == []
+    assert remove_params == ["ids"]
+    assert id_params == ["id"]
 
     empty_add = await add.get_handler()([])
     assert empty_add == {
@@ -319,29 +320,19 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
         "dry_run": False,
     }
     search_hits = await search.get_handler()("legacy")
-    assert search_hits == [LIVE_A]
+    public_row = {"id": row.id, "memory": LIVE_A, "created_at": row.created_at}
+    assert search_hits == {
+        "results": [{**public_row, "score": 0.9}],
+        "score_kind": "semantic",
+        "limit": config.search_limit,
+    }
+    assert await get_by_id.get_handler()(row.id) == {"record": public_row}
     page = await get_all.get_handler()()
     assert page == {
-        "memories": [LIVE_A],
+        "records": [public_row],
         "total": 1,
         "offset": 0,
         "limit": config.get_all_limit,
         "truncated": False,
     }
-    assert await remove.get_handler()([]) is None
-    health_payload = await health.get_handler()()
-    assert health_payload["status"] == HealthStatus.HEALTHY
-    assert health_payload["workspace_id"] == "legacy-tools"
-    assert set(health_payload) >= {
-        "status",
-        "workspace_id",
-        "semantic_engine",
-        "tantivy_engine",
-        "reranker_engine",
-        "hybrid_search_enabled",
-        "rrf_fusion_enabled",
-        "recency_boost_enabled",
-        "pending_intent_count",
-        "search_failures",
-    }
-    assert health_payload["search_failures"] == SearchFailureSnapshot().to_dict()
+    assert await remove.get_handler()([]) == {"removed": [], "missing": []}

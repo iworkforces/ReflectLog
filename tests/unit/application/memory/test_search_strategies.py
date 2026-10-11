@@ -5,7 +5,7 @@ Covers uncovered lines: 128-137, 295, 365, 374-378, 451, 457, 475,
 """
 
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -148,6 +148,61 @@ class TestSearchContext:
         assert ctx.query == "hello"
         assert ctx.limit == 10
         assert ctx.workspace_id == "proj"
+
+
+@pytest.mark.parametrize(
+    ("semantic", "fulltext", "rrf", "rerank", "expected"),
+    [
+        (True, True, True, "none", "rrf"),
+        (True, False, True, "none", "semantic"),
+        (False, True, True, "none", "fulltext"),
+        (True, True, False, "none", "concatenated"),
+        (True, True, True, "success", "reranker"),
+        (True, True, True, "exception", "rrf"),
+        (True, True, True, "disabled", "rrf"),
+        (True, True, True, "null", "rrf"),
+        (False, False, True, "none", "none"),
+    ],
+)
+async def test_score_kind_matrix(
+    pipeline: SearchPipeline,
+    mock_config: Mock,
+    mock_memory_manager: MagicMock,
+    semantic: bool,
+    fulltext: bool,
+    rrf: bool,
+    rerank: str,
+    expected: str,
+) -> None:
+    semantic_hits = [("a", 0.9, "time"), ("b", 0.8, "time")] if semantic else []
+    fulltext_hits = [("a", 4.0), ("b", 3.0)] if fulltext else []
+    candidates = [("a", 0.03), ("b", 0.02)] if semantic or fulltext else []
+    mock_config.reranker_engine = "cross_encoder" if rerank != "none" else "none"
+    if rerank not in ("none", "disabled"):
+        reranker = Mock()
+        reranker.rerank_async = AsyncMock(
+            return_value=None if rerank == "null" else [("b", 0.97), ("a", 0.92)]
+        )
+        if rerank == "exception":
+            reranker.rerank_async.side_effect = RuntimeError("failure")
+        mock_memory_manager.cross_encoder_reranker = reranker
+    with (
+        patch.object(
+            pipeline,
+            "_step1_parallel_search",
+            AsyncMock(return_value=(semantic_hits, fulltext_hits, None, None)),
+        ),
+        patch.object(
+            pipeline, "_step2_fusion_or_concatenate", AsyncMock(return_value=candidates)
+        ),
+        patch.object(
+            pipeline, "_step3_fusion_threshold", AsyncMock(return_value=candidates)
+        ),
+    ):
+        result = await pipeline.execute(_make_context(enable_rrf_fusion=rrf))
+    expected_hits = [("b", 0.97), ("a", 0.92)] if rerank == "success" else candidates
+    assert result.score_kind == expected
+    assert list(zip(result.memories, result.scores, strict=True)) == expected_hits
 
 
 @pytest.mark.unit
@@ -475,7 +530,7 @@ class TestStep4Reranking:
 
         reranked = await pipeline._step4_reranking(ctx, results, timestamp_map, 4)
 
-        assert reranked == [("msg1", 0.95)]
+        assert reranked == ([("msg1", 0.95)], True)
 
     @pytest.mark.asyncio
     async def test_no_reranker_returns_original(
@@ -492,7 +547,7 @@ class TestStep4Reranking:
         results = [("msg1", 0.5), ("msg2", 0.3)]
 
         reranked = await pipeline._step4_reranking(ctx, results, {}, 4)
-        assert reranked == results
+        assert reranked == (results, False)
 
     async def test_openrouter_dispatch_and_failure_fallback(
         self,
@@ -508,17 +563,18 @@ class TestStep4Reranking:
         context = _make_context(reranker_engine="openrouter", limit=5)
         candidates = [("first", 0.04), ("second", 0.03)]
         stamps = {"first": "2025-01-01T00:00:00Z"}
-        assert await pipeline._step4_reranking(context, candidates, stamps, 4) == [
-            ("second", 0.95)
-        ]
+        assert await pipeline._step4_reranking(context, candidates, stamps, 4) == (
+            [("second", 0.95)],
+            True,
+        )
         reranker.rerank_async.assert_awaited_once_with(
             "test query", candidates, stamps, top_k=5
         )
 
         reranker.rerank_async.side_effect = RuntimeError("private response body")
-        assert (
-            await pipeline._step4_reranking(context, candidates, stamps, 4)
-            == candidates
+        assert await pipeline._step4_reranking(context, candidates, stamps, 4) == (
+            candidates,
+            False,
         )
         warning = mock_logger.warning.call_args
         assert warning.kwargs["extra"]["error_type"] == "RuntimeError"
@@ -551,7 +607,7 @@ class TestRerankCrossEncoder:
         reranked = await pipeline._rerank_cross_encoder(
             ctx, results, step_num=4, cross_encoder_reranker=None
         )
-        assert reranked == results
+        assert reranked == (results, False)
 
     @pytest.mark.asyncio
     async def test_cross_encoder_reranking_with_provided_reranker(
@@ -568,7 +624,7 @@ class TestRerankCrossEncoder:
             ctx, results, step_num=4, cross_encoder_reranker=mock_reranker
         )
 
-        assert reranked == [("msg1", 0.95)]
+        assert reranked == ([("msg1", 0.95)], True)
         mock_reranker.rerank_async.assert_awaited_once_with(
             ctx.query, results, top_k=20
         )

@@ -13,17 +13,22 @@ import os
 from pathlib import Path
 from threading import Event, Thread
 from typing import Self, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from reflectlog.application.config.settings import Config
 from reflectlog.application.memory.manager import MemoryManager
-from reflectlog.application.memory.search_strategies import SearchContext
+from reflectlog.application.memory.search_strategies import SearchContext, SearchResult
 from reflectlog.application.utils.logging import StructuredLogger
 from reflectlog.application.utils.security import SecretString
-from reflectlog.core.enums import LlmProvider, RerankerEngine, SearchComponent
+from reflectlog.core.enums import (
+    LlmProvider,
+    RerankerEngine,
+    SearchComponent,
+    SearchScoreKind,
+)
 from reflectlog.core.exceptions import (
     InconsistentStateError,
     InitializationError,
@@ -36,6 +41,7 @@ from reflectlog.core.types import ISemanticSearchEngine
 from reflectlog.infrastructure.cross_encoder_reranker import CrossEncoderReranker
 from reflectlog.infrastructure.embedding_identity import IDENTITY_NAME
 from reflectlog.infrastructure.embeddings.wemm_embedding import WeMMEmbeddings
+from reflectlog.infrastructure.memory_store import MemoryRecord
 from reflectlog.infrastructure.storage_coordinator import (
     GENERATION_NAME,
     LOCK_NAME,
@@ -232,6 +238,62 @@ def _make_manager(
             config, logger.structured, coordinator=coordinator or _fake_coordinator()
         )
         return manager, mock_usearch, mock_tantivy
+
+
+@pytest.mark.unit
+class TestRecordMethods:
+    def test_lookup_order_workspace_duplicates_missing(
+        self, mock_config: Config, mock_logger: LogCapture
+    ) -> None:
+        manager, engine, _ = _make_manager(mock_config, mock_logger)
+        first = MemoryRecord(1, manager.workspace_id, "first")
+        second = MemoryRecord(2, manager.workspace_id, "second")
+        foreign = MemoryRecord(3, "foreign", "foreign")
+        engine.memory_store.get_batch.return_value = {1: first, 2: second, 3: foreign}
+        assert manager.get_records([2, 3, 1, 2, 99]) == ([second, first], [3, 99])
+        assert manager.get_records([]) == ([], [])
+
+    def test_page_records_and_total(
+        self, mock_config: Config, mock_logger: LogCapture
+    ) -> None:
+        manager, engine, _ = _make_manager(mock_config, mock_logger)
+        row = MemoryRecord(4, manager.workspace_id, "four")
+        engine.memory_store.get_page_records.return_value = [row]
+        engine.memory_store.count.return_value = 7
+        assert manager.get_page_records_with_total(2, 3) == ([row], 7)
+        engine.memory_store.get_page_records.assert_called_once_with(
+            manager.workspace_id, 2, 3
+        )
+
+    def test_delete_maps_actual_contents(
+        self, mock_config: Config, mock_logger: LogCapture
+    ) -> None:
+        manager, engine, _ = _make_manager(mock_config, mock_logger)
+        engine.memory_store.get_batch.return_value = {
+            1: MemoryRecord(1, manager.workspace_id, "one"),
+            2: MemoryRecord(2, manager.workspace_id, "two"),
+        }
+        with patch.object(manager, "delete_memories", return_value=["two"]) as delete:
+            assert manager.delete_records([1, 99, 2, 1]) == ([2], [1, 99])
+            delete.assert_called_once_with(["one", "two"])
+            assert manager.delete_records([]) == ([], [])
+
+    async def test_search_records_drops_vanished_hits(
+        self, mock_config: Config, mock_logger: LogCapture
+    ) -> None:
+        manager, engine, _ = _make_manager(mock_config, mock_logger)
+        engine.memory_store.get_records_by_contents.return_value = [
+            MemoryRecord(8, manager.workspace_id, "live", "time")
+        ]
+        result = SearchResult(
+            ["gone", "live"], {}, [], [], [0.9, 0.8], SearchScoreKind.RERANKER
+        )
+        with patch.object(manager, "_search_result", AsyncMock(return_value=result)):
+            records = await manager.search_records("query", 2)
+        assert [
+            (row.id, row.content, row.score, row.created_at) for row in records.records
+        ] == [(8, "live", 0.8, "time")]
+        assert records.score_kind == SearchScoreKind.RERANKER
 
 
 @pytest.mark.unit
@@ -733,7 +795,7 @@ class TestLazyRerankerProperties:
                 ranked = await manager._search_pipeline._step4_reranking(
                     context, candidates, {}, 4
                 )
-        assert ranked == [("second", 0.9), ("first", 0.1)]
+        assert ranked == ([("second", 0.9), ("first", 0.1)], True)
         assert len(seen) == 1
 
     def test_cross_encoder_reranker_returns_none_when_not_configured(
@@ -1462,6 +1524,28 @@ class TestCloseErrorPaths:
         manager.close()
         with pytest.raises(StorageError, match="closed"):
             manager.add_memories(["too late"])
+
+    @pytest.mark.parametrize("pending", [[], ["add", "delete", "replace"]])
+    def test_pending_intent_count_reads_journal_without_reconciling(
+        self, mock_config: Config, mock_logger: LogCapture, pending: list[str]
+    ) -> None:
+        manager, engine, _ = _make_manager(mock_config, mock_logger)
+        engine.memory_store.list_pending_transitions.return_value = pending
+        engine.memory_store.list_pending_transitions.reset_mock()
+        with patch.object(manager, "reconcile_pending_replacements") as reconcile:
+            count = manager.pending_intent_count()
+        assert count == len(pending)
+        engine.memory_store.list_pending_transitions.assert_called_once_with()
+        reconcile.assert_not_called()
+
+    def test_startup_metrics_remain_optional_manager_metadata(
+        self, mock_config: Config, mock_logger: LogCapture
+    ) -> None:
+        manager, _, _ = _make_manager(mock_config, mock_logger)
+        assert manager.startup_metrics is None
+        metrics = {"total_startup": 0.25}
+        manager.startup_metrics = metrics
+        assert manager.startup_metrics == metrics
 
     def test_pending_intent_count_propagates_list_failure(
         self, mock_config: Config, mock_logger: LogCapture

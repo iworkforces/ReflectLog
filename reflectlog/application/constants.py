@@ -12,6 +12,8 @@ Configuration values should go in config/settings.py instead.
 # Minimum number of documents to fetch for better RRF fusion quality
 # Using a small index (< 20 docs) doesn't provide enough diversity for fusion
 MIN_OVERFETCH_LIMIT: int = 8
+MAX_SEARCH_RECORDS_LIMIT: int = 50
+MAX_RECORD_IDS: int = 100
 
 # Tantivy BM25 scores are typically in the 0-10+ range
 # Divide by this to normalize to 0-1 for comparison with semantic scores
@@ -82,6 +84,8 @@ __all__ = [
     "LOG_QUERY_TRUNCATE_LENGTH",
     "LOG_SEPARATOR_LENGTH",
     "MAX_PERCENTAGE_THRESHOLD",
+    "MAX_RECORD_IDS",
+    "MAX_SEARCH_RECORDS_LIMIT",
     "MIN_OVERFETCH_LIMIT",
     "MIN_PERCENTAGE_THRESHOLD",
     "TANTIVY_SCORE_DIVISOR",

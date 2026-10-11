@@ -1565,6 +1565,35 @@ class TestStoragePhase:
 class TestAddPipeline:
     """Tests for the AddPipeline orchestrator."""
 
+    async def test_allow_replace_false_skips_phase2(
+        self, mock_config: Config, mock_logger: Mock
+    ) -> None:
+        phase1 = MagicMock(spec=DuplicateDetectionPhase)
+        phase1.execute = AsyncMock(
+            return_value=Phase1Result(
+                unique_memories=["new"],
+                storage_duplicates=[],
+                batch_duplicates_count=0,
+                duration=0.0,
+            )
+        )
+        phase2 = MagicMock(spec=SmartReplacementPhase)
+        phase2.execute = AsyncMock(
+            side_effect=AssertionError("replacement must not run")
+        )
+        phase3 = MagicMock(spec=StoragePhase)
+        phase3.execute = AsyncMock(
+            return_value=Phase3Result(
+                stored_count=1, replaced_count=0, replacements=[], duration=0.0
+            )
+        )
+        pipeline = AddPipeline(phase1, phase2, phase3, mock_config, mock_logger)
+        result = await pipeline.execute(["new"], allow_replace=False)
+        assert result.stored_count == 1
+        assert result.replaced_count == 0
+        phase2.execute.assert_not_awaited()
+        phase3.execute.assert_awaited_once_with(["new"], {}, False)
+
     async def test_execute_empty_memories(self, mock_config: Config, mock_logger: Mock):
         """Empty memories list returns default AddResult."""
         phase1 = MagicMock()

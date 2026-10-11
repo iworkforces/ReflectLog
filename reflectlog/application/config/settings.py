@@ -241,7 +241,7 @@ class Config:
     openrouter_api_key: SecretString  # Wrapped for security - use .get_secret_value()
 
     # Transport settings
-    transport: TransportMode = TransportMode.STDIO
+    transport: TransportMode = TransportMode.HTTP
     port: int = 9103
     host: str = "127.0.0.1"
     path: str = "/mcp"
@@ -391,7 +391,7 @@ class Config:
         """Parse transport-related configuration from environment variables."""
         transport = parse_str_enum(
             TransportMode,
-            os.environ.get("MCP_TRANSPORT", TransportMode.STDIO),
+            os.environ.get("MCP_TRANSPORT", TransportMode.HTTP),
             field="MCP_TRANSPORT",
         )
 

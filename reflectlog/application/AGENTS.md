@@ -41,8 +41,8 @@ application/
 
 - `FastMCPServer(server_config: Config | None = None)`; defaults to `get_config()`.
 - Engines: manager calls `USearchConfig.from_config(ConfigAdapter(config))` (CE/replacer same). Do not route startup through `EngineFactory`.
-- Tools: `AddTool` / `SearchTool` / `GetAllTool` / `RemoveTool` / `HealthCheckTool` only. Each MCP call passes `workspace_id`. Never import engines or fusion.
-- `get_all` calls `get_page_with_total` (page and total from one read). Sync `add_memories` skips smart replace; MCP `add` uses the async pipeline.
+- Tools: `AddMemoriesTool` / `SearchMemoriesTool` / `GetAllMemoriesTool` / `GetMemoryByIdTool` / `DeleteMemoriesTool` only. Each MCP call passes `workspace_id`; all five handlers return `Awaitable[dict[str, object]]`. Never import engines or fusion.
+- `get_all_memories` returns an id-ordered records page and total from one read. Sync `MemoryManager.add_memories` skips smart replace; MCP `add_memories` uses the async pipeline.
 - Add: embed outside lease. After engines converge, publish generation, then leftover ADD complete, then replace complete.
 - `application/utils/` has no `http_client.py` / `metrics.py` / `retry.py` / `circuit_breaker.py`.
 - `access.py` deleted. No `getattr` / `optional_attr` / `invoke_if_callable`.

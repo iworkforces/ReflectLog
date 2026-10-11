@@ -67,7 +67,7 @@ def warmup_numba_with_config(
         enabled: Whether to perform JIT warmup at all.
         mode: Execution mode - "sync" (default), "async" (background thread),
             or "background" (daemon thread).
-        output_stream: Stream to print progress (stderr for stdio, stdout otherwise).
+        output_stream: Stream to print progress (stdout at server startup).
 
     Returns:
         Thread object if mode is "async" or "background", None otherwise.
@@ -132,20 +132,17 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run with default stdio transport (for MCP clients)
-  reflectlog
+  # Run with default HTTP transport (requires MCP_AUTH_TOKEN)
+  MCP_AUTH_TOKEN=change-me reflectlog
 
   # Run as HTTP server
   reflectlog --transport http --port 9103
-
-  # Run with SSE transport
-  reflectlog --transport sse --port 8080 --host 0.0.0.0
 
 Workspace selection is required as workspace_id on every MCP tool call.
 WORKSPACE_ID is ignored by the server.
 
 Environment Variables:
-  MCP_TRANSPORT   Override transport mode (stdio, http, sse, streamable-http)
+  MCP_TRANSPORT   Override transport mode (http, streamable-http)
   MCP_PORT        Override server port
   MCP_HOST        Override server host
   MCP_PATH        Override server path
@@ -162,26 +159,26 @@ Environment Variables:
     _ = parser.add_argument(
         "--transport",
         type=str,
-        choices=["stdio", "http", "sse", "streamable-http"],
-        help="Transport protocol (default: stdio for tool usage, or from settings)",
+        choices=["http", "streamable-http"],
+        help="Transport protocol (default: http, or from MCP_TRANSPORT)",
     )
 
     _ = parser.add_argument(
         "--port",
         type=int,
-        help="Server port for non-stdio transports (default: 9103)",
+        help="Server port (default: 9103)",
     )
 
     _ = parser.add_argument(
         "--host",
         type=str,
-        help="Server host for non-stdio transports (default: 127.0.0.1)",
+        help="Server host (default: 127.0.0.1)",
     )
 
     _ = parser.add_argument(
         "--path",
         type=str,
-        help="Server path for non-stdio transports (default: /mcp)",
+        help="Server path (default: /mcp)",
     )
 
     return parser.parse_args()
@@ -191,14 +188,14 @@ def main() -> None:
     """Main entry point for the MCP server.
 
     Supports both CLI argument parsing and environment variable configuration.
-    When run as a tool (via `reflectlog` command), defaults to stdio transport.
+    Defaults to HTTP transport and requires MCP_AUTH_TOKEN to serve requests.
 
     Graceful shutdown is handled via signal handlers for SIGINT (Ctrl+C) and SIGTERM,
     ensuring all data from TantivyEngine and USearchEngine is persisted before exit.
     """
     args = parse_args()
     transport_mode = _apply_cli_env_vars(args)
-    output_stream = sys.stderr if transport_mode == TransportMode.STDIO else sys.stdout
+    output_stream = sys.stdout
 
     print(
         "Starting ReflectLog - Workspace-based AI Agent Memories...",
@@ -237,7 +234,7 @@ def _apply_cli_env_vars(args: argparse.Namespace) -> str:
     if args.transport:
         os.environ["MCP_TRANSPORT"] = args.transport
     elif "MCP_TRANSPORT" not in os.environ:
-        os.environ["MCP_TRANSPORT"] = TransportMode.STDIO
+        os.environ["MCP_TRANSPORT"] = TransportMode.HTTP
 
     if args.port:
         os.environ["MCP_PORT"] = str(args.port)
@@ -246,7 +243,7 @@ def _apply_cli_env_vars(args: argparse.Namespace) -> str:
     if args.path:
         os.environ["MCP_PATH"] = args.path
 
-    return os.environ.get("MCP_TRANSPORT", TransportMode.STDIO)
+    return os.environ.get("MCP_TRANSPORT", TransportMode.HTTP)
 
 
 def _print_startup_timing(

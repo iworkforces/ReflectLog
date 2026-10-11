@@ -38,9 +38,7 @@ class TransitionStatus(StrEnum):
 class TransportMode(StrEnum):
     """MCP transport selected by ``MCP_TRANSPORT``."""
 
-    STDIO = "stdio"
     HTTP = "http"
-    SSE = "sse"
     STREAMABLE_HTTP = "streamable-http"
 
 
@@ -49,6 +47,17 @@ class RerankerEngine(StrEnum):
 
     CROSS_ENCODER = "cross_encoder"
     OPENROUTER = "openrouter"
+    NONE = "none"
+
+
+class SearchScoreKind(StrEnum):
+    """Provenance of the final search scores."""
+
+    RERANKER = "reranker"
+    RRF = "rrf"
+    SEMANTIC = "semantic"
+    FULLTEXT = "fulltext"
+    CONCATENATED = "concatenated"
     NONE = "none"
 
 
@@ -172,7 +181,7 @@ class WeMMDevice(StrEnum):
 
 
 class EngineReadiness(StrEnum):
-    """Public search-engine readiness reported by health checks."""
+    """Search-engine readiness reported by ``MemoryManager.search_engine_status``."""
 
     INITIALIZED = "initialized"
     PENDING = "pending"
@@ -181,22 +190,14 @@ class EngineReadiness(StrEnum):
     UNKNOWN = "unknown"
 
 
-class HealthStatus(StrEnum):
-    """Overall server health reported by ``health_check``."""
-
-    HEALTHY = "healthy"
-    DEGRADED = "degraded"
-    UNHEALTHY = "unhealthy"
-
-
 class ToolName(StrEnum):
     """Registered MCP tool identifiers."""
 
-    ADD = "add"
-    GET_ALL = "get_all"
-    SEARCH = "search"
-    REMOVE = "remove"
-    HEALTH_CHECK = "health_check"
+    ADD_MEMORIES = "add_memories"
+    SEARCH_MEMORIES = "search_memories"
+    GET_ALL_MEMORIES = "get_all_memories"
+    GET_MEMORY_BY_ID = "get_memory_by_id"
+    DELETE_MEMORIES = "delete_memories"
 
 
 class ConfigProfile(StrEnum):

@@ -89,7 +89,9 @@ def manager(monkeypatch):
         memory_manager=mgr,
     )
 
-    async def _default_add(memories: list[str], dry_run: bool = False) -> MagicMock:
+    async def _default_add(
+        memories: list[str], dry_run: bool = False, allow_replace: bool = True
+    ) -> MagicMock:
         return MagicMock(stored_count=len(memories), skipped_count=0)
 
     mgr._add_pipeline = MagicMock()
