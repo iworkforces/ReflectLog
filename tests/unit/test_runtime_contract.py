@@ -16,8 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
 APPROVED_PINS = {
-    "fastmcp": "4.0.11",
-    "pydantic": "2.14.0b2",
+    "fastmcp": "4.1.0",
+    "pydantic": "2.14.0",
     "pydantic-core": "2.49.0",
     "ranx": "0.3.21",
     "portalocker": "4.4.0",
