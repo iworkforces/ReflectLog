@@ -66,7 +66,10 @@ and `.reflectlog.storage-generation` sidecars. Preserve the complete archive,
 including its indexes and journal. `--workspace-id` is explicit and never
 inferred. `--output` must not exist (dangling symlinks count as existing), its
 parent must exist, and it must not be inside the archive or disposable scratch
-directory. An existing export is never overwritten.
+directory. An existing export is never overwritten. Scratch is created under
+the temporary directory, so `TMPDIR`, `TEMP`, `TMP`, and any `SQLITE_TMPDIR`
+must point outside the archive; otherwise the run fails before creating
+anything.
 
 Salvage dispatches before server environment/config loading. It constructs no
 `MemoryManager`, workspace registry, `MemoryStore`, vector or full-text engine,
@@ -132,8 +135,12 @@ created first, payload files are created exclusively and fsynced, and
 `manifest.json` is written last. The marker is removed after the payloads are
 written and the directory is synced. A bundle is complete only when
 `manifest.json` exists and `INCOMPLETE` is absent. On an ordinary publication
-failure, the run removes its own files and output directory; cleanup failure
-or process interruption may leave a directory with `INCOMPLETE`. Treat it as
+failure, the run first restores `INCOMPLETE` if it had already been removed,
+then removes its own files, the marker last, and the output directory. The
+error says `rolled back` only when that cleanup finished; otherwise the
+directory is left with `INCOMPLETE`, or, if even the marker could not be
+restored, the error says the partial output must be deleted before use.
+Process interruption may also leave a directory with `INCOMPLETE`. Treat it as
 unusable and delete it before retrying.
 
 Success prints one JSON summary to stdout with `output`, `rebuild_ready`,
