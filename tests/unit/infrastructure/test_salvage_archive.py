@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import stat
 import sys
+import tempfile
 
 import pytest
 
@@ -186,6 +187,110 @@ class TestFingerprintsAndChangeDetection:
 
 
 class TestArchiveIsNeverModified:
+    @pytest.mark.parametrize("variable", ["TMPDIR", "SQLITE_TMPDIR"])
+    @pytest.mark.parametrize("location", ["root", "nested", "symlink"])
+    def test_temporary_parent_inside_archive_is_rejected_before_creation(
+        self,
+        archive: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        variable: str,
+        location: str,
+    ) -> None:
+        parent = archive
+        if location == "nested":
+            parent = archive / "nested"
+            parent.mkdir()
+        elif location == "symlink":
+            parent = tmp_path / "alias"
+            parent.symlink_to(archive, target_is_directory=True)
+        monkeypatch.delenv("SQLITE_TMPDIR", raising=False)
+        monkeypatch.setenv(variable, str(parent))
+        monkeypatch.setattr(
+            tempfile, "tempdir", str(parent if variable == "TMPDIR" else tmp_path)
+        )
+        before = tree_digest(archive)
+        creations: list[str | None] = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def observe_creation(*, prefix: str, dir: str | None = None) -> str:
+            creations.append(dir)
+            return real_mkdtemp(prefix=prefix, dir=dir)
+
+        monkeypatch.setattr(tempfile, "mkdtemp", observe_creation)
+
+        try:
+            with pytest.raises(
+                SalvageInputError, match="temporary directory.*inside the archive"
+            ):
+                with ArchiveInspector().inspect(str(archive)):
+                    pass
+        finally:
+            assert tree_digest(archive) == before
+        assert creations == []
+
+    @pytest.mark.parametrize("variable", ["TMPDIR", "TEMP", "TMP"])
+    def test_uncached_temporary_directory_is_not_probed_inside_archive(
+        self, archive: Path, monkeypatch: pytest.MonkeyPatch, variable: str
+    ) -> None:
+        # tempfile.gettempdir() writes a probe file into each candidate it tries.
+        for name in ("TMPDIR", "TEMP", "TMP", "SQLITE_TMPDIR"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(variable, str(archive))
+        monkeypatch.setattr(tempfile, "tempdir", None)
+        root = os.path.realpath(archive)
+        created_inside: list[str] = []
+        real_open = os.open
+
+        def observe_open(path: str, flags: int, mode: int = 0o777) -> int:
+            if flags & os.O_CREAT and os.path.realpath(path).startswith(root + os.sep):
+                created_inside.append(path)
+            return real_open(path, flags, mode)
+
+        monkeypatch.setattr(os, "open", observe_open)
+
+        with pytest.raises(
+            SalvageInputError,
+            match=f"temporary directory.*inside the archive.*{variable}",
+        ):
+            with ArchiveInspector().inspect(str(archive)):
+                pass
+
+        assert created_inside == []
+
+    @pytest.mark.parametrize("sqlite_tmpdir", [None, "", "outside"])
+    def test_validated_scratch_parent_is_used_explicitly(
+        self,
+        archive: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        sqlite_tmpdir: str | None,
+    ) -> None:
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        monkeypatch.delenv("SQLITE_TMPDIR", raising=False)
+        if sqlite_tmpdir is not None:
+            monkeypatch.setenv("SQLITE_TMPDIR", str(tmp_path) if sqlite_tmpdir else "")
+        parents: list[str | None] = []
+        real_mkdtemp = tempfile.mkdtemp
+        before = tree_digest(archive)
+
+        def observe_creation(*, prefix: str, dir: str | None = None) -> str:
+            parents.append(dir)
+            return real_mkdtemp(prefix=prefix, dir=dir)
+
+        monkeypatch.setattr(tempfile, "mkdtemp", observe_creation)
+
+        with ArchiveInspector().inspect(str(archive)) as inspection:
+            scratch = Path(inspection.scratch_dir)
+            assert scratch.parent == tmp_path.resolve()
+            _ = SqliteSalvageSnapshotReader().read_snapshot(
+                inspection.database_path, WS
+            )
+
+        assert parents == [os.path.realpath(tmp_path)]
+        assert not scratch.exists()
+        assert tree_digest(archive) == before
+
     def test_tree_is_identical_after_inspection_and_read(self, tmp_path: Path) -> None:
         wal_archive, _ = make_wal_archive(tmp_path / "archive", tmp_path, "x")
         before = tree_digest(wal_archive)

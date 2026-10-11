@@ -33,6 +33,7 @@ from reflectlog.core.salvage import (
     SidecarStatus,
     SourceFingerprint,
 )
+from reflectlog.infrastructure.salvage_paths import is_directory_within
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -51,6 +52,7 @@ _IDENTITY_FIELDS: Final = ("dimensions", "model", "provider", "version", "worksp
 _SIDECAR_LIMIT: Final = 64 * 1024
 _CHUNK: Final = 1024 * 1024
 _SCRATCH_DATABASE: Final = "memories.db"
+_TEMPDIR_VARIABLES: Final = ("TMPDIR", "TEMP", "TMP")
 _OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
@@ -118,7 +120,27 @@ class ArchiveInspector:
     def inspect(self, archive_dir: str) -> Generator[ArchiveInspection]:
         archive = os.path.abspath(archive_dir)
         observation = _observe(archive)
-        scratch = tempfile.mkdtemp(prefix="reflectlog-salvage-")
+        # gettempdir() probes uncached candidates by creating a file in each,
+        # so the environment candidates are vetted before it runs.
+        for variable in _TEMPDIR_VARIABLES:
+            candidate = os.environ.get(variable)
+            if candidate and is_directory_within(candidate, archive):
+                raise SalvageInputError(
+                    "the temporary directory is inside the archive; "
+                    f"set {variable} outside it"
+                )
+        parent = os.path.realpath(tempfile.gettempdir())
+        if is_directory_within(parent, archive):
+            raise SalvageInputError(
+                "the temporary directory is inside the archive; set TMPDIR outside it"
+            )
+        sqlite_parent = os.environ.get("SQLITE_TMPDIR")
+        if sqlite_parent and is_directory_within(sqlite_parent, archive):
+            raise SalvageInputError(
+                "the SQLite temporary directory is inside the archive; "
+                "set SQLITE_TMPDIR outside it"
+            )
+        scratch = tempfile.mkdtemp(prefix="reflectlog-salvage-", dir=parent)
         try:
             database_copy = os.path.join(scratch, _SCRATCH_DATABASE)
             self._copy_into_scratch(archive, database_copy, observation)
