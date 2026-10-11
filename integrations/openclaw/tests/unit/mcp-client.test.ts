@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseConfig, type ReflectLogPluginConfig } from "../../src/config.js";
 import { createReflectLogClient, type ConnectFn, type McpConnection } from "../../src/reflectlog/mcp-client.js";
 import type { ToolResponse } from "../../src/reflectlog/parse.js";
-import { REQUIRED_REFLECTLOG_TOOLS, type ReflectLogClient } from "../../src/reflectlog/types.js";
+import { REQUIRED_REFLECTLOG_TOOLS, ReflectLogError, type ReflectLogClient } from "../../src/reflectlog/types.js";
 
 type Tool = Awaited<ReturnType<McpConnection["listTools"]>>["tools"][number];
 type Respond = (name: string) => Promise<ToolResponse>;
@@ -295,5 +295,163 @@ describe("ReflectLog MCP client", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(await outcome).toMatchObject({ code: "unavailable" });
     expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  describe("mutation dispatch classification", () => {
+    const mutations = [
+      ["addMemories", (client: ReflectLogClient, signal?: AbortSignal) => store(client, false, signal)],
+      ["deleteMemories", (client: ReflectLogClient, signal?: AbortSignal) =>
+        client.deleteMemories({ workspaceId: "w", ids: [1] }, signal ? { signal } : undefined)],
+    ] as const;
+    const postSend = [
+      ["a tool error", async () => ({ isError: true, content: [{ type: "text", text: "StorageError: busy" }] }), "tool_error"],
+      ["a bearer rejection", async () => ({ isError: true, content: [{ type: "text", text: "Unauthorized" }] }), "unauthorized"],
+      ["a malformed result", async () => ({ structuredContent: { status: "sideways" } }), "malformed"],
+      ["an HTTP 401", fail(new SdkHttpError(SdkErrorCode.SendFailed, "Unauthorized", { status: 401 })), undefined],
+      ["an OAuth rejection", fail(new UnauthorizedError("denied")), undefined],
+      ["a JSON-RPC error", fail(new ProtocolError(-32602, "invalid params")), undefined],
+      ["an invalid result", fail(new SdkError(SdkErrorCode.InvalidResult, "invalid")), undefined],
+      ["a request timeout", fail(new SdkError(SdkErrorCode.RequestTimeout, "timed out")), undefined],
+      ["a closed connection", fail(new SdkError(SdkErrorCode.ConnectionClosed, "closed")), undefined],
+      ["a generic failure", fail(new Error("boom")), undefined],
+    ] as const;
+
+    describe.each(mutations)("%s", (_method, call) => {
+      it.each(postSend)("is outcome_unknown with its cause after %s was received post-send", async (_label, respond, originalCode) => {
+        const connection = new FakeConnection(respond);
+        const { client, connect } = setup([connection, new FakeConnection()]);
+        const error = await call(client).catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(ReflectLogError);
+        expect(error).toMatchObject({ code: "outcome_unknown", cause: expect.anything() });
+        expect(String((error as Error).message)).not.toMatch(/busy|token|Prefers tea/);
+        if (originalCode !== undefined) {
+          expect((error as Error).cause).toMatchObject({ code: originalCode });
+        }
+        expect(connect).toHaveBeenCalledTimes(1);
+        expect(connection.calls).toHaveLength(1);
+      });
+
+      it("is outcome_unknown when the caller aborts after dispatch", async () => {
+        const stuck = new FakeConnection(hang);
+        const { client } = setup([stuck]);
+        const controller = new AbortController();
+        const pending = call(client, controller.signal);
+        await vi.waitFor(() => expect(stuck.calls).toHaveLength(1));
+        controller.abort();
+        await expect(pending).rejects.toMatchObject({ code: "outcome_unknown", cause: expect.anything() });
+      });
+
+      it("stays unavailable, not outcome_unknown, when the connection fails before dispatch", async () => {
+        const { client, connect } = setup([new Error("ECONNREFUSED"), new FakeConnection()]);
+        await expect(call(client)).rejects.toMatchObject({ code: "unavailable" });
+        expect(connect).toHaveBeenCalledTimes(1);
+      });
+
+      it("stays unauthorized, not outcome_unknown, when no token exists before dispatch", async () => {
+        const { client, connect } = setup([new FakeConnection()], {}, { REFLECTLOG_MCP_TOKEN: "" });
+        await expect(call(client)).rejects.toMatchObject({ code: "unauthorized" });
+        expect(connect).not.toHaveBeenCalled();
+      });
+
+      it("stays incompatible, not outcome_unknown, when the handshake rejects the server before dispatch", async () => {
+        const connection = new FakeConnection(ok, TOOLS.filter((tool) => tool.name !== "search_memories"));
+        const { client } = setup([connection]);
+        await expect(call(client)).rejects.toMatchObject({ code: "incompatible" });
+        expect(connection.calls).toEqual([]);
+      });
+
+      it("stays aborted when the caller signal was already aborted before dispatch", async () => {
+        const { client, connect } = setup([new FakeConnection()]);
+        await expect(call(client, AbortSignal.abort())).rejects.toMatchObject({ code: "aborted" });
+        expect(connect).not.toHaveBeenCalled();
+      });
+    });
+
+    it("keeps dry-run add and read classification after the request was sent", async () => {
+      const toolError = async () => ({ isError: true, content: [{ type: "text", text: "StorageError: busy" }] });
+      const dryRun = new FakeConnection(toolError);
+      const { client } = setup([dryRun, new FakeConnection()]);
+      await expect(store(client, true)).rejects.toMatchObject({ code: "tool_error" });
+      const timedOut = new FakeConnection(fail(new SdkError(SdkErrorCode.RequestTimeout, "timed out")));
+      const second = setup([timedOut, new FakeConnection()]);
+      await expect(store(second.client, true)).rejects.toMatchObject({ code: "timeout" });
+      const controller = new AbortController();
+      const stuck = new FakeConnection(hang);
+      const third = setup([stuck]);
+      const pending = store(third.client, true, controller.signal);
+      await vi.waitFor(() => expect(stuck.calls).toHaveLength(1));
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({ code: "aborted" });
+    });
+  });
+
+  describe("beforeDispatch", () => {
+    it("runs after the connection is acquired and immediately before the request is handed over", async () => {
+      const order: string[] = [];
+      const connection = new FakeConnection(async (name) => {
+        order.push(`call:${name}`);
+        return { structuredContent: RESULTS[name] };
+      });
+      const { client, connect } = setup([connection]);
+      connect.mockImplementationOnce(async () => {
+        order.push("connect");
+        return connection;
+      });
+      await client.addMemories({ workspaceId: "w", memories: ["x"], dryRun: false, allowReplace: false },
+        { beforeDispatch: () => { order.push("hook"); } });
+      expect(order).toEqual(["connect", "hook", "call:add_memories"]);
+    });
+
+    it("propagates what it throws unchanged and never invokes the transport", async () => {
+      const veto = new Error("all waiters revoked");
+      const connection = new FakeConnection();
+      const { client, connect } = setup([connection, new FakeConnection()]);
+      const attempt = client.addMemories({ workspaceId: "w", memories: ["x"], dryRun: false, allowReplace: false },
+        { beforeDispatch: () => { throw veto; } });
+      await expect(attempt).rejects.toBe(veto);
+      expect(connection.calls).toEqual([]);
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(connection.closed).toBe(0);
+    });
+
+    it("propagates a typed error thrown by a read hook without retrying", async () => {
+      const veto = new ReflectLogError("aborted", "revoked");
+      const connection = new FakeConnection();
+      const { client } = setup([connection, new FakeConnection()]);
+      await expect(client.getAllMemories({ workspaceId: "w", limit: 0, offset: 0 },
+        { beforeDispatch: () => { throw veto; } })).rejects.toBe(veto);
+      expect(connection.calls).toEqual([]);
+    });
+
+    it("runs exactly once for a mutation, including when it fails after dispatch", async () => {
+      const hook = vi.fn();
+      const { client, connect } = setup([new FakeConnection(fail(new SdkError(SdkErrorCode.ConnectionClosed, "closed"))), new FakeConnection()]);
+      await expect(client.addMemories({ workspaceId: "w", memories: ["x"], dryRun: false, allowReplace: false },
+        { beforeDispatch: hook })).rejects.toMatchObject({ code: "outcome_unknown" });
+      expect(hook).toHaveBeenCalledTimes(1);
+      expect(connect).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs once per attempt when a read is retried", async () => {
+      const hook = vi.fn();
+      const dropped = new FakeConnection(fail(new SdkError(SdkErrorCode.ConnectionClosed, "closed")));
+      const fresh = new FakeConnection();
+      const { client } = setup([dropped, fresh]);
+      await client.getAllMemories({ workspaceId: "w", limit: 0, offset: 0 }, { beforeDispatch: hook });
+      expect(hook).toHaveBeenCalledTimes(2);
+      expect(dropped.calls).toHaveLength(1);
+      expect(fresh.calls).toHaveLength(1);
+    });
+
+    it("does not run when connecting fails or the signal is already aborted", async () => {
+      const hook = vi.fn();
+      const refused = setup([new Error("ECONNREFUSED")]);
+      await expect(refused.client.addMemories({ workspaceId: "w", memories: ["x"], dryRun: false, allowReplace: false },
+        { beforeDispatch: hook })).rejects.toMatchObject({ code: "unavailable" });
+      const aborted = setup([new FakeConnection()]);
+      await expect(aborted.client.addMemories({ workspaceId: "w", memories: ["x"], dryRun: false, allowReplace: false },
+        { signal: AbortSignal.abort(), beforeDispatch: hook })).rejects.toMatchObject({ code: "aborted" });
+      expect(hook).not.toHaveBeenCalled();
+    });
   });
 });

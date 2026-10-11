@@ -47,7 +47,17 @@ export type AddMemoriesResult = {
   readonly dryRun: boolean;
 };
 
-export type CallOptions = { readonly signal?: AbortSignal | undefined };
+export type CallOptions = {
+  readonly signal?: AbortSignal | undefined;
+  /**
+   * Invoked synchronously, once per attempt, immediately before the request is
+   * handed to the transport: after connection acquisition, with no `await` in
+   * between. If it throws, the call fails without dispatching anything and the
+   * error propagates unchanged. Everything that fails before this hook returns
+   * is therefore proven not to have reached the server.
+   */
+  readonly beforeDispatch?: (() => void) | undefined;
+};
 
 /**
  * Typed view of the ReflectLog MCP tools this plugin depends on.
@@ -90,7 +100,8 @@ export interface ReflectLogClient {
 /**
  * - `unavailable`: no request reached the server (connect/transport failure before send).
  * - `timeout`: a read timed out.
- * - `outcome_unknown`: a mutation may have reached the server but no result arrived.
+ * - `outcome_unknown`: a mutation may have reached the server but no confirmed result arrived;
+ *   any failure after dispatch (including tool, auth or shape errors) is classified this way.
  * - `tool_error`: the server answered with `isError`.
  * - `unauthorized`: the bearer token was rejected.
  * - `incompatible`: required tools or parameters are missing on the server.
