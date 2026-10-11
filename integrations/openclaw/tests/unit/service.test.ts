@@ -2,20 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import { ownerScope } from "../../src/access.js";
 import { parseConfig, type ReflectLogPluginConfig } from "../../src/config.js";
-import { FlushLedger } from "../../src/flush-ledger.js";
+import { FlushCapacityError, FlushDisposedError } from "../../src/flush-ledger.js";
 import { revisionOf } from "../../src/references.js";
 import { MemoryConsistencyError, MemoryInputError, MemoryService } from "../../src/service.js";
 import { ReflectLogError } from "../../src/reflectlog/types.js";
 import { FakeReflectLogClient, allowAll } from "../support/fake-client.js";
 
-function setup(raw: unknown = {}) {
+function setup(raw: unknown = {}, flush: { maxEntries?: number; ttlMs?: number; now?: () => number } = {}) {
   const parsed = parseConfig(raw);
   if (!parsed.ok) {
     throw new Error(parsed.error);
   }
   const config: ReflectLogPluginConfig = parsed.config;
   const client = new FakeReflectLogClient();
-  const service = new MemoryService(client, config);
+  const service = new MemoryService(client, config, { flush });
   const scope = ownerScope(config, "main");
   return { client, service, scope };
 }
@@ -218,36 +218,304 @@ describe("health", () => {
   });
 });
 
-describe("flush ledger", () => {
-  it("shares one mutation across concurrent and repeated retries", async () => {
-    const ledger = new FlushLedger<number>();
-    let runs = 0;
-    const operation = async () => {
-      runs += 1;
-      return runs;
-    };
-    const key = FlushLedger.key("flush-1", "ws", ["a"]);
-    const [first, second] = await Promise.all([ledger.run(key, operation), ledger.run(key, operation)]);
-    const third = await ledger.run(key, operation);
-    expect(runs).toBe(1);
-    expect([first.deduplicated, second.deduplicated, third.deduplicated]).toEqual([false, true, true]);
+/** A caller whose authority and cancellation the test controls. */
+function caller() {
+  const controller = new AbortController();
+  const state = { revoked: false };
+  const guard = {
+    signal: controller.signal,
+    assertCurrent: () => {
+      controller.signal.throwIfAborted();
+      if (state.revoked) throw new Error("revoked");
+    },
+  };
+  return { guard, revoke: () => { state.revoked = true; }, abort: (reason?: unknown) => { controller.abort(reason); } };
+}
+
+describe("flush", () => {
+  const batch = ["Decided to ship on Friday"];
+
+  it("persists add-only through the shared write", async () => {
+    const { client, service, scope } = setup();
+    const outcome = await service.flush(scope, "f1", batch, allowAll);
+    expect(outcome).toMatchObject({ result: { storedCount: 1, dryRun: false }, deduplicated: false });
+    expect(client.callsTo("addMemories")[0]?.params).toEqual({
+      workspaceId: scope.workspaceId, memories: batch, dryRun: false, allowReplace: false,
+    });
   });
 
-  it("forgets failures so a retry can run", async () => {
-    const ledger = new FlushLedger<string>();
-    const key = FlushLedger.key("flush-1", "ws", ["a"]);
-    await expect(ledger.run(key, async () => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
-    expect(await ledger.run(key, async () => "ok")).toEqual({ value: "ok", deduplicated: false });
+  it("validates before joining or dispatching anything", async () => {
+    const { client, service, scope } = setup();
+    await expect(service.flush(scope, "f1", [], allowAll)).rejects.toThrow(MemoryInputError);
+    await expect(service.flush(scope, "f1", ["   "], allowAll)).rejects.toThrow(MemoryInputError);
+    expect(client.calls).toEqual([]);
+    await expect(service.flush(scope, "f1", batch, allowAll)).resolves.toMatchObject({ deduplicated: false });
   });
 
-  it("expires and bounds entries", async () => {
-    let now = 0;
-    const ledger = new FlushLedger<string>({ maxEntries: 2, ttlMs: 10, now: () => now });
-    await ledger.run("a", async () => "a");
-    await ledger.run("b", async () => "b");
-    await ledger.run("c", async () => "c");
-    expect(ledger.size).toBe(2);
-    now = 100;
-    expect((await ledger.run("c", async () => "c2")).value).toBe("c2");
+  it("checks the caller's authority before it joins", async () => {
+    const { client, service, scope } = setup();
+    const stale = { assertCurrent: () => { throw new Error("stale"); } };
+    await expect(service.flush(scope, "f1", batch, stale)).rejects.toThrow("stale");
+    expect(client.calls).toEqual([]);
+  });
+
+  it("shares one dispatch between identical flushes that stay pending past the TTL", async () => {
+    const clock = { now: 0 };
+    const { client, service, scope } = setup({}, { ttlMs: 10, now: () => clock.now });
+    const write = client.deferNext("addMemories");
+    const first = service.flush(scope, "f1", batch, allowAll);
+    await write.dispatched;
+    clock.now = 60_000;
+    const second = service.flush(scope, "f1", batch, allowAll);
+    write.resolve();
+    expect(await first).toMatchObject({ result: { storedCount: 1 }, deduplicated: false });
+    expect(await second).toMatchObject({ result: { storedCount: 1 }, deduplicated: true });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    expect(client.records(scope.workspaceId)).toHaveLength(1);
+  });
+
+  it("starts the success TTL at settlement and then dispatches a fresh write", async () => {
+    const clock = { now: 0 };
+    const { client, service, scope } = setup({}, { ttlMs: 1_000, now: () => clock.now });
+    const write = client.deferNext("addMemories");
+    const first = service.flush(scope, "f1", batch, allowAll);
+    await write.dispatched;
+    clock.now = 5_000;
+    write.resolve();
+    await first;
+    clock.now = 5_999;
+    expect(await service.flush(scope, "f1", batch, allowAll)).toMatchObject({ deduplicated: true });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    clock.now = 6_000;
+    expect(await service.flush(scope, "f1", batch, allowAll)).toMatchObject({ deduplicated: false, result: { skippedCount: 1 } });
+    expect(client.callsTo("addMemories")).toHaveLength(2);
+  });
+
+  it("keeps a pending write under capacity pressure and rejects distinct work before any I/O", async () => {
+    const { client, service, scope } = setup({}, { maxEntries: 1 });
+    const write = client.deferNext("addMemories");
+    const first = service.flush(scope, "f1", batch, allowAll);
+    await write.dispatched;
+    await expect(service.flush(scope, "f2", ["Another fact"], allowAll)).rejects.toBeInstanceOf(FlushCapacityError);
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    const retry = service.flush(scope, "f1", batch, allowAll);
+    write.resolve();
+    expect(await first).toMatchObject({ deduplicated: false });
+    expect(await retry).toMatchObject({ deduplicated: true });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("evicts a completed success to make room for distinct work", async () => {
+    const { client, service, scope } = setup({}, { maxEntries: 1 });
+    await service.flush(scope, "f1", batch, allowAll);
+    await expect(service.flush(scope, "f2", ["Another fact"], allowAll)).resolves.toMatchObject({ deduplicated: false });
+    expect(client.callsTo("addMemories")).toHaveLength(2);
+  });
+
+  it("allows a retry after a failure proven to precede dispatch", async () => {
+    const { client, service, scope } = setup();
+    client.failBeforeDispatch("addMemories", new ReflectLogError("unavailable", "ReflectLog connection unavailable"));
+    await expect(service.flush(scope, "f1", batch, allowAll)).rejects.toMatchObject({ code: "unavailable" });
+    expect(client.calls).toEqual([]);
+    await expect(service.flush(scope, "f1", batch, allowAll)).resolves.toMatchObject({ deduplicated: false });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("allows a retry after the connection failed while the write was held before dispatch", async () => {
+    const { client, service, scope } = setup();
+    const connecting = client.holdConnect("addMemories");
+    const first = service.flush(scope, "f1", batch, allowAll);
+    connecting.fail(new ReflectLogError("unavailable", "ReflectLog connection unavailable"));
+    await expect(first).rejects.toMatchObject({ code: "unavailable" });
+    await expect(service.flush(scope, "f1", batch, allowAll)).resolves.toMatchObject({ deduplicated: false });
+  });
+
+  it("pins a failure after dispatch as outcome_unknown and never redispatches it", async () => {
+    const { client, service, scope } = setup();
+    client.failNext("addMemories", new ReflectLogError("outcome_unknown", "ReflectLog call aborted"));
+    await expect(service.flush(scope, "f1", batch, allowAll)).rejects.toMatchObject({ code: "outcome_unknown" });
+    await expect(service.flush(scope, "f1", batch, allowAll)).rejects.toMatchObject({ code: "outcome_unknown" });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("treats a lost response after the backend applied the write as outcome_unknown, not a safe retry", async () => {
+    const { client, service, scope } = setup();
+    const write = client.deferNext("addMemories");
+    const first = service.flush(scope, "f1", batch, allowAll);
+    await write.dispatched;
+    write.applyThenFail(new ReflectLogError("outcome_unknown", "response lost"));
+    await expect(first).rejects.toMatchObject({ code: "outcome_unknown" });
+    expect(client.records(scope.workspaceId)).toHaveLength(1);
+    await expect(service.flush(scope, "f1", batch, allowAll)).rejects.toMatchObject({ code: "outcome_unknown" });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    expect(client.records(scope.workspaceId)).toHaveLength(1);
+  });
+
+  it("normalizes a non-outcome failure after dispatch to outcome_unknown", async () => {
+    const { client, service, scope } = setup();
+    const write = client.deferNext("addMemories");
+    const first = service.flush(scope, "f1", batch, allowAll);
+    await write.dispatched;
+    write.failUnapplied(new Error("transport exploded"));
+    await expect(first).rejects.toMatchObject({ code: "outcome_unknown" });
+    await expect(service.flush(scope, "f1", batch, allowAll)).rejects.toMatchObject({ code: "outcome_unknown" });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("does not dispatch when every waiter is revoked before the connection comes up, and frees the key", async () => {
+    const { client, service, scope } = setup();
+    const connecting = client.holdConnect("addMemories");
+    const only = caller();
+    const first = service.flush(scope, "f1", batch, only.guard);
+    only.revoke();
+    connecting.release();
+    await expect(first).rejects.toThrow("revoked");
+    expect(client.calls).toEqual([]);
+    await expect(service.flush(scope, "f1", batch, allowAll)).resolves.toMatchObject({ deduplicated: false });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("dispatches for a remaining authorized waiter and withholds the result from the revoked one", async () => {
+    const { client, service, scope } = setup();
+    const connecting = client.holdConnect("addMemories");
+    const revoked = caller();
+    const authorized = caller();
+    const first = service.flush(scope, "f1", batch, revoked.guard);
+    const second = service.flush(scope, "f1", batch, authorized.guard);
+    revoked.revoke();
+    connecting.release();
+    await expect(first).rejects.toThrow("revoked");
+    await expect(second).resolves.toMatchObject({ result: { storedCount: 1 }, deduplicated: true });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("withholds the result from a waiter revoked after dispatch while the other still receives it", async () => {
+    const { client, service, scope } = setup();
+    const write = client.deferNext("addMemories");
+    const revoked = caller();
+    const authorized = caller();
+    const first = service.flush(scope, "f1", batch, authorized.guard);
+    const second = service.flush(scope, "f1", batch, revoked.guard);
+    await write.dispatched;
+    revoked.revoke();
+    write.resolve();
+    await expect(second).rejects.toThrow("revoked");
+    await expect(first).resolves.toMatchObject({ result: { storedCount: 1 } });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("lets the waiter that started the write leave without cancelling it for another waiter", async () => {
+    const { client, service, scope } = setup();
+    const write = client.deferNext("addMemories");
+    const starter = caller();
+    const follower = caller();
+    const first = service.flush(scope, "f1", batch, starter.guard);
+    const second = service.flush(scope, "f1", batch, follower.guard);
+    await write.dispatched;
+    starter.abort(new Error("starter left"));
+    await expect(first).rejects.toThrow("starter left");
+    write.resolve();
+    await expect(second).resolves.toMatchObject({ result: { storedCount: 1 }, deduplicated: true });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    expect(client.records(scope.workspaceId)).toHaveLength(1);
+  });
+
+  it("completes and caches the write after every waiter left post-dispatch", async () => {
+    const { client, service, scope } = setup();
+    const write = client.deferNext("addMemories");
+    const only = caller();
+    const first = service.flush(scope, "f1", batch, only.guard);
+    await write.dispatched;
+    only.abort(new Error("left"));
+    await expect(first).rejects.toThrow("left");
+    write.resolve();
+    await expect(service.flush(scope, "f1", batch, allowAll)).resolves.toMatchObject({ deduplicated: true });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    expect(client.records(scope.workspaceId)).toHaveLength(1);
+  });
+
+  it("does not dispatch for a waiter cancelled while the connection is still coming up", async () => {
+    const { client, service, scope } = setup();
+    const connecting = client.holdConnect("addMemories");
+    const only = caller();
+    const first = service.flush(scope, "f1", batch, only.guard);
+    only.abort(new Error("left"));
+    await expect(first).rejects.toThrow("left");
+    connecting.release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(client.calls).toEqual([]);
+    await expect(service.flush(scope, "f1", batch, allowAll)).resolves.toMatchObject({ deduplicated: false });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("lets a new caller join a still-pending write whose first waiter already left", async () => {
+    const { client, service, scope } = setup();
+    const connecting = client.holdConnect("addMemories");
+    const left = caller();
+    const first = service.flush(scope, "f1", batch, left.guard);
+    left.abort(new Error("left"));
+    await expect(first).rejects.toThrow("left");
+    const joiner = service.flush(scope, "f1", batch, allowAll);
+    connecting.release();
+    await expect(joiner).resolves.toMatchObject({ result: { storedCount: 1 }, deduplicated: true });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("scopes dedup to the workspace as well as the flush id", async () => {
+    const { client, service, scope } = setup();
+    const other = { ...scope, workspaceId: "other-workspace" };
+    await service.flush(scope, "f1", batch, allowAll);
+    await expect(service.flush(other, "f1", batch, allowAll)).resolves.toMatchObject({ deduplicated: false });
+    expect(client.callsTo("addMemories")).toHaveLength(2);
+  });
+
+  it("never shares entries between two services, which are two backend lifecycles", async () => {
+    const first = setup();
+    const second = setup();
+    await first.service.flush(first.scope, "f1", batch, allowAll);
+    await expect(second.service.flush(second.scope, "f1", batch, allowAll)).resolves.toMatchObject({ deduplicated: false });
+    expect(first.client.callsTo("addMemories")).toHaveLength(1);
+    expect(second.client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  describe("disposal", () => {
+    it("settles a dispatched pending flush as outcome_unknown and offers no safe retry", async () => {
+      const { client, service, scope } = setup();
+      const write = client.deferNext("addMemories");
+      const first = service.flush(scope, "f1", batch, allowAll);
+      const joined = service.flush(scope, "f1", batch, allowAll);
+      await write.dispatched;
+      service.dispose();
+      await expect(first).rejects.toMatchObject({ code: "outcome_unknown" });
+      await expect(joined).rejects.toMatchObject({ code: "outcome_unknown" });
+      await expect(service.flush(scope, "f1", batch, allowAll)).rejects.toBeInstanceOf(FlushDisposedError);
+      expect(client.callsTo("addMemories")).toHaveLength(1);
+    });
+
+    it("settles a flush that never dispatched with the typed pre-dispatch error", async () => {
+      const { client, service, scope } = setup();
+      client.holdConnect("addMemories");
+      const first = service.flush(scope, "f1", batch, allowAll);
+      service.dispose();
+      await expect(first).rejects.toBeInstanceOf(FlushDisposedError);
+      expect(client.calls).toEqual([]);
+    });
+
+    it("rejects further flush and mutating calls before any I/O", async () => {
+      const { client, service, scope } = setup();
+      client.seed(scope.workspaceId, ["x"]);
+      service.dispose();
+      await expect(service.flush(scope, "f1", batch, allowAll)).rejects.toBeInstanceOf(FlushDisposedError);
+      await expect(service.store(scope, batch, { dryRun: false, allowReplace: false }, allowAll)).rejects.toBeInstanceOf(FlushDisposedError);
+      await expect(service.forget(scope, [`${scope.tag}:1`], allowAll)).rejects.toBeInstanceOf(FlushDisposedError);
+      expect(client.calls).toEqual([]);
+    });
+
+    it("forgets cached successes so a disposed service cannot answer from them", async () => {
+      const { service, scope } = setup();
+      await service.flush(scope, "f1", batch, allowAll);
+      service.dispose();
+      await expect(service.flush(scope, "f1", batch, allowAll)).rejects.toBeInstanceOf(FlushDisposedError);
+    });
   });
 });
