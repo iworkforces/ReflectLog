@@ -27,7 +27,7 @@ from typing import (
 from reflectlog.core.enums import TransitionKind, TransitionStatus
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
 ReplacementTransitionStatus = TransitionStatus
 IndexIntentKind = TransitionKind
@@ -118,6 +118,18 @@ class IArchiveMemoryStore(Protocol):
     db_path: str
 
     def get(self, memory_id: int) -> IStoredMemory | None: ...
+
+    def get_batch(self, memory_ids: list[int]) -> Mapping[int, IStoredMemory]: ...
+
+    def get_records_by_contents(
+        self, workspace_id: str, contents: list[str]
+    ) -> Sequence[IStoredMemory]: ...
+
+    def get_page_records(
+        self, workspace_id: str, limit: int | None, offset: int
+    ) -> Sequence[IStoredMemory]: ...
+
+    def count(self, workspace_id: str) -> int: ...
 
     def archive(
         self,

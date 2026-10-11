@@ -212,17 +212,18 @@ class TestValidateWorkspaceId:
 class TestValidateTransport:
     """Tests for ConfigurationValidator.validate_transport."""
 
-    @pytest.mark.parametrize("transport", ["stdio", "http", "sse", "streamable-http"])
+    @pytest.mark.parametrize("transport", ["http", "streamable-http"])
     def test_valid_transports(self, transport: str) -> None:
         """All valid transport modes are accepted."""
         v = ConfigurationValidator()
         assert v.validate_transport(transport) is True
         assert not v.has_errors()
 
-    def test_invalid_transport(self):
+    @pytest.mark.parametrize("transport", ["websocket", "stdio", "sse"])
+    def test_invalid_transport(self, transport: str) -> None:
         """Unknown transport mode is rejected."""
         v = ConfigurationValidator()
-        assert v.validate_transport("websocket") is False
+        assert v.validate_transport(transport) is False
         assert "Must be one of" in v.errors[0].message
 
 
@@ -1001,7 +1002,7 @@ class TestValidateConfig:
         config = Config(
             workspace_id="my-project",
             openrouter_api_key=SecretString("sk-or-v1-" + "a" * 42),
-            transport=TransportMode.STDIO,
+            transport=TransportMode.HTTP,
             port=9103,
             search_score_threshold=0.5,
             fusion_ranking_threshold=0.3,

@@ -59,7 +59,7 @@ async def test_cancelled_mcp_add_drains_before_close_and_reopens(
         tantivy_index_path_template=str(tmp_path / "{workspace_id}" / "tantivy"),
     )
     server_tasks: list[asyncio.Task[object]] = []
-    original_handler = FastMCPServer._add
+    original_handler = FastMCPServer._add_memories
     original_add = USearchEngine.add_batch
 
     async def capture_handler(
@@ -67,13 +67,16 @@ async def test_cancelled_mcp_add_drains_before_close_and_reopens(
         memories: list[str],
         workspace_id: str,
         dry_run: bool = False,
+        allow_replace: bool = True,
     ) -> dict[str, object]:
         task = asyncio.current_task()
         assert task is not None
         server_tasks.append(task)
-        return await original_handler(server, memories, workspace_id, dry_run)
+        return await original_handler(
+            server, memories, workspace_id, dry_run, allow_replace
+        )
 
-    with patch.object(FastMCPServer, "_add", capture_handler):
+    with patch.object(FastMCPServer, "_add_memories", capture_handler):
         server = FastMCPServer(config)
     client_factory = cast("Callable[[object], Client]", Client)
     workspace_id = "cancelled"
@@ -140,7 +143,8 @@ async def test_cancelled_mcp_add_drains_before_close_and_reopens(
                 try:
                     invocation = asyncio.create_task(
                         client.call_tool(
-                            "add", {"workspace_id": workspace_id, "memories": [memory]}
+                            "add_memories",
+                            {"workspace_id": workspace_id, "memories": [memory]},
                         )
                     )
                     if barrier == "predispatch":
@@ -187,15 +191,22 @@ async def test_cancelled_mcp_add_drains_before_close_and_reopens(
         reopened = FastMCPServer(config)
         try:
             async with client_factory(reopened.mcp) as client:
-                page = await client.call_tool("get_all", {"workspace_id": workspace_id})
+                page = await client.call_tool(
+                    "get_all_memories", {"workspace_id": workspace_id}
+                )
                 result = await client.call_tool(
-                    "search", {"workspace_id": workspace_id, "query": memory}
+                    "search_memories", {"workspace_id": workspace_id, "query": memory}
                 )
                 expected = [memory] if barrier == "postwrite" else []
                 assert page.structured_content is not None
-                assert page.structured_content["memories"] == expected
+                assert [
+                    row["memory"] for row in page.structured_content["records"]
+                ] == expected
                 assert page.structured_content["total"] == len(expected)
-                assert result.structured_content == {"result": expected}
+                assert result.structured_content is not None
+                assert [
+                    row["memory"] for row in result.structured_content["results"]
+                ] == expected
         finally:
             await asyncio.wait_for(reopened.aclose(), 10)
         assert ordering == (

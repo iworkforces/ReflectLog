@@ -142,7 +142,7 @@ class TestConfigDefaults:
 
     def test_transport_defaults(self):
         cfg = self._make_config()
-        assert cfg.transport == "stdio"
+        assert cfg.transport == "http"
         assert cfg.port == 9103
         assert cfg.host == "127.0.0.1"
         assert cfg.path == "/mcp"
@@ -315,7 +315,7 @@ class TestFromEnvironmentDefaults:
         assert cfg.workspace_id == ""
         assert isinstance(cfg.openrouter_api_key, SecretString)
         assert cfg.openrouter_api_key.get_secret_value() == "sk-test-key-12345"
-        assert cfg.transport == "stdio"
+        assert cfg.transport == "http"
         assert cfg.port == 9103
         assert cfg.embedding_dims == 3072
 
@@ -356,9 +356,14 @@ class TestFromEnvironmentOverrides:
         cfg = self._with_env(monkeypatch, MCP_TRANSPORT="http")
         assert cfg.transport == "http"
 
-    def test_transport_sse(self, monkeypatch: pytest.MonkeyPatch):
-        cfg = self._with_env(monkeypatch, MCP_TRANSPORT="sse")
-        assert cfg.transport == "sse"
+    @pytest.mark.parametrize("transport", ["stdio", "sse"])
+    def test_removed_transport_raises(
+        self, monkeypatch: pytest.MonkeyPatch, transport: str
+    ) -> None:
+        from reflectlog.core.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="Invalid MCP_TRANSPORT"):
+            self._with_env(monkeypatch, MCP_TRANSPORT=transport)
 
     def test_transport_streamable_http(self, monkeypatch: pytest.MonkeyPatch):
         cfg = self._with_env(monkeypatch, MCP_TRANSPORT="streamable-http")
@@ -778,43 +783,45 @@ class TestParseAllowedTools:
         assert Config._parse_allowed_tools() == ()
 
     def test_csv_tools_parsed(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ALLOWED_TOOLS", "add,search,remove")
+        monkeypatch.setenv(
+            "ALLOWED_TOOLS", "add_memories,search_memories,delete_memories"
+        )
         result = Config._parse_allowed_tools()
-        assert result == ("add", "search", "remove")
+        assert result == ("add_memories", "search_memories", "delete_memories")
 
     def test_normalizes_hyphens_to_underscores(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ALLOWED_TOOLS", "health-check")
+        monkeypatch.setenv("ALLOWED_TOOLS", "search-memories")
         result = Config._parse_allowed_tools()
-        assert result == ("health_check",)
+        assert result == ("search_memories",)
 
     def test_normalizes_camel_case(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ALLOWED_TOOLS", "healthCheck")
+        monkeypatch.setenv("ALLOWED_TOOLS", "searchMemories")
         result = Config._parse_allowed_tools()
-        assert result == ("health_check",)
+        assert result == ("search_memories",)
 
     def test_normalizes_uppercase(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ALLOWED_TOOLS", "ADD,SEARCH")
+        monkeypatch.setenv("ALLOWED_TOOLS", "ADD_MEMORIES,SEARCH_MEMORIES")
         result = Config._parse_allowed_tools()
-        assert result == ("add", "search")
+        assert result == ("add_memories", "search_memories")
 
     def test_deduplicates(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ALLOWED_TOOLS", "add,search,add")
+        monkeypatch.setenv("ALLOWED_TOOLS", "add_memories,search_memories,add_memories")
         result = Config._parse_allowed_tools()
-        assert result == ("add", "search")
+        assert result == ("add_memories", "search_memories")
 
     def test_normalizes_whitespace(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ALLOWED_TOOLS", "  add , search  ")
+        monkeypatch.setenv("ALLOWED_TOOLS", "  add_memories , search_memories  ")
         result = Config._parse_allowed_tools()
-        assert result == ("add", "search")
+        assert result == ("add_memories", "search_memories")
 
     def test_all_overrides_other_entries(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ALLOWED_TOOLS", "add,all,search")
+        monkeypatch.setenv("ALLOWED_TOOLS", "add_memories,all,search_memories")
         assert Config._parse_allowed_tools() is None
 
     def test_spaces_in_tool_names_normalized(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ALLOWED_TOOLS", "get all")
+        monkeypatch.setenv("ALLOWED_TOOLS", "get all memories")
         result = Config._parse_allowed_tools()
-        assert result == ("get_all",)
+        assert result == ("get_all_memories",)
 
 
 # ---------------------------------------------------------------------------
@@ -940,7 +947,7 @@ class TestStaticParseMethods:
         monkeypatch.delenv("MCP_PATH", raising=False)
         monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
         result = Config._parse_transport_config()
-        assert result["transport"] == "stdio"
+        assert result["transport"] == "http"
         assert result["port"] == 9103
         assert result["host"] == "127.0.0.1"
         assert result["path"] == "/mcp"

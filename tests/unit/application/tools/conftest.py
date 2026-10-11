@@ -6,12 +6,13 @@ import pytest
 
 from reflectlog.application.config.settings import Config
 from reflectlog.application.memory.add_phases import AddResult
-from reflectlog.application.memory.manager import MemoryManager
-from reflectlog.application.tools.add import AddTool
-from reflectlog.application.tools.remove import RemoveTool
-from reflectlog.application.tools.search import SearchTool
-from reflectlog.core.enums import EngineReadiness
-from reflectlog.core.search_health import SearchFailureSnapshot
+from reflectlog.application.memory.manager import MemoryManager, RecordSearchResult
+from reflectlog.application.tools.add_memories import AddMemoriesTool
+from reflectlog.application.tools.delete_memories import DeleteMemoriesTool
+from reflectlog.application.tools.get_all_memories import GetAllMemoriesTool
+from reflectlog.application.tools.get_memory_by_id import GetMemoryByIdTool
+from reflectlog.application.tools.search_memories import SearchMemoriesTool
+from reflectlog.core.enums import SearchScoreKind
 
 
 @pytest.fixture
@@ -29,20 +30,12 @@ def mock_memory_manager() -> MagicMock:
             stored_count=1, skipped_count=0, replaced_count=0, replacements=[]
         )
     )
-    mm.search = AsyncMock(return_value=[])
-    mm.search_for_removal = MagicMock(return_value=[])
-    mm.delete_by_memory = MagicMock(return_value=True)
-    mm.delete_by_message = MagicMock(return_value=True)
-    mm.search_engine_status = MagicMock(
-        return_value={
-            "semantic_engine": EngineReadiness.PENDING,
-            "tantivy_engine": EngineReadiness.DISABLED,
-        }
+    mm.search_records = AsyncMock(
+        return_value=RecordSearchResult((), SearchScoreKind.NONE)
     )
-    mm.pending_intent_count = MagicMock(return_value=0)
-    mm.search_failure_snapshot = MagicMock(return_value=SearchFailureSnapshot())
-    mm.count = MagicMock(return_value=0)
-    mm.startup_metrics = None
+    mm.get_records.return_value = ([], [])
+    mm.get_page_records_with_total.return_value = ([], 0)
+    mm.delete_records.return_value = ([], [])
     return mm
 
 
@@ -60,9 +53,9 @@ def mock_tool_logger() -> MagicMock:
 @pytest.fixture
 def add_tool_instance(
     mock_config: Config, mock_memory_manager: MagicMock, mock_tool_logger: MagicMock
-) -> AddTool:
-    """Create an AddTool instance with mocked dependencies."""
-    return AddTool(
+) -> AddMemoriesTool:
+    """Create an AddMemoriesTool instance with mocked dependencies."""
+    return AddMemoriesTool(
         config=mock_config, memory_manager=mock_memory_manager, logger=mock_tool_logger
     )
 
@@ -70,18 +63,32 @@ def add_tool_instance(
 @pytest.fixture
 def search_tool_instance(
     mock_config: Config, mock_memory_manager: MagicMock, mock_tool_logger: MagicMock
-) -> SearchTool:
-    """Create a SearchTool instance with mocked dependencies."""
-    return SearchTool(
+) -> SearchMemoriesTool:
+    """Create a SearchMemoriesTool instance with mocked dependencies."""
+    return SearchMemoriesTool(
         config=mock_config, memory_manager=mock_memory_manager, logger=mock_tool_logger
     )
 
 
 @pytest.fixture
-def remove_tool_instance(
+def delete_tool_instance(
     mock_config: Config, mock_memory_manager: MagicMock, mock_tool_logger: MagicMock
-) -> RemoveTool:
-    """Create a RemoveTool instance with mocked dependencies."""
-    return RemoveTool(
+) -> DeleteMemoriesTool:
+    """Create a DeleteMemoriesTool instance with mocked dependencies."""
+    return DeleteMemoriesTool(
         config=mock_config, memory_manager=mock_memory_manager, logger=mock_tool_logger
     )
+
+
+@pytest.fixture
+def get_all_tool_instance(
+    mock_config: Config, mock_memory_manager: MagicMock, mock_tool_logger: MagicMock
+) -> GetAllMemoriesTool:
+    return GetAllMemoriesTool(mock_config, mock_memory_manager, mock_tool_logger)
+
+
+@pytest.fixture
+def get_memory_tool_instance(
+    mock_config: Config, mock_memory_manager: MagicMock, mock_tool_logger: MagicMock
+) -> GetMemoryByIdTool:
+    return GetMemoryByIdTool(mock_config, mock_memory_manager, mock_tool_logger)

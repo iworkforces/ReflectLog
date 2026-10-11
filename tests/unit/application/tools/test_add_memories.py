@@ -1,4 +1,4 @@
-"""Tests for AddTool implementation."""
+"""Tests for AddMemoriesTool implementation."""
 
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
@@ -6,16 +6,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from reflectlog.application.memory.add_phases import AddResult, ReplacementInfo
-from reflectlog.application.tools.add import AddTool
+from reflectlog.application.tools.add_memories import AddMemoriesTool
 from reflectlog.core.exceptions import InconsistentStateError, StorageError
 
 
 @pytest.mark.unit
-class TestAddToolHappyPath:
+class TestAddMemoriesToolHappyPath:
     """Tests for successful add operations."""
 
     async def test_add_single_memory(
-        self, add_tool_instance: AddTool, mock_memory_manager: MagicMock
+        self, add_tool_instance: AddMemoriesTool, mock_memory_manager: MagicMock
     ) -> None:
         """Adding a single valid memory calls add_memories_async and returns counts."""
         handler = add_tool_instance.get_handler()
@@ -24,11 +24,11 @@ class TestAddToolHappyPath:
         assert result["stored_count"] == 1
         assert result["dry_run"] is False
         mock_memory_manager.add_memories_async.assert_awaited_once_with(
-            ["Remember this"], dry_run=False
+            ["Remember this"], dry_run=False, allow_replace=True
         )
 
     async def test_add_multiple_memories(
-        self, add_tool_instance: AddTool, mock_memory_manager: MagicMock
+        self, add_tool_instance: AddMemoriesTool, mock_memory_manager: MagicMock
     ) -> None:
         """Adding multiple memories passes entire list to add_memories_async."""
         mock_memory_manager.add_memories_async = AsyncMock(
@@ -43,35 +43,34 @@ class TestAddToolHappyPath:
         assert call_args.args[0] == ["First", "Second", "Third"]
 
     async def test_add_with_dry_run(
-        self, add_tool_instance: AddTool, mock_memory_manager: MagicMock
+        self, add_tool_instance: AddMemoriesTool, mock_memory_manager: MagicMock
     ) -> None:
         """dry_run=True is forwarded to add_memories_async."""
         handler = add_tool_instance.get_handler()
         await handler(["Test memory"], dry_run=True)
 
         mock_memory_manager.add_memories_async.assert_awaited_once_with(
-            ["Test memory"], dry_run=True
+            ["Test memory"], dry_run=True, allow_replace=True
         )
 
     async def test_add_logs_invocation(
-        self, add_tool_instance: AddTool, mock_tool_logger: MagicMock
+        self, add_tool_instance: AddMemoriesTool, mock_tool_logger: MagicMock
     ) -> None:
-        """Add handler calls log_invocation with tool name 'add'."""
+        """Add handler calls log_invocation with tool name 'add_memories'."""
         handler = add_tool_instance.get_handler()
         await handler(["Hello"])
 
-        # log_invocation calls logger.info with tool='add'
-        info_calls = mock_tool_logger.info.call_args_list
-        invocation_logged = any(
-            "add" in str(c.args[0]) and "invoked" in str(c.args[0]).lower()
-            for c in info_calls
-            if c.args
-        )
-        assert invocation_logged
+        invocations = [
+            c
+            for c in mock_tool_logger.info.call_args_list
+            if c.args and c.args[0] == "Tool 'add_memories' invoked"
+        ]
+        assert len(invocations) == 1
+        assert invocations[0].kwargs["extra"]["tool"] == "add_memories"
 
     async def test_add_with_replacements(
         self,
-        add_tool_instance: AddTool,
+        add_tool_instance: AddMemoriesTool,
         mock_memory_manager: MagicMock,
         mock_tool_logger: MagicMock,
     ) -> None:
@@ -100,11 +99,11 @@ class TestAddToolHappyPath:
 
 
 @pytest.mark.unit
-class TestAddToolEmptyInput:
+class TestAddMemoriesToolEmptyInput:
     """Tests for empty list input handling."""
 
     async def test_add_empty_list_returns_none(
-        self, add_tool_instance: AddTool, mock_memory_manager: MagicMock
+        self, add_tool_instance: AddMemoriesTool, mock_memory_manager: MagicMock
     ) -> None:
         """Empty list is a no-op that returns zero counts without calling storage."""
         handler = add_tool_instance.get_handler()
@@ -115,7 +114,7 @@ class TestAddToolEmptyInput:
         mock_memory_manager.add_memories_async.assert_not_awaited()
 
     async def test_add_empty_list_logs_noop(
-        self, add_tool_instance: AddTool, mock_tool_logger: MagicMock
+        self, add_tool_instance: AddMemoriesTool, mock_tool_logger: MagicMock
     ) -> None:
         """Empty list add logs appropriate message about no-op."""
         handler = add_tool_instance.get_handler()
@@ -129,11 +128,11 @@ class TestAddToolEmptyInput:
 
 
 @pytest.mark.unit
-class TestAddToolValidation:
+class TestAddMemoriesToolValidation:
     """Tests for input validation errors."""
 
     async def test_add_empty_string_raises_value_error(
-        self, add_tool_instance: AddTool
+        self, add_tool_instance: AddMemoriesTool
     ) -> None:
         """Empty string memory raises ValueError."""
         handler = add_tool_instance.get_handler()
@@ -141,7 +140,7 @@ class TestAddToolValidation:
             await handler([""])
 
     async def test_add_whitespace_only_raises_value_error(
-        self, add_tool_instance: AddTool
+        self, add_tool_instance: AddMemoriesTool
     ) -> None:
         """Whitespace-only memory raises ValueError."""
         handler = add_tool_instance.get_handler()
@@ -149,7 +148,7 @@ class TestAddToolValidation:
             await handler(["   "])
 
     async def test_add_too_long_memory_raises_value_error(
-        self, add_tool_instance: AddTool
+        self, add_tool_instance: AddMemoriesTool
     ) -> None:
         """Memory exceeding max length raises ValueError."""
         handler = add_tool_instance.get_handler()
@@ -158,7 +157,7 @@ class TestAddToolValidation:
             await handler([too_long])
 
     async def test_add_non_string_raises_value_error(
-        self, add_tool_instance: AddTool
+        self, add_tool_instance: AddMemoriesTool
     ) -> None:
         """Non-string item in memories raises ValueError."""
         handler = add_tool_instance.get_handler()
@@ -166,7 +165,7 @@ class TestAddToolValidation:
             await handler(cast(list[str], [123]))
 
     async def test_add_validation_does_not_call_storage(
-        self, add_tool_instance: AddTool, mock_memory_manager: MagicMock
+        self, add_tool_instance: AddMemoriesTool, mock_memory_manager: MagicMock
     ) -> None:
         """Validation errors prevent any storage call."""
         handler = add_tool_instance.get_handler()
@@ -176,11 +175,11 @@ class TestAddToolValidation:
 
 
 @pytest.mark.unit
-class TestAddToolErrorHandling:
+class TestAddMemoriesToolErrorHandling:
     """Tests for storage error handling."""
 
     async def test_storage_error_wraps_with_from(
-        self, add_tool_instance: AddTool, mock_memory_manager: MagicMock
+        self, add_tool_instance: AddMemoriesTool, mock_memory_manager: MagicMock
     ) -> None:
         """Storage exception is wrapped as StorageError with 'from e' chaining."""
         original = RuntimeError("disk full")
@@ -194,7 +193,7 @@ class TestAddToolErrorHandling:
 
     async def test_storage_error_logs_before_raising(
         self,
-        add_tool_instance: AddTool,
+        add_tool_instance: AddMemoriesTool,
         mock_memory_manager: MagicMock,
         mock_tool_logger: MagicMock,
     ) -> None:
@@ -210,7 +209,7 @@ class TestAddToolErrorHandling:
         mock_tool_logger.error.assert_called()
 
     async def test_inconsistent_state_is_reraised(
-        self, add_tool_instance: AddTool, mock_memory_manager: MagicMock
+        self, add_tool_instance: AddMemoriesTool, mock_memory_manager: MagicMock
     ) -> None:
         """InconsistentStateError must not be flattened to StorageError."""
         original = InconsistentStateError("USearch/Tantivy split")
@@ -224,14 +223,14 @@ class TestAddToolErrorHandling:
 
 
 @pytest.mark.unit
-class TestAddToolMetadata:
-    """Tests for AddTool metadata methods."""
+class TestAddMemoriesToolMetadata:
+    """Tests for AddMemoriesTool metadata methods."""
 
-    def test_get_name(self, add_tool_instance: AddTool) -> None:
-        """AddTool.get_name() returns 'add'."""
-        assert add_tool_instance.get_name() == "add"
+    def test_get_name(self, add_tool_instance: AddMemoriesTool) -> None:
+        """AddMemoriesTool.get_name() returns 'add_memories'."""
+        assert add_tool_instance.get_name() == "add_memories"
 
-    def test_get_instruction_snippet(self, add_tool_instance: AddTool) -> None:
+    def test_get_instruction_snippet(self, add_tool_instance: AddMemoriesTool) -> None:
         """get_instruction_snippet contains expected signature."""
         snippet = add_tool_instance.get_instruction_snippet()
-        assert "add(memories: list[str]" in snippet
+        assert "add_memories(memories: list[str]" in snippet

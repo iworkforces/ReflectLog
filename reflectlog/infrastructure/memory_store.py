@@ -617,6 +617,35 @@ class MemoryStore(BaseModel):
             finally:
                 cursor.close()
 
+    def get_page_records(
+        self, workspace_id: str, limit: int | None, offset: int
+    ) -> list[MemoryRecord]:
+        with self._conn_lock:
+            cursor = self.connection.cursor()
+            try:
+                _ = cursor.execute(
+                    "SELECT id, workspace_id, content, created_at FROM memories "
+                    "WHERE workspace_id = ? ORDER BY id LIMIT ? OFFSET ?",
+                    (
+                        workspace_id,
+                        -1 if limit is None else max(0, limit),
+                        max(0, offset),
+                    ),
+                )
+                return [
+                    MemoryRecord(
+                        id=row[0],
+                        workspace_id=row[1],
+                        content=row[2],
+                        created_at=row[3] or "",
+                    )
+                    for row in cursor.fetchall()
+                ]
+            except sqlite3.Error as e:
+                raise StorageError("Failed to retrieve memory records") from e
+            finally:
+                cursor.close()
+
     def delete(self, memory_id: int) -> bool:
         """Delete a memory by its ID.
 

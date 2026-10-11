@@ -32,7 +32,7 @@ tests/integration/
 ## CONVENTIONS
 
 - Real engines. One manager per test; always `cleanup_manager` / close indexes.
-- `delete_memories` returns `list[str]`.
+- `MemoryManager.delete_memories` returns `list[str]`; MCP `delete_memories` takes ids and returns `removed` / `missing`.
 - Dual-engine split after USearch success is `InconsistentStateError`, not `StorageError`.
 - Set `RUN_USEARCH_CONCURRENCY_TESTS=1` for multiprocess/concurrency files (focused CI sets this).
 
