@@ -76,15 +76,15 @@ the ids once it has converged, while it still holds the workspace lease.
 
 Any other difference refuses the workspace with an `InitializationError`
 that lists the counts and a bounded sample of ids and ends with: *Restore a
-consistent backup or rebuild this workspace offline.* `add`, `search`, and
-`remove` refuse with that text before they journal or write anything, and
-`search` does not fall back to full-text results. Nothing is deleted,
+consistent backup or rebuild this workspace offline.* `add_memories`, `search_memories`, and
+`delete_memories` refuse with that text before they journal or write anything, and
+`search_memories` does not fall back to full-text results. Nothing is deleted,
 re-embedded, or rewritten automatically, and a refused workspace is left as it
 was found: startup reads the journal read-only first, so the database is not
 switched to WAL or migrated before the check runs. Restore the whole workspace
 directory from a backup taken at one moment, or rebuild into an empty
-workspace as described above. `get_all`, `count`, and `health_check` still
-read SQLite, which stays the source of truth for memory text.
+workspace as described above. MCP `get_all_memories` and `get_memory_by_id`,
+and internal count and health reads, use SQLite, which stays the source of truth for memory text.
 
 An empty SQLite store with a populated vector index stays refused, including
 the case where the last memory was deleted and the process stopped before the
@@ -99,8 +99,8 @@ and writes nothing. Recovery then embeds the missing vectors, indexes every
 pending add, publishes the first `vectors.usearch` through the usual temp
 file and replace, and advances the generation only after SQLite, Tantivy and
 the vector index agree. If embedding or indexing fails, the journal rows stay
-pending and the generation stays where it was, `health_check` reports the
-count in `pending_intent_count`, and the next start tries again.
+pending and the generation stays where it was. The manager retains the
+internal `pending_intent_count`; the next start tries again. No MCP health-check tool exposes it.
 
 ## Engines
 

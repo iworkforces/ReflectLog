@@ -132,25 +132,24 @@ Pick the configuration for your client:
 
 ### MCP Tools
 
-ReflectLog provides nine MCP tools:
+ReflectLog provides exactly five MCP tools:
 
-1. `add(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict`: Store memories; returns stored/skipped/replaced counts. Set `allow_replace=False` to skip smart replacement entirely (exact deduplication still applies).
-2. `get_all(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict`: Page stored memories (default cap 1000); includes `total` and `truncated`
-3. `search(query: str, workspace_id: str) -> list[str]`: Hybrid semantic + full-text search
-4. `remove(memories: list[str], workspace_id: str)`: Remove memories by exact match
-5. `health_check(workspace_id: str) -> dict`: Workspace-specific health, including `pending_intent_count` and `search_failures`. The latter reports `count`, `last_failure_at` (UTC ISO timestamp or null), and `exception_type` (class name only or null) for `semantic`, `tantivy`, `cross_encoder`, and `openrouter_reranker`; it never includes exception messages, queries, or memory text. A vector-index refusal that `search` raises is counted under `semantic` as well. Historical search failures do not change the existing overall status logic.
+1. `add_memories(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict`: Store memories; returns `stored_count`, `skipped_count`, `replaced_count`, `replacements` (`old_memory`, `new_memory`, `confidence`, `reason`), and `dry_run`. With `allow_replace=True` (default) and `ENABLE_SMART_REPLACE` enabled, LLM smart replacement may replace an existing contradicting memory. Set `allow_replace=False` to skip smart replacement; exact deduplication still applies. `dry_run=True` previews without storing.
+2. `search_memories(query: str, workspace_id: str, limit: int | None = None) -> dict`: Hybrid semantic + full-text search. Returns `results` (`id`, `memory`, final `score`, nullable `created_at`), `score_kind`, and effective `limit`. Queries must contain non-whitespace content and be 1..1000 characters; explicit limits are 1..50 and omitted limits use `SEARCH_LIMIT`. Score kinds are `reranker`, `rrf`, `semantic`, `fulltext`, `concatenated`, and `none`; scores are not comparable across kinds.
+3. `get_all_memories(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict`: Returns `records` (`id`, `memory`, nullable `created_at`), `total`, `offset`, `limit`, and `truncated`, ordered by id. Default and maximum page size is `GET_ALL_LIMIT` (default 1000). Negative limits and offsets clamp to 0. `limit=0` returns no records but the real total, useful as a cheap connectivity probe.
+4. `get_memory_by_id(id: int, workspace_id: str) -> dict`: Returns `{"record": {"id": ..., "memory": ..., "created_at": ...}}` or `{"record": null}` if the id is absent in that workspace. `created_at` is nullable; foreign-workspace ids are not found. The id must be positive.
+5. `delete_memories(ids: list[int], workspace_id: str) -> dict`: Delete by stable id. At most 100 positive ids; duplicates collapse in first-seen order and an empty list is a no-op. Returns `removed` (ids actually deleted) and `missing` (ids not found, including concurrent-deletion shortfalls).
 
-6. `search_records(query: str, workspace_id: str, limit: int | None = None) -> dict`: Returns `results` containing `id`, `memory`, final `score`, and nullable `created_at`, plus `score_kind` and effective `limit`. Queries must contain non-whitespace content and be 1..1000 characters; explicit limits are 1..50 and omitted limits use `search_limit`. Score kinds are `reranker`, `rrf`, `semantic`, `fulltext`, `concatenated`, and `none`; scores are not interchangeable across kinds.
-7. `get_records(ids: list[int], workspace_id: str) -> dict`: Returns `records` (`id`, `memory`, nullable `created_at`) and `missing`. At most 100 positive ids; duplicates collapse in first-seen order. Foreign-workspace ids are missing; empty input is a no-op.
-8. `list_records(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict`: Returns `records`, `total`, `offset`, `limit`, and `truncated`, with identical paging/clamping/cap to `get_all`, ordered by id.
-9. `remove_records(ids: list[int], workspace_id: str) -> dict`: Returns actually `removed` ids and `missing` ids (including concurrent deletion shortfalls). Same id bounds/order/deduplication as `get_records`.
-
-Every tool call, including `health_check`, requires an explicit `workspace_id`.
+Every tool call requires an explicit `workspace_id: str`.
 `WORKSPACE_ID` in the environment or `.env` is not used as a default. Active
 workspace managers are cached per workspace. Idle managers expire after 15
 minutes without a call; a sweep runs every 60 seconds, with at most 8 idle
-managers retained. Search failure records belong to each cached workspace manager,
-not persisted storage, and reset when an idle manager is evicted and recreated.
+managers retained. There is no MCP health-check tool. Search-failure counters
+remain internal to each workspace manager and are not exposed over MCP.
+
+`ALLOWED_TOOLS` optionally filters the five names with a comma-separated list.
+Kebab-case, CamelCase, and an `_tool` suffix are normalized; `all` or `*`
+enables all tools. Unknown names, including old tool names, are ignored with a warning.
 
 Workspace IDs must be 1 to 64 characters from `A-Z`, `a-z`, `0-9`, `_`, `.`,
 and `-`; `.` and any occurrence of `..` are rejected. Surrounding whitespace
@@ -163,21 +162,24 @@ an authorization boundary.
 
 ```python
 # Add memories
-await add(["I prefer Python for web development", "I use FastAPI for APIs"], workspace_id="my-project")
+await add_memories(["I prefer Python for web development", "I use FastAPI for APIs"], workspace_id="my-project")
 
 # Search semantically
-results = await search("web frameworks", workspace_id="my-project")
-# Returns: ["I prefer Python for web development"]
+results = await search_memories("web frameworks", workspace_id="my-project", limit=5)
+# results["results"] contains records with ids, memory text, scores, and created_at
 
 # Get all memories
-page = await get_all(workspace_id="my-project")
-# Returns {"memories": [...], "total": N, "offset": 0, "limit": 1000, "truncated": bool}
+page = await get_all_memories(workspace_id="my-project")
+# Returns {"records": [...], "total": N, "offset": 0, "limit": 1000, "truncated": bool}
 
-# Remove memories
-await remove(["I use FastAPI for APIs"], workspace_id="my-project")
+# Look up and delete a returned id in the same workspace
+if page["records"]:
+    memory_id = page["records"][0]["id"]
+    record = await get_memory_by_id(id=memory_id, workspace_id="my-project")
+    deleted = await delete_memories(ids=[memory_id], workspace_id="my-project")
 
-# Check this workspace's health
-status = await health_check(workspace_id="my-project")
+# Probe connectivity without fetching records
+probe = await get_all_memories(workspace_id="my-project", limit=0)
 ```
 
 ## Configuration
