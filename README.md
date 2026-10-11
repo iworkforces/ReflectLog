@@ -14,7 +14,7 @@ ReflectLog is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io)
 - **Pluggable Reranking**: Local cross-encoder relevance scoring (or none)
 - **Temporal-Aware Scoring**: Recency decay for handling contradictory memories
 - **Smart Memory Replacement**: LLM-based detection of memory updates
-- **Multiple Transport Modes**: stdio, HTTP, SSE, streamable-http
+- **HTTP Transports**: `http` (default) and `streamable-http`, with bearer-token auth
 - **Eager engine warmup** by default, with optional lazy reranker load
 
 ## Quick Start
@@ -41,15 +41,15 @@ OPENROUTER_API_KEY=sk-or-your-key-here
 ### Running the Server
 
 ```bash
-# Start with stdio transport (default for MCP clients)
-uv run reflectlog
+# Start with the default HTTP transport (requires MCP_AUTH_TOKEN; bind-all needs ALLOW_PUBLIC_BIND=true)
+MCP_AUTH_TOKEN=change-me uv run reflectlog --port 9103
 
 # Or use the launcher
-./start-reflectlog-mcp-server.sh
-
-# Start with HTTP transport (requires MCP_AUTH_TOKEN; bind-all needs ALLOW_PUBLIC_BIND=true)
-MCP_AUTH_TOKEN=change-me uv run reflectlog --transport http --port 9103
+MCP_AUTH_TOKEN=change-me ./start-reflectlog-mcp-server.sh
 ```
+
+The server accepts only the `http` (default) and `streamable-http` transports.
+`stdio` and `sse` are not supported.
 
 ### Connect HTTP MCP clients
 
@@ -203,7 +203,7 @@ ENABLE_SMART_REPLACE=true         # LLM-based memory replacement
 SMART_REPLACE_THRESHOLD=0.7       # Confidence threshold
 
 # Server
-MCP_TRANSPORT=stdio               # stdio, http, sse, streamable-http
+MCP_TRANSPORT=http                # http (default) or streamable-http
 MCP_PORT=9103                     # Port for HTTP transport
 LOG_LEVEL=INFO                    # Logging level
 ```
