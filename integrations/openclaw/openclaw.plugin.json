@@ -37,7 +37,7 @@
     "transport": {
       "label": "Transport",
       "placeholder": "http",
-      "help": "How to reach ReflectLog: loopback HTTP (default) or a long-lived stdio child process"
+      "help": "How to reach ReflectLog; streamable HTTP is the only supported transport"
     },
     "url": {
       "label": "ReflectLog MCP URL",
@@ -70,11 +70,6 @@
       "help": "Let memory_store(replace=true) ask ReflectLog to replace contradicted memories; flush and import always add only",
       "advanced": true
     },
-    "stdio": {
-      "label": "Stdio launcher",
-      "help": "Command, args, cwd and env for transport=stdio",
-      "advanced": true
-    },
     "connectTimeoutMs": { "label": "Connect timeout (ms)", "advanced": true },
     "requestTimeoutMs": { "label": "Request timeout (ms)", "advanced": true }
   },
@@ -82,22 +77,12 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "transport": { "type": "string", "enum": ["http", "stdio"], "default": "http" },
+      "transport": { "type": "string", "enum": ["http"], "default": "http" },
       "url": { "type": "string", "default": "http://127.0.0.1:9103/mcp" },
       "authTokenEnv": {
         "type": "string",
         "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
         "default": "REFLECTLOG_MCP_TOKEN"
-      },
-      "stdio": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "command": { "type": "string", "minLength": 1 },
-          "args": { "type": "array", "items": { "type": "string" } },
-          "cwd": { "type": "string", "minLength": 1 },
-          "env": { "type": "object", "additionalProperties": { "type": "string" } }
-        }
       },
       "namespace": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,31}$", "default": "openclaw" },
       "workspaceOverrides": {

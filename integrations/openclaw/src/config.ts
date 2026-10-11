@@ -17,21 +17,13 @@ export function isValidAgentId(value: string): boolean {
   return AGENT_ID_RE.test(value);
 }
 
-const stdioSchema = z.strictObject({
-  command: z.string().min(1).default("reflectlog"),
-  args: z.array(z.string()).default([]),
-  cwd: z.string().min(1).optional(),
-  env: z.record(z.string(), z.string()).default({}),
-});
-
 const configSchema = z
   .strictObject({
-    transport: z.enum(["http", "stdio"]).default("http"),
+    transport: z.enum(["http"]).default("http"),
     url: z
       .url({ protocol: /^https?$/ })
       .default(DEFAULT_URL),
     authTokenEnv: z.string().regex(ENV_NAME_RE).default(DEFAULT_AUTH_TOKEN_ENV),
-    stdio: stdioSchema.default({ command: "reflectlog", args: [], env: {} }),
     namespace: z.string().regex(NAMESPACE_RE).default("openclaw"),
     workspaceOverrides: z
       .record(z.string().regex(AGENT_ID_RE), z.string().regex(WORKSPACE_ID_RE))
@@ -89,19 +81,9 @@ export const configJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    transport: { type: "string", enum: ["http", "stdio"], default: "http" },
+    transport: { type: "string", enum: ["http"], default: "http" },
     url: { type: "string", default: DEFAULT_URL },
     authTokenEnv: { type: "string", pattern: ENV_NAME_RE.source, default: DEFAULT_AUTH_TOKEN_ENV },
-    stdio: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        command: { type: "string", minLength: 1 },
-        args: { type: "array", items: { type: "string" } },
-        cwd: { type: "string", minLength: 1 },
-        env: { type: "object", additionalProperties: { type: "string" } },
-      },
-    },
     namespace: { type: "string", pattern: NAMESPACE_RE.source, default: "openclaw" },
     workspaceOverrides: {
       type: "object",

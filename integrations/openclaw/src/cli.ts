@@ -65,7 +65,7 @@ export function registerReflectLogCli(api: Pick<OpenClawPluginApi, "registerCli"
       const checks = [
         { name: "memory-slot", pass: hostConfig.plugins?.slots?.memory === PLUGIN_ID },
         { name: "memory-core-disabled", pass: hostConfig.plugins?.entries?.["memory-core"]?.enabled === false },
-        { name: "transport/token", pass: deps.config.transport !== "http" || Boolean(process.env[deps.config.authTokenEnv]?.trim()), transport: deps.config.transport, tokenEnv: deps.config.authTokenEnv },
+        { name: "transport/token", pass: Boolean(process.env[deps.config.authTokenEnv]?.trim()), transport: deps.config.transport, tokenEnv: deps.config.authTokenEnv },
         { name: "workspace", pass: true, workspaceId: selected.workspaceId },
       ];
       let health: { readonly name: string; readonly pass: boolean; readonly hint?: string };

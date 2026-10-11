@@ -127,15 +127,10 @@ describe("ReflectLog MCP client", () => {
     expect(connect).not.toHaveBeenCalled();
   });
 
-  it("launches stdio with the inherited and configured environment and no token", async () => {
-    const { client, connect } = setup(
-      [new FakeConnection()],
-      { transport: "stdio", stdio: { env: { EXTRA: "1" } } },
-      { PATH: "/bin", UNSET: undefined },
-    );
-    await health(client);
-    expect(connect.mock.calls[0]?.[1]).toMatchObject({ headers: {}, env: { PATH: "/bin", EXTRA: "1" } });
-    expect(connect.mock.calls[0]?.[1].env).not.toHaveProperty("UNSET");
+  it("accepts only the HTTP transport", () => {
+    expect(parseConfig({ transport: "http" }).ok).toBe(true);
+    expect(parseConfig({ transport: "stdio" }).ok).toBe(false);
+    expect(parseConfig({ stdio: { command: "reflectlog" } }).ok).toBe(false);
   });
 
   it("shares one connection between concurrent callers", async () => {

@@ -2,7 +2,6 @@ import {
   Client, ProtocolError, SdkError, SdkErrorCode, SdkHttpError,
   StreamableHTTPClientTransport, UnauthorizedError,
 } from "@modelcontextprotocol/client";
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { z } from "zod";
 import type { ReflectLogPluginConfig } from "../config.js";
 import {
@@ -24,8 +23,7 @@ export interface McpConnection {
   close(): Promise<void>;
 }
 export type ConnectFn = (config: ReflectLogPluginConfig, options: {
-  readonly signal: AbortSignal; readonly timeout: number;
-  readonly env: Record<string, string>; readonly headers: Record<string, string>;
+  readonly signal: AbortSignal; readonly timeout: number; readonly headers: Record<string, string>;
 }) => Promise<McpConnection>;
 export type ReflectLogClientDeps = {
   readonly connect?: ConnectFn;
@@ -34,11 +32,8 @@ export type ReflectLogClientDeps = {
 
 const connectSdk: ConnectFn = async (config, options) => {
   const client = new Client({ name: "openclaw-memory-reflectlog", version: "0.1.0" });
-  const transport = config.transport === "http"
-    ? new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: options.headers } })
-    : new StdioClientTransport({ command: config.stdio.command, args: config.stdio.args,
-      ...(config.stdio.cwd !== undefined ? { cwd: config.stdio.cwd } : {}),
-      env: options.env, stderr: "ignore" });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(config.url), { requestInit: { headers: options.headers } });
   try {
     await client.connect(transport, { signal: options.signal, timeout: options.timeout });
     return {
@@ -89,17 +84,12 @@ export function createReflectLogClient(
   function acquire(): Promise<Live> {
     if (live) return Promise.resolve(live);
     if (pending) return pending;
-    const headers: Record<string, string> = {};
-    if (config.transport === "http") {
-      const token = env[config.authTokenEnv];
-      if (!token?.trim()) {
-        return Promise.reject(new ReflectLogError("unauthorized",
-          `set ${config.authTokenEnv} to the ReflectLog bearer token`));
-      }
-      headers["Authorization"] = `Bearer ${token}`;
+    const token = env[config.authTokenEnv];
+    if (!token?.trim()) {
+      return Promise.reject(new ReflectLogError("unauthorized",
+        `set ${config.authTokenEnv} to the ReflectLog bearer token`));
     }
-    const inherited: Record<string, string> = {};
-    for (const [key, value] of Object.entries(env)) if (value !== undefined) inherited[key] = value;
+    const headers = { Authorization: `Bearer ${token}` };
     const current = ++generation;
     const abort = new AbortController();
     controller = abort;
@@ -107,8 +97,7 @@ export function createReflectLogClient(
       new SdkError(SdkErrorCode.RequestTimeout, "Connection timed out")), config.connectTimeoutMs);
     const opening = (async (): Promise<Live> => {
       const connection = await connect(config, {
-        headers, env: { ...inherited, ...config.stdio.env },
-        signal: abort.signal, timeout: config.connectTimeoutMs,
+        headers, signal: abort.signal, timeout: config.connectTimeoutMs,
       });
       try {
         abort.signal.throwIfAborted();
