@@ -11,16 +11,15 @@ type Respond = (name: string) => Promise<ToolResponse>;
 
 const TOOLS: readonly Tool[] = REQUIRED_REFLECTLOG_TOOLS.map((name) => ({
   name,
-  inputSchema: name === "add" ? { properties: { allow_replace: { type: "boolean" } } } : {},
+  inputSchema: name === "add_memories" ? { properties: { allow_replace: { type: "boolean" } } } : {},
 }));
 
 const RESULTS: Readonly<Record<string, unknown>> = {
-  search_records: { results: [], score_kind: "none", limit: 5 },
-  get_records: { records: [], missing: [] },
-  list_records: { records: [], total: 0, offset: 0, limit: 10, truncated: false },
-  remove_records: { removed: [1], missing: [] },
-  add: { stored_count: 1, skipped_count: 0, replaced_count: 0, dry_run: false, replacements: [] },
-  health_check: { status: "healthy" },
+  search_memories: { results: [], score_kind: "none", limit: 5 },
+  get_memory_by_id: { record: null },
+  get_all_memories: { records: [], total: 0, offset: 0, limit: 0, truncated: false },
+  delete_memories: { removed: [1], missing: [] },
+  add_memories: { stored_count: 1, skipped_count: 0, replaced_count: 0, dry_run: false, replacements: [] },
 };
 
 const ok: Respond = async (name) => ({ structuredContent: RESULTS[name] });
@@ -84,9 +83,9 @@ function setup(
 }
 
 const health = (client: ReflectLogClient, signal?: AbortSignal) =>
-  client.healthCheck({ workspaceId: "w" }, signal ? { signal } : undefined);
+  client.getAllMemories({ workspaceId: "w", limit: 0, offset: 0 }, signal ? { signal } : undefined);
 const store = (client: ReflectLogClient, dryRun = false, signal?: AbortSignal) =>
-  client.add(
+  client.addMemories(
     { workspaceId: "w", memories: ["Prefers tea"], dryRun, allowReplace: false },
     signal ? { signal } : undefined,
   );
@@ -99,20 +98,20 @@ describe("ReflectLog MCP client", () => {
   it("maps typed calls onto ReflectLog tool arguments", async () => {
     const connection = new FakeConnection();
     const { client } = setup([connection]);
-    await client.searchRecords({ workspaceId: "w", query: "tea", limit: 3 });
-    await client.getRecords({ workspaceId: "w", ids: [4] });
-    await client.listRecords({ workspaceId: "w", limit: 10, offset: 20 });
+    await client.searchMemories({ workspaceId: "w", query: "tea", limit: 3 });
+    await client.getMemoryById({ workspaceId: "w", id: 4 });
+    await client.getAllMemories({ workspaceId: "w", limit: 10, offset: 20 });
     await store(client);
-    await client.removeRecords({ workspaceId: "w", ids: [1] });
+    await client.deleteMemories({ workspaceId: "w", ids: [1] });
     expect(connection.calls).toEqual([
-      { name: "search_records", arguments: { workspace_id: "w", query: "tea", limit: 3 } },
-      { name: "get_records", arguments: { workspace_id: "w", ids: [4] } },
-      { name: "list_records", arguments: { workspace_id: "w", limit: 10, offset: 20 } },
+      { name: "search_memories", arguments: { workspace_id: "w", query: "tea", limit: 3 } },
+      { name: "get_memory_by_id", arguments: { workspace_id: "w", id: 4 } },
+      { name: "get_all_memories", arguments: { workspace_id: "w", limit: 10, offset: 20 } },
       {
-        name: "add",
+        name: "add_memories",
         arguments: { workspace_id: "w", memories: ["Prefers tea"], dry_run: false, allow_replace: false },
       },
-      { name: "remove_records", arguments: { workspace_id: "w", ids: [1] } },
+      { name: "delete_memories", arguments: { workspace_id: "w", ids: [1] } },
     ]);
   });
 
@@ -148,12 +147,14 @@ describe("ReflectLog MCP client", () => {
   });
 
   it.each([
-    ["a missing tool", TOOLS.filter((tool) => tool.name !== "remove_records"), "remove_records"],
+    ...REQUIRED_REFLECTLOG_TOOLS.map((name) => [
+      `a missing ${name} tool`, TOOLS.filter((tool) => tool.name !== name), name,
+    ] as const),
     [
-      "an add tool without allow_replace",
-      TOOLS.map((tool) => (tool.name === "add" ? { name: "add", inputSchema: {} } : tool)),
-      "add.allow_replace",
-    ],
+      "an add_memories tool without allow_replace",
+      TOOLS.map((tool) => (tool.name === "add_memories" ? { name: "add_memories", inputSchema: {} } : tool)),
+      "add_memories.allow_replace",
+    ] as const,
   ])("rejects a server with %s and closes the connection", async (_label, tools, missing) => {
     const connection = new FakeConnection(ok, tools);
     const { client } = setup([connection]);
@@ -169,7 +170,7 @@ describe("ReflectLog MCP client", () => {
     const dropped = new FakeConnection(fail(new SdkError(SdkErrorCode.ConnectionClosed, "closed")));
     const fresh = new FakeConnection();
     const { client, connect } = setup([dropped, fresh]);
-    await expect(client.listRecords({ workspaceId: "w", limit: 10, offset: 0 })).resolves.toMatchObject({ total: 0 });
+    await expect(client.getAllMemories({ workspaceId: "w", limit: 10, offset: 0 })).resolves.toMatchObject({ total: 0 });
     expect(connect).toHaveBeenCalledTimes(2);
     expect(dropped.closed).toBe(1);
     expect(fresh.calls).toHaveLength(1);
@@ -182,10 +183,11 @@ describe("ReflectLog MCP client", () => {
     expect(connect).toHaveBeenCalledTimes(2);
   });
 
-  it("never replays a mutation that may have reached the server", async () => {
+  it.each(["addMemories", "deleteMemories"] as const)("never replays %s after it may have reached the server", async (method) => {
     const dropped = new FakeConnection(fail(new SdkError(SdkErrorCode.ConnectionClosed, "closed")));
     const { client, connect } = setup([dropped, new FakeConnection()]);
-    await expect(store(client)).rejects.toMatchObject({ code: "outcome_unknown" });
+    const pending = method === "addMemories" ? store(client) : client.deleteMemories({ workspaceId: "w", ids: [1] });
+    await expect(pending).rejects.toMatchObject({ code: "outcome_unknown" });
     expect(connect).toHaveBeenCalledTimes(1);
     expect(dropped.calls).toHaveLength(1);
   });
@@ -200,7 +202,7 @@ describe("ReflectLog MCP client", () => {
 
   it("reports a mutation that could not be sent as unavailable without retrying", async () => {
     const { client, connect } = setup([new Error("ECONNREFUSED"), new FakeConnection()]);
-    await expect(client.removeRecords({ workspaceId: "w", ids: [1] })).rejects.toMatchObject({
+    await expect(client.deleteMemories({ workspaceId: "w", ids: [1] })).rejects.toMatchObject({
       code: "unavailable",
     });
     expect(connect).toHaveBeenCalledTimes(1);
@@ -258,7 +260,7 @@ describe("ReflectLog MCP client", () => {
     controller.abort();
     await expect(aborted).rejects.toMatchObject({ code: "aborted" });
     opening.resolve(new FakeConnection());
-    await expect(waiting).resolves.toMatchObject({ status: "healthy" });
+    await expect(waiting).resolves.toMatchObject({ records: [], total: 0, limit: 0 });
     expect(connect).toHaveBeenCalledTimes(1);
   });
 
@@ -271,7 +273,7 @@ describe("ReflectLog MCP client", () => {
     await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
     await client.close();
     opening.resolve(stale);
-    await expect(pending).resolves.toMatchObject({ status: "healthy" });
+    await expect(pending).resolves.toMatchObject({ records: [], total: 0, limit: 0 });
     await vi.waitFor(() => expect(stale.closed).toBe(1));
     expect(stale.calls).toEqual([]);
     expect(fresh.calls).toHaveLength(1);

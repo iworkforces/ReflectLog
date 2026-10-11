@@ -54,7 +54,7 @@ describe("search", () => {
     const { client, service, scope } = setup({ defaultMaxResults: 3 });
     await service.search(scope, { query: "x".repeat(1500), maxResults: 500 }, allowAll);
     await service.search(scope, { query: "y" }, allowAll);
-    const [first, second] = client.callsTo("searchRecords").map((call) => call.params) as Array<{
+    const [first, second] = client.callsTo("searchMemories").map((call) => call.params) as Array<{
       query: string;
       limit: number;
     }>;
@@ -112,7 +112,7 @@ describe("get", () => {
 
   it("propagates backend failures instead of reporting not_found", async () => {
     const { client, service, scope } = setup();
-    client.failNext("getRecords", new ReflectLogError("unavailable", "down"));
+    client.failNext("getMemoryById", new ReflectLogError("unavailable", "down"));
     await expect(service.get(scope, { ref: `${scope.tag}:1` }, {}, allowAll)).rejects.toBeInstanceOf(
       ReflectLogError,
     );
@@ -152,7 +152,7 @@ describe("store and forget", () => {
     expect(outcome.removed).toEqual([`${scope.tag}:1`]);
     expect([...outcome.missing].sort()).toEqual(["0123456789:2", `${scope.tag}:9`, "junk"].sort());
     expect(client.records(scope.workspaceId).map((record) => record.memory)).toEqual(["b"]);
-    expect(client.callsTo("removeRecords")).toHaveLength(1);
+    expect(client.callsTo("deleteMemories")).toHaveLength(1);
   });
 });
 
@@ -162,15 +162,15 @@ describe("export", () => {
     client.seed(scope.workspaceId, Array.from({ length: 1203 }, (_, index) => `memory ${index}`));
     const entries = await service.exportAll(scope, allowAll);
     expect(entries).toHaveLength(1203);
-    expect(client.callsTo("listRecords")).toHaveLength(3);
+    expect(client.callsTo("getAllMemories")).toHaveLength(3);
   });
 
   it("fails when the workspace changes mid-export", async () => {
     const { client, service, scope } = setup();
     client.seed(scope.workspaceId, Array.from({ length: 600 }, (_, index) => `memory ${index}`));
-    const original = client.listRecords.bind(client);
+    const original = client.getAllMemories.bind(client);
     let pages = 0;
-    client.listRecords = async (params, options) => {
+    client.getAllMemories = async (params, options) => {
       pages += 1;
       if (pages === 2) {
         client.seed(scope.workspaceId, ["late write"]);
@@ -178,6 +178,43 @@ describe("export", () => {
       return original(params, options);
     };
     await expect(service.exportAll(scope, allowAll)).rejects.toBeInstanceOf(MemoryConsistencyError);
+  });
+});
+
+describe("health", () => {
+  it("probes connectivity without reading records or applying the list clamp", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["private memory"]);
+    const signal = new AbortController().signal;
+    let checks = 0;
+    const guard = { signal, assertCurrent: () => { checks++; } };
+    await expect(service.health(scope, guard)).resolves.toBeUndefined();
+    expect(client.calls).toEqual([{ method: "getAllMemories", params: { workspaceId: scope.workspaceId, limit: 0, offset: 0 } }]);
+    expect(checks).toBe(2);
+    expect(await client.getAllMemories({ workspaceId: scope.workspaceId, limit: 0, offset: 0 })).toEqual({
+      records: [], total: 1, offset: 0, limit: 0, truncated: true,
+    });
+  });
+
+  it("propagates probe failures", async () => {
+    const { client, service, scope } = setup();
+    const error = new ReflectLogError("unavailable", "down");
+    client.failNext("getAllMemories", error);
+    await expect(service.health(scope, allowAll)).rejects.toBe(error);
+  });
+
+  it("does not probe after authority is revoked", async () => {
+    const { client, service, scope } = setup();
+    const guard = { assertCurrent: () => { throw new Error("stale"); } };
+    await expect(service.health(scope, guard)).rejects.toThrow("stale");
+    expect(client.calls).toEqual([]);
+  });
+
+  it("withholds probe success when authority is revoked during the call", async () => {
+    const { service, scope } = setup();
+    let checks = 0;
+    const guard = { assertCurrent: () => { if (++checks > 1) throw new Error("stale"); } };
+    await expect(service.health(scope, guard)).rejects.toThrow("stale");
   });
 });
 

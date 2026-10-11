@@ -140,7 +140,7 @@ describe("ReflectLog provider runtime", () => {
     expect((await provider.search({ query: "owner secret group fact" })).hits.map((hit) => hit.excerpt)).toEqual(["group fact"]);
     await expect(provider.get({ reference: { providerId: PLUGIN_ID, id: `${owner.tag}:1` } }))
       .resolves.toEqual({ status: "not_found" });
-    expect(client.callsTo("getRecords")).toEqual([]);
+    expect(client.callsTo("getMemoryById")).toEqual([]);
   });
 
   it("does not resolve foreign, stale or removed references", async () => {
@@ -150,7 +150,7 @@ describe("ReflectLog provider runtime", () => {
     const { reference } = first((await provider.search({ query: "tea" })).hits);
     await expect(provider.get({ reference: { ...reference, providerId: "memory-core" } })).resolves.toEqual({ status: "not_found" });
     await expect(provider.get({ reference: { ...reference, revision: "0".repeat(64) } })).resolves.toEqual({ status: "not_found" });
-    await client.removeRecords({ workspaceId: owner.workspaceId, ids: [1] });
+    await client.deleteMemories({ workspaceId: owner.workspaceId, ids: [1] });
     await expect(provider.get({ reference })).resolves.toEqual({ status: "not_found" });
   });
 
@@ -158,8 +158,8 @@ describe("ReflectLog provider runtime", () => {
     const { client, open } = setup();
     client.seed(owner.workspaceId, ["Prefers tea"]);
     let current = true;
-    const search = client.searchRecords.bind(client);
-    vi.spyOn(client, "searchRecords").mockImplementation(async (params, options) => {
+    const search = client.searchMemories.bind(client);
+    vi.spyOn(client, "searchMemories").mockImplementation(async (params, options) => {
       const result = await search(params, options);
       current = false;
       return result;
@@ -191,12 +191,9 @@ describe("ReflectLog provider runtime", () => {
     expect(closeClient).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ["healthy", "ready"], ["degraded", "degraded"], ["unhealthy", "unavailable"],
-  ] as const)("maps %s backend health to %s for any caller", async (backend, status) => {
-    const { client, open } = setup();
-    client.healthStatus = backend;
-    await expect((await open({ authority: hostAuthority })).health()).resolves.toEqual({ status });
+  it("reports ready after a successful connectivity probe for any caller", async () => {
+    const { open } = setup();
+    await expect((await open({ authority: hostAuthority })).health()).resolves.toEqual({ status: "ready" });
   });
 
   it("reports degraded health while memory-core is still enabled", async () => {
@@ -206,7 +203,7 @@ describe("ReflectLog provider runtime", () => {
 
   it("reports an unreachable backend as unavailable instead of throwing", async () => {
     const { client, open } = setup();
-    client.failNext("healthCheck", new ReflectLogError("unavailable", "ReflectLog connection unavailable"));
+    client.failNext("getAllMemories", new ReflectLogError("unavailable", "ReflectLog connection unavailable"));
     await expect((await open()).health()).resolves.toEqual({ status: "unavailable", message: "ReflectLog connection unavailable" });
   });
 });

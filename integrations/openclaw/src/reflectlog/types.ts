@@ -1,4 +1,4 @@
-/** Provenance of ReflectLog's final search scores (`search_records.score_kind`). */
+/** Provenance of ReflectLog's final search scores (`search_memories.score_kind`). */
 export type ScoreKind = "reranker" | "rrf" | "semantic" | "fulltext" | "concatenated" | "none";
 
 export type ReflectLogRecord = {
@@ -9,18 +9,17 @@ export type ReflectLogRecord = {
 
 export type ScoredRecord = ReflectLogRecord & { readonly score: number };
 
-export type SearchRecordsResult = {
+export type SearchMemoriesResult = {
   readonly results: readonly ScoredRecord[];
   readonly scoreKind: ScoreKind;
   readonly limit: number;
 };
 
-export type GetRecordsResult = {
-  readonly records: readonly ReflectLogRecord[];
-  readonly missing: readonly number[];
+export type GetMemoryByIdResult = {
+  readonly record: ReflectLogRecord | null;
 };
 
-export type ListRecordsResult = {
+export type GetAllMemoriesResult = {
   readonly records: readonly ReflectLogRecord[];
   readonly total: number;
   readonly offset: number;
@@ -28,7 +27,7 @@ export type ListRecordsResult = {
   readonly truncated: boolean;
 };
 
-export type RemoveRecordsResult = {
+export type DeleteMemoriesResult = {
   readonly removed: readonly number[];
   readonly missing: readonly number[];
 };
@@ -40,23 +39,12 @@ export type Replacement = {
   readonly reason: string | null;
 };
 
-export type AddResult = {
+export type AddMemoriesResult = {
   readonly storedCount: number;
   readonly skippedCount: number;
   readonly replacedCount: number;
   readonly replacements: readonly Replacement[];
   readonly dryRun: boolean;
-};
-
-export type HealthStatus = "healthy" | "degraded" | "unhealthy";
-
-/** Content-free subset of `health_check`; never carries memory text. */
-export type HealthCheckResult = {
-  readonly status: HealthStatus;
-  readonly semanticEngine: string | null;
-  readonly fulltextEngine: string | null;
-  readonly rerankerEngine: string | null;
-  readonly pendingIntentCount: number | null;
 };
 
 export type CallOptions = { readonly signal?: AbortSignal | undefined };
@@ -68,25 +56,25 @@ export type CallOptions = { readonly signal?: AbortSignal | undefined };
  * {@link ReflectLogError}; none resolves on failure.
  */
 export interface ReflectLogClient {
-  searchRecords(
+  searchMemories(
     params: { workspaceId: string; query: string; limit: number },
     options?: CallOptions,
-  ): Promise<SearchRecordsResult>;
-  getRecords(
-    params: { workspaceId: string; ids: readonly number[] },
+  ): Promise<SearchMemoriesResult>;
+  getMemoryById(
+    params: { workspaceId: string; id: number },
     options?: CallOptions,
-  ): Promise<GetRecordsResult>;
-  listRecords(
+  ): Promise<GetMemoryByIdResult>;
+  getAllMemories(
     params: { workspaceId: string; limit: number; offset: number },
     options?: CallOptions,
-  ): Promise<ListRecordsResult>;
+  ): Promise<GetAllMemoriesResult>;
   /** Mutation: never retried after the request may have reached the server. */
-  removeRecords(
+  deleteMemories(
     params: { workspaceId: string; ids: readonly number[] },
     options?: CallOptions,
-  ): Promise<RemoveRecordsResult>;
+  ): Promise<DeleteMemoriesResult>;
   /** Mutation unless `dryRun`: never retried after the request may have reached the server. */
-  add(
+  addMemories(
     params: {
       workspaceId: string;
       memories: readonly string[];
@@ -94,8 +82,7 @@ export interface ReflectLogClient {
       allowReplace: boolean;
     },
     options?: CallOptions,
-  ): Promise<AddResult>;
-  healthCheck(params: { workspaceId: string }, options?: CallOptions): Promise<HealthCheckResult>;
+  ): Promise<AddMemoriesResult>;
   /** Closes the shared connection; a later call reconnects lazily. */
   close(): Promise<void>;
 }
@@ -132,10 +119,9 @@ export class ReflectLogError extends Error {
 
 /** Tool names this plugin requires on the ReflectLog server. */
 export const REQUIRED_REFLECTLOG_TOOLS = [
-  "add",
-  "health_check",
-  "search_records",
-  "get_records",
-  "list_records",
-  "remove_records",
+  "add_memories",
+  "search_memories",
+  "get_all_memories",
+  "get_memory_by_id",
+  "delete_memories",
 ] as const;

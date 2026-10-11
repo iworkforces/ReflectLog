@@ -68,11 +68,11 @@ export function registerReflectLogCli(api: Pick<OpenClawPluginApi, "registerCli"
         { name: "transport/token", pass: deps.config.transport !== "http" || Boolean(process.env[deps.config.authTokenEnv]?.trim()), transport: deps.config.transport, tokenEnv: deps.config.authTokenEnv },
         { name: "workspace", pass: true, workspaceId: selected.workspaceId },
       ];
-      let health: { readonly name: string; readonly pass: boolean; readonly status?: string; readonly hint?: string };
+      let health: { readonly name: string; readonly pass: boolean; readonly hint?: string };
       try {
-        const result = await deps.getService().health(selected, guard);
-        health = { name: "health_check", pass: result.status === "healthy", status: result.status };
-      } catch (error) { health = { name: "health_check", pass: false, hint: errorHint(error, deps.config) }; }
+        await deps.getService().health(selected, guard);
+        health = { name: "connectivity", pass: true };
+      } catch (error) { health = { name: "connectivity", pass: false, hint: errorHint(error, deps.config) }; }
       const all = [...checks, health];
       output({ workspaceId: selected.workspaceId, checks: all }, options.json);
       if (all.some((check) => !check.pass)) process.exitCode = 1;

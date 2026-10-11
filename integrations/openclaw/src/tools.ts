@@ -6,13 +6,13 @@ import { MemoryAccessDeniedError, resolveToolScope, type MemoryScope } from "./a
 import { PLUGIN_ID, type ReflectLogPluginConfig } from "./config.js";
 import { FlushLedger } from "./flush-ledger.js";
 import { UNTRUSTED_MEMORY_NOTICE } from "./policy.js";
-import { ReflectLogError, type AddResult } from "./reflectlog/types.js";
+import { ReflectLogError, type AddMemoriesResult } from "./reflectlog/types.js";
 import { MemoryInputError, type EffectGuard, type MemoryService } from "./service.js";
 
 export const MEMORY_TOOL_NAMES = ["memory_search", "memory_get", "memory_store", "memory_preview", "memory_forget", "memory_list"] as const;
 type ToolDeps = { readonly api: Pick<OpenClawPluginApi, "config">; readonly config: ReflectLogPluginConfig; readonly getService: () => MemoryService };
 type Invocation = { readonly ctx: OpenClawPluginToolContext; readonly scope: MemoryScope; readonly service: MemoryService; readonly guard: EffectGuard };
-const flushLedger = new FlushLedger<AddResult>();
+const flushLedger = new FlushLedger<AddMemoriesResult>();
 const memories = Type.Array(Type.String(), { minItems: 1, maxItems: 20 });
 const writeParameters = Type.Object({ memories, replace: Type.Optional(Type.Boolean()) });
 const writeInput = z.object({ memories: z.array(z.string()).min(1).max(20), replace: z.boolean().optional() });

@@ -1,14 +1,13 @@
 import type {
-  AddResult,
+  AddMemoriesResult,
   CallOptions,
-  GetRecordsResult,
-  HealthCheckResult,
-  ListRecordsResult,
+  GetMemoryByIdResult,
+  GetAllMemoriesResult,
   ReflectLogClient,
   ReflectLogRecord,
-  RemoveRecordsResult,
+  DeleteMemoriesResult,
   ScoreKind,
-  SearchRecordsResult,
+  SearchMemoriesResult,
 } from "../../src/reflectlog/types.js";
 
 type Method = Exclude<keyof ReflectLogClient, "close">;
@@ -28,7 +27,6 @@ function tokens(text: string): Set<string> {
 export class FakeReflectLogClient implements ReflectLogClient {
   readonly calls: FakeCall[] = [];
   scoreKind: ScoreKind = "reranker";
-  healthStatus: HealthCheckResult["status"] = "healthy";
   closeCount = 0;
   readonly #workspaces = new Map<string, Workspace>();
   readonly #failures = new Map<Method, Error>();
@@ -55,11 +53,11 @@ export class FakeReflectLogClient implements ReflectLogClient {
     return this.calls.filter((call) => call.method === method);
   }
 
-  async searchRecords(
+  async searchMemories(
     params: { workspaceId: string; query: string; limit: number },
     options?: CallOptions,
-  ): Promise<SearchRecordsResult> {
-    this.#enter("searchRecords", params, options);
+  ): Promise<SearchMemoriesResult> {
+    this.#enter("searchMemories", params, options);
     const queryTokens = tokens(params.query);
     const scored = this.#workspace(params.workspaceId)
       .records.map((record) => {
@@ -73,22 +71,20 @@ export class FakeReflectLogClient implements ReflectLogClient {
     return { results: scored, scoreKind: scored.length > 0 ? this.scoreKind : "none", limit: params.limit };
   }
 
-  async getRecords(
-    params: { workspaceId: string; ids: readonly number[] },
+  async getMemoryById(
+    params: { workspaceId: string; id: number },
     options?: CallOptions,
-  ): Promise<GetRecordsResult> {
-    this.#enter("getRecords", params, options);
+  ): Promise<GetMemoryByIdResult> {
+    this.#enter("getMemoryById", params, options);
     const records = this.#workspace(params.workspaceId).records;
-    const found = params.ids.flatMap((id) => records.filter((record) => record.id === id));
-    const missing = params.ids.filter((id) => !records.some((record) => record.id === id));
-    return { records: found, missing };
+    return { record: records.find((record) => record.id === params.id) ?? null };
   }
 
-  async listRecords(
+  async getAllMemories(
     params: { workspaceId: string; limit: number; offset: number },
     options?: CallOptions,
-  ): Promise<ListRecordsResult> {
-    this.#enter("listRecords", params, options);
+  ): Promise<GetAllMemoriesResult> {
+    this.#enter("getAllMemories", params, options);
     const records = this.#workspace(params.workspaceId).records;
     const page = records.slice(params.offset, params.offset + params.limit);
     return {
@@ -100,22 +96,22 @@ export class FakeReflectLogClient implements ReflectLogClient {
     };
   }
 
-  async removeRecords(
+  async deleteMemories(
     params: { workspaceId: string; ids: readonly number[] },
     options?: CallOptions,
-  ): Promise<RemoveRecordsResult> {
-    this.#enter("removeRecords", params, options);
+  ): Promise<DeleteMemoriesResult> {
+    this.#enter("deleteMemories", params, options);
     const workspace = this.#workspace(params.workspaceId);
     const removed = params.ids.filter((id) => workspace.records.some((record) => record.id === id));
     workspace.records = workspace.records.filter((record) => !removed.includes(record.id));
     return { removed, missing: params.ids.filter((id) => !removed.includes(id)) };
   }
 
-  async add(
+  async addMemories(
     params: { workspaceId: string; memories: readonly string[]; dryRun: boolean; allowReplace: boolean },
     options?: CallOptions,
-  ): Promise<AddResult> {
-    this.#enter("add", params, options);
+  ): Promise<AddMemoriesResult> {
+    this.#enter("addMemories", params, options);
     const workspace = this.#workspace(params.workspaceId);
     let storedCount = 0;
     let skippedCount = 0;
@@ -130,17 +126,6 @@ export class FakeReflectLogClient implements ReflectLogClient {
       }
     }
     return { storedCount, skippedCount, replacedCount: 0, replacements: [], dryRun: params.dryRun };
-  }
-
-  async healthCheck(params: { workspaceId: string }, options?: CallOptions): Promise<HealthCheckResult> {
-    this.#enter("healthCheck", params, options);
-    return {
-      status: this.healthStatus,
-      semanticEngine: "initialized",
-      fulltextEngine: "initialized",
-      rerankerEngine: "cross_encoder",
-      pendingIntentCount: 0,
-    };
   }
 
   async close(): Promise<void> {

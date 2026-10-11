@@ -58,15 +58,13 @@ export function createProviderRuntime(deps: {
         async health() {
           try {
             guard.assertCurrent();
-            const result = await deps.getService().health(ownerScope(config, params.agentId), guard);
+            await deps.getService().health(ownerScope(config, params.agentId), guard);
             guard.assertCurrent();
-            const statuses = { healthy: "ready", degraded: "degraded", unhealthy: "unavailable" } as const;
-            const status = statuses[result.status];
             if (params.cfg.plugins?.entries?.["memory-core"]?.enabled !== false) {
-              return { status: status === "unavailable" ? status : "degraded",
+              return { status: "degraded",
                 message: "Set plugins.entries.memory-core.enabled=false to avoid conflicting memory guidance." };
             }
-            return { status } satisfies MemoryHealth;
+            return { status: "ready" } satisfies MemoryHealth;
           } catch (error) {
             // Health is a text-free diagnostic boundary, including for host callers.
             return { status: "unavailable", message: error instanceof Error ? error.message : "ReflectLog health check failed" };

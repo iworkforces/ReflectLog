@@ -64,7 +64,7 @@ describe("memory tools", () => {
     expect(text).toContain(`1. ref=${owner.tag}:1 score=1 Prefers green tea`);
     expect(text).toMatch(/^<relevant-memories>[\s\S]*<\/relevant-memories>$/);
     expect(details).toMatchObject({ count: 1, scoreKind: "reranker" });
-    expect(client.callsTo("searchRecords")[0]?.params).toMatchObject({ query: "green tea", limit: 1 });
+    expect(client.callsTo("searchMemories")[0]?.params).toMatchObject({ query: "green tea", limit: 1 });
   });
 
   it("says so when nothing matches", async () => {
@@ -87,7 +87,7 @@ describe("memory tools", () => {
     const { client, tool } = setup({ config: pluginConfig });
     const { text } = await run(tool(createMemoryStoreTool), { memories: ["Prefers tea"], ...(replace === undefined ? {} : { replace }) });
     expect(text).toContain("Stored: 1; skipped: 0; replaced: 0; deduplicated: false.");
-    expect(client.callsTo("add")[0]?.params).toMatchObject({ dryRun: false, allowReplace });
+    expect(client.callsTo("addMemories")[0]?.params).toMatchObject({ dryRun: false, allowReplace });
     expect(client.records(owner.workspaceId)).toHaveLength(1);
   });
 
@@ -95,7 +95,7 @@ describe("memory tools", () => {
     const { client, tool } = setup();
     const { text } = await run(tool(createMemoryPreviewTool), { memories: ["Prefers tea"] });
     expect(text).toMatch(/^Preview only, nothing stored\./);
-    expect(client.callsTo("add")[0]?.params).toMatchObject({ dryRun: true });
+    expect(client.callsTo("addMemories")[0]?.params).toMatchObject({ dryRun: true });
     expect(client.records(owner.workspaceId)).toEqual([]);
   });
 
@@ -105,8 +105,8 @@ describe("memory tools", () => {
     const params = { memories: ["Decided to ship on Friday"], replace: true };
     expect((await run(write, params)).details).toMatchObject({ storedCount: 1, deduplicated: false });
     expect((await run(write, params)).details).toMatchObject({ storedCount: 1, deduplicated: true });
-    expect(client.callsTo("add")).toHaveLength(1);
-    expect(client.callsTo("add")[0]?.params).toMatchObject({ allowReplace: false });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    expect(client.callsTo("addMemories")[0]?.params).toMatchObject({ allowReplace: false });
   });
 
   it("forgets by reference and reports unknown references", async () => {
@@ -160,8 +160,8 @@ describe("memory tools", () => {
       ctx: { ...ownerContext, getRuntimeConfig: () => ({ plugins: { slots: { memory: slotOwner } } }) },
     });
     client.seed(owner.workspaceId, ["Prefers tea"]);
-    const search = client.searchRecords.bind(client);
-    vi.spyOn(client, "searchRecords").mockImplementation(async (params, options) => {
+    const search = client.searchMemories.bind(client);
+    vi.spyOn(client, "searchMemories").mockImplementation(async (params, options) => {
       const result = await search(params, options);
       slotOwner = "memory-core";
       return result;
@@ -171,7 +171,7 @@ describe("memory tools", () => {
 
   it("tells the agent to check before retrying a write with an unknown outcome", async () => {
     const { client, tool } = setup();
-    client.failNext("add", new ReflectLogError("outcome_unknown", "ReflectLog call aborted"));
+    client.failNext("addMemories", new ReflectLogError("outcome_unknown", "ReflectLog call aborted"));
     await expect(run(tool(createMemoryStoreTool), { memories: ["Prefers tea"] })).rejects.toMatchObject({
       code: "outcome_unknown",
       message: expect.stringContaining("Check with memory_search before retrying"),

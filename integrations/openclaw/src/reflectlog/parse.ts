@@ -7,7 +7,7 @@ const record = z.object({ id, memory: z.string(), created_at: z.string().nullabl
 const mapRecord = (value: z.output<typeof record>) => ({
   id: value.id, memory: value.memory, createdAt: value.created_at,
 });
-export const searchRecordsSchema = z.object({
+export const searchMemoriesSchema = z.object({
   results: z.array(record.extend({ score: z.number() })),
   score_kind: z.enum(["reranker", "rrf", "semantic", "fulltext", "concatenated", "none"]),
   limit: count,
@@ -15,13 +15,13 @@ export const searchRecordsSchema = z.object({
   results: value.results.map((item) => ({ ...mapRecord(item), score: item.score })),
   scoreKind: value.score_kind, limit: value.limit,
 }));
-export const getRecordsSchema = z.object({ records: z.array(record), missing: z.array(id) })
-  .transform((value) => ({ records: value.records.map(mapRecord), missing: value.missing }));
-export const listRecordsSchema = z.object({
+export const getMemoryByIdSchema = z.object({ record: record.nullable() })
+  .transform((value) => ({ record: value.record === null ? null : mapRecord(value.record) }));
+export const getAllMemoriesSchema = z.object({
   records: z.array(record), total: count, offset: count, limit: count, truncated: z.boolean(),
 }).transform((value) => ({ ...value, records: value.records.map(mapRecord) }));
-export const removeRecordsSchema = z.object({ removed: z.array(id), missing: z.array(id) });
-export const addSchema = z.object({
+export const deleteMemoriesSchema = z.object({ removed: z.array(id), missing: z.array(id) });
+export const addMemoriesSchema = z.object({
   stored_count: count, skipped_count: count, replaced_count: count, dry_run: z.boolean(),
   replacements: z.array(z.object({
     old_memory: z.string(), new_memory: z.string(), confidence: z.number(),
@@ -34,16 +34,6 @@ export const addSchema = z.object({
     oldMemory: item.old_memory, newMemory: item.new_memory,
     confidence: item.confidence, reason: item.reason ?? null,
   })),
-}));
-const optionalEngine = z.string().nullable().catch(null);
-export const healthCheckSchema = z.object({
-  status: z.enum(["healthy", "degraded", "unhealthy"]),
-  semantic_engine: optionalEngine, tantivy_engine: optionalEngine, reranker_engine: optionalEngine,
-  pending_intent_count: count.nullable().catch(null),
-}).transform((value) => ({
-  status: value.status, semanticEngine: value.semantic_engine,
-  fulltextEngine: value.tantivy_engine, rerankerEngine: value.reranker_engine,
-  pendingIntentCount: value.pending_intent_count,
 }));
 
 /** Narrow envelope shared by SDK results and injected connections. */

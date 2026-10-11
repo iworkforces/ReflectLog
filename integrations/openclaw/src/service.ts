@@ -3,8 +3,7 @@ import { type ReflectLogPluginConfig, MAX_SEARCH_RESULTS } from "./config.js";
 import { looksLikePromptInjection, normalizeMemoryText } from "./policy.js";
 import { formatRef, parseRef, revisionOf } from "./references.js";
 import type {
-  AddResult,
-  HealthCheckResult,
+  AddMemoriesResult,
   ReflectLogClient,
   ReflectLogRecord,
   ScoreKind,
@@ -152,7 +151,7 @@ export class MemoryService {
     const limit = clampInt(request.maxResults ?? this.#config.defaultMaxResults, 1, MAX_SEARCH_RESULTS);
 
     guard.assertCurrent();
-    const result = await this.#client.searchRecords(
+    const result = await this.#client.searchMemories(
       { workspaceId: scope.workspaceId, query, limit },
       { signal: guard.signal },
     );
@@ -193,13 +192,13 @@ export class MemoryService {
       return { status: "not_found" };
     }
     guard.assertCurrent();
-    const result = await this.#client.getRecords(
-      { workspaceId: scope.workspaceId, ids: [id] },
+    const result = await this.#client.getMemoryById(
+      { workspaceId: scope.workspaceId, id },
       { signal: guard.signal },
     );
     guard.assertCurrent();
-    const record = result.records.find((candidate) => candidate.id === id);
-    if (record === undefined) {
+    const record = result.record;
+    if (record === null) {
       return { status: "not_found" };
     }
     const entry = toEntry(scope, record);
@@ -217,7 +216,7 @@ export class MemoryService {
     const limit = clampInt(page.limit, 1, MAX_LIST_LIMIT);
     const offset = Math.max(0, Math.trunc(page.offset));
     guard.assertCurrent();
-    const result = await this.#client.listRecords(
+    const result = await this.#client.getAllMemories(
       { workspaceId: scope.workspaceId, limit, offset },
       { signal: guard.signal },
     );
@@ -264,10 +263,10 @@ export class MemoryService {
     memories: readonly string[],
     options: { dryRun: boolean; allowReplace: boolean },
     guard: EffectGuard,
-  ): Promise<AddResult> {
+  ): Promise<AddMemoriesResult> {
     const normalized = this.prepareMemories(memories);
     guard.assertCurrent();
-    const result = await this.#client.add(
+    const result = await this.#client.addMemories(
       {
         workspaceId: scope.workspaceId,
         memories: normalized,
@@ -325,7 +324,7 @@ export class MemoryService {
       return { removed: [], missing };
     }
     guard.assertCurrent();
-    const result = await this.#client.removeRecords(
+    const result = await this.#client.deleteMemories(
       { workspaceId: scope.workspaceId, ids: [...byId.keys()] },
       { signal: guard.signal },
     );
@@ -343,8 +342,12 @@ export class MemoryService {
     return { removed, missing };
   }
 
-  async health(scope: MemoryScope, guard: EffectGuard): Promise<HealthCheckResult> {
+  async health(scope: MemoryScope, guard: EffectGuard): Promise<void> {
     guard.assertCurrent();
-    return this.#client.healthCheck({ workspaceId: scope.workspaceId }, { signal: guard.signal });
+    await this.#client.getAllMemories(
+      { workspaceId: scope.workspaceId, limit: 0, offset: 0 },
+      { signal: guard.signal },
+    );
+    guard.assertCurrent();
   }
 }

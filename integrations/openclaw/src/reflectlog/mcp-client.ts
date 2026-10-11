@@ -6,8 +6,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { z } from "zod";
 import type { ReflectLogPluginConfig } from "../config.js";
 import {
-  addSchema, getRecordsSchema, healthCheckSchema, listRecordsSchema,
-  parseToolResponse, removeRecordsSchema, searchRecordsSchema,
+  addMemoriesSchema, getMemoryByIdSchema, getAllMemoriesSchema,
+  parseToolResponse, deleteMemoriesSchema, searchMemoriesSchema,
 } from "./parse.js";
 import type { ToolResponse } from "./parse.js";
 import { ReflectLogError, REQUIRED_REFLECTLOG_TOOLS } from "./types.js";
@@ -117,9 +117,9 @@ export function createReflectLogClient(
         }), abort.signal);
         const missing: string[] = REQUIRED_REFLECTLOG_TOOLS.filter((name) =>
           !tools.some((tool) => tool.name === name));
-        const add = tools.find((tool) => tool.name === "add");
+        const add = tools.find((tool) => tool.name === "add_memories");
         if (!add?.inputSchema.properties || !Object.hasOwn(add.inputSchema.properties, "allow_replace")) {
-          missing.push("add.allow_replace");
+          missing.push("add_memories.allow_replace");
         }
         if (missing.length) throw new ReflectLogError("incompatible",
           `ReflectLog is missing: ${missing.join(", ")}`, { cause: tools });
@@ -187,19 +187,17 @@ export function createReflectLogClient(
   }
 
   return {
-    searchRecords: (p, o) => invoke({ name: "search_records", schema: searchRecordsSchema,
+    searchMemories: (p, o) => invoke({ name: "search_memories", schema: searchMemoriesSchema,
       args: { workspace_id: p.workspaceId, query: p.query, limit: p.limit } }, o),
-    getRecords: (p, o) => invoke({ name: "get_records", schema: getRecordsSchema,
-      args: { workspace_id: p.workspaceId, ids: p.ids } }, o),
-    listRecords: (p, o) => invoke({ name: "list_records", schema: listRecordsSchema,
+    getMemoryById: (p, o) => invoke({ name: "get_memory_by_id", schema: getMemoryByIdSchema,
+      args: { workspace_id: p.workspaceId, id: p.id } }, o),
+    getAllMemories: (p, o) => invoke({ name: "get_all_memories", schema: getAllMemoriesSchema,
       args: { workspace_id: p.workspaceId, limit: p.limit, offset: p.offset } }, o),
-    removeRecords: (p, o) => invoke({ name: "remove_records", schema: removeRecordsSchema,
+    deleteMemories: (p, o) => invoke({ name: "delete_memories", schema: deleteMemoriesSchema,
       mutation: true, args: { workspace_id: p.workspaceId, ids: p.ids } }, o),
-    add: (p, o) => invoke({ name: "add", schema: addSchema, mutation: !p.dryRun,
+    addMemories: (p, o) => invoke({ name: "add_memories", schema: addMemoriesSchema, mutation: !p.dryRun,
       args: { workspace_id: p.workspaceId, memories: p.memories,
         dry_run: p.dryRun, allow_replace: p.allowReplace } }, o),
-    healthCheck: (p, o) => invoke({ name: "health_check", schema: healthCheckSchema,
-      args: { workspace_id: p.workspaceId } }, o),
     close: () => invalidate(generation),
   };
 }
