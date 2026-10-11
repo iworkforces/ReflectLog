@@ -19,6 +19,7 @@ from reflectlog.core.salvage import (
     MANIFEST_FILENAME,
     RECORDS_FILENAME,
 )
+from reflectlog.infrastructure.salvage_paths import is_directory_within
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -117,7 +118,7 @@ class FileSystemBundlePublisher:
             raise SalvageUnsafeOutputError("output parent directory does not exist")
         real_parent = os.path.realpath(parent)
         for protected in protected_dirs:
-            if _is_within(real_parent, protected):
+            if is_directory_within(real_parent, protected):
                 raise SalvageUnsafeOutputError(
                     "output path is inside the archive or the scratch directory"
                 )
@@ -134,6 +135,7 @@ class FileSystemBundlePublisher:
             ) from e
         marker = os.path.join(output, INCOMPLETE_MARKER)
         created: list[str] = []
+        marker_removed = False
         try:
             self._write(marker, _MARKER_TEXT, created)
             self._write(os.path.join(output, RECORDS_FILENAME), bundle.records, created)
@@ -142,15 +144,19 @@ class FileSystemBundlePublisher:
             )
             self._fs.sync_directory(output)
             self._fs.remove_file(marker)
+            marker_removed = True
             created.remove(marker)
             self._fs.sync_directory(output)
         except OSError as e:
-            self._abandon(output, created)
+            cleanup_error = self._rollback(output, created, marker_removed)
             raise SalvagePublicationError(
-                f"publication failed and was rolled back: {e.strerror or e}"
+                cleanup_error
+                or f"publication failed and was rolled back: {e.strerror or 'OS error'}"
             ) from e
-        except BaseException:
-            self._abandon(output, created)
+        except BaseException as e:
+            cleanup_error = self._rollback(output, created, marker_removed)
+            if marker_removed and cleanup_error is not None:
+                raise SalvagePublicationError(cleanup_error) from e
             raise
 
     def _write(self, path: str, payload: bytes, created: list[str]) -> None:
@@ -162,35 +168,52 @@ class FileSystemBundlePublisher:
         finally:
             self._fs.close_file(descriptor)
 
-    def _abandon(self, output: str, created: list[str]) -> None:
+    def _rollback(
+        self, output: str, created: list[str], marker_removed: bool
+    ) -> str | None:
+        """Restore the completion guard before cleanup; report any partial output."""
+        marker = os.path.join(output, INCOMPLETE_MARKER)
+        marker_restored = not marker_removed
+        if marker_removed:
+            restored: list[str] = []
+            try:
+                self._write(marker, _MARKER_TEXT, restored)
+            except OSError:
+                # Still clean up, tracking even a marker whose write/fsync failed.
+                marker_restored = False
+            else:
+                marker_restored = True
+            created[:0] = restored
+        if self._abandon(output, created):
+            return None
+        if marker_restored and marker in created:
+            return (
+                "publication failed; cleanup was incomplete and the output "
+                "directory is left marked INCOMPLETE"
+            )
+        return (
+            "publication failed; cleanup was incomplete; "
+            "the partial output must be deleted before use"
+        )
+
+    def _abandon(self, output: str, created: list[str]) -> bool:
         """Remove only what this run created; the marker goes last.
 
         Stops at the first failure so ``INCOMPLETE`` outlives every file that
         could not be removed.
         """
-        for path in reversed(created):
+        while created:
+            path = created[-1]
             try:
                 self._fs.remove_file(path)
             except FileNotFoundError:
-                continue
+                # Already absent, so this file no longer needs cleanup.
+                pass
             except OSError:
-                return
+                return False
+            _ = created.pop()
         try:
             self._fs.remove_directory(output)
         except OSError:
-            return
-
-
-def _is_within(directory: str, protected: str) -> bool:
-    """Return True if ``directory`` is ``protected`` or lies below it."""
-    current = directory
-    while True:
-        try:
-            if os.path.samefile(current, protected):
-                return True
-        except OSError:
-            pass
-        parent = os.path.dirname(current)
-        if parent == current:
             return False
-        current = parent
+        return True

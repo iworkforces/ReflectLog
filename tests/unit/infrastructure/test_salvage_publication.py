@@ -315,6 +315,52 @@ class TestFaultsAtEveryStep:
 
 
 class TestFailedCleanupStaysVisible:
+    @pytest.mark.parametrize("interrupt", [False, True], ids=["oserror", "interrupt"])
+    @pytest.mark.parametrize("restore_fails", [False, True], ids=["marked", "unmarked"])
+    def test_post_unlink_failure_reports_incomplete_cleanup(
+        self, tmp_path: Path, interrupt: bool, restore_fails: bool
+    ) -> None:
+        output = tmp_path / "export"
+        failure = KeyboardInterrupt() if interrupt else OSError(5, "second sync")
+
+        class StubbornFinalSync(FaultyFileSystem):
+            def __init__(self) -> None:
+                super().__init__(
+                    "remove_file", basename="manifest.json", persistent=True
+                )
+                self.syncs = 0
+                self.markers = 0
+
+            def sync_directory(self, path: str) -> None:
+                self.syncs += 1
+                if self.syncs == 2:
+                    raise failure
+                super().sync_directory(path)
+
+            def create_file(self, path: str) -> int:
+                if os.path.basename(path) == "INCOMPLETE":
+                    self.markers += 1
+                    if restore_fails and self.markers == 2:
+                        raise OSError(5, "cannot restore marker")
+                return super().create_file(path)
+
+        with pytest.raises((SalvagePublicationError, KeyboardInterrupt)) as caught:
+            _publish(FileSystemBundlePublisher(StubbornFinalSync()), output)
+
+        assert isinstance(caught.value, SalvagePublicationError)
+        assert (output / "manifest.json").exists()
+        assert (output / "memories.jsonl").exists()
+        assert "rolled back" not in str(caught.value)
+        assert "cleanup was incomplete" in str(caught.value)
+        assert caught.value.__cause__ is failure
+        if restore_fails:
+            assert "deleted before use" in str(caught.value)
+        else:
+            assert (
+                (output / "INCOMPLETE").read_bytes().startswith(b"reflectlog salvage")
+            )
+            assert "marked INCOMPLETE" in str(caught.value)
+
     @pytest.mark.parametrize(
         ("fail_step", "fail_removal"),
         [
