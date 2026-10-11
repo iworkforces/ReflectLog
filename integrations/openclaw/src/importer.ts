@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, rename } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { lstat, open, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { looksLikePromptInjection, normalizeMemoryText } from "./policy.js";
 
 export type ImportEntry = { readonly text: string; readonly source: string; readonly line: number };
-export type MemoryFile = { readonly relativePath: string; readonly content: string };
 
 export type UnparsedReason = "invalid_utf8";
 
@@ -189,45 +188,4 @@ export function splitMarkdownMemories(relativePath: string, content: string): Im
   }
   flush();
   return entries;
-}
-
-export async function collectMemoryFiles(workspaceDir: string): Promise<MemoryFile[]> {
-  const paths = ["MEMORY.md", "memory.md"];
-  try {
-    if ((await lstat(join(workspaceDir, "memory"))).isDirectory()) {
-      const children = await readdir(join(workspaceDir, "memory"), { withFileTypes: true });
-      paths.push(...children.filter((child) => child.isFile() && child.name.endsWith(".md"))
-        .map((child) => `memory/${child.name}`).sort());
-    }
-  } catch (error) { if (!missing(error)) throw error; }
-  const identities = new Set<string>();
-  const files: MemoryFile[] = [];
-  for (const relativePath of paths) {
-    try {
-      const stat = await lstat(join(workspaceDir, relativePath));
-      const identity = `${stat.dev}:${stat.ino}`;
-      if (!stat.isFile() || identities.has(identity)) continue;
-      identities.add(identity);
-      files.push({ relativePath, content: await readFile(join(workspaceDir, relativePath), "utf8") });
-    } catch (error) { if (!missing(error)) throw error; }
-  }
-  return files;
-}
-
-export async function archiveImportedFiles(workspaceDir: string, relativePaths: readonly string[], now: Date): Promise<string> {
-  if (relativePaths.some((path) => !/^(?:MEMORY\.md|memory\.md|memory\/[^/\\]+\.md)$/.test(path) || path.includes("\0"))) {
-    throw new Error("Invalid import path");
-  }
-  const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  const parent = join(workspaceDir, ".reflectlog-imported");
-  await mkdir(parent, { recursive: true });
-  if (!(await lstat(parent)).isDirectory()) throw new Error("Invalid archive directory");
-  const target = join(parent, stamp);
-  await mkdir(target); // Exclusive creation: never overwrite an earlier archive.
-  for (const relativePath of new Set(relativePaths)) {
-    const destination = join(target, relativePath);
-    await mkdir(dirname(destination), { recursive: true });
-    await rename(join(workspaceDir, relativePath), destination);
-  }
-  return target;
 }
