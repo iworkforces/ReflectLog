@@ -5,11 +5,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { ownerScope } from "../../src/access.js";
 import { configJsonSchema, PLUGIN_ID } from "../../src/config.js";
+import { FlushDisposedError } from "../../src/flush-ledger.js";
 import { registerReflectLogMemory, type MemoryPluginApi } from "../../src/plugin.js";
 import { MemoryInputError } from "../../src/service.js";
 import { MEMORY_TOOL_NAMES } from "../../src/tools.js";
-import { FakeReflectLogClient } from "../support/fake-client.js";
+import { FakeReflectLogClient, allowAll } from "../support/fake-client.js";
 
 const manifest = z.object({
   id: z.string(),
@@ -23,7 +25,18 @@ const replacing: OpenClawConfig = {
   plugins: { slots: { memory: PLUGIN_ID }, entries: { "memory-core": { enabled: false } } },
 };
 
-function setup(pluginConfig: Record<string, unknown> = {}, config: OpenClawConfig = replacing) {
+/** A client whose close() the test can hold open, to race a stop against a new lifecycle. */
+class SlowCloseClient extends FakeReflectLogClient {
+  readonly closing = Promise.withResolvers<void>();
+
+  override async close(): Promise<void> {
+    await this.closing.promise;
+    await super.close();
+  }
+}
+
+function setup(pluginConfig: Record<string, unknown> = {}, config: OpenClawConfig = replacing,
+  makeClient: () => FakeReflectLogClient = () => new FakeReflectLogClient()) {
   const capabilities: MemoryPluginCapability[] = [];
   const services: Parameters<MemoryPluginApi["registerService"]>[0][] = [];
   const registerTool = vi.fn<MemoryPluginApi["registerTool"]>();
@@ -33,10 +46,17 @@ function setup(pluginConfig: Record<string, unknown> = {}, config: OpenClawConfi
     registerMemoryCapability: (capability) => { capabilities.push(capability); },
     registerService: (service) => { services.push(service); },
   };
-  const client = new FakeReflectLogClient();
-  const createClient = vi.fn(() => client);
+  const client = makeClient();
+  const clients: FakeReflectLogClient[] = [];
+  const createClient = vi.fn(() => {
+    const created = clients.length === 0 ? client : makeClient();
+    clients.push(created);
+    return created;
+  });
   const registered = registerReflectLogMemory(api, { createClient });
-  return { registered, capabilities, services, registerTool, logger, client, createClient };
+  return {
+    registered, capabilities, services, registerTool, logger, client, createClient, clients,
+  };
 }
 
 describe("plugin registration", () => {
@@ -78,6 +98,89 @@ describe("plugin registration", () => {
     if (service === undefined || service.apiVersion === 2) throw new Error("expected a version 1 service");
     await service.stop?.({ config: replacing, stateDir: "/tmp", logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
     expect(client.closeCount).toBe(1);
+  });
+
+  describe("backend lifecycle", () => {
+    const stopContext = { config: replacing, stateDir: "/tmp", logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } };
+    const stopOf = (services: ReturnType<typeof setup>["services"]) => {
+      const service = services[0];
+      if (service === undefined || service.apiVersion === 2) throw new Error("expected a version 1 service");
+      return () => service.stop?.(stopContext);
+    };
+    const owner = (registered: ReturnType<typeof setup>["registered"]) => {
+      const config = registered.config;
+      if (config === null) throw new Error("expected a valid configuration");
+      return ownerScope(config, "main");
+    };
+
+    it("disposes the service and closes the client on stop, and builds a fresh lifecycle afterwards", async () => {
+      const { registered, services, clients, createClient } = setup();
+      const old = registered.getService();
+      const scope = owner(registered);
+      await stopOf(services)();
+      expect(clients[0]?.closeCount).toBe(1);
+      await expect(old.flush(scope, "f1", ["Decided to ship"], allowAll)).rejects.toBeInstanceOf(FlushDisposedError);
+      expect(clients[0]?.calls).toEqual([]);
+      const fresh = registered.getService();
+      expect(fresh).not.toBe(old);
+      expect(createClient).toHaveBeenCalledTimes(2);
+      await expect(fresh.flush(scope, "f1", ["Decided to ship"], allowAll)).resolves.toMatchObject({ deduplicated: false });
+      expect(clients[1]?.callsTo("addMemories")).toHaveLength(1);
+    });
+
+    it("does not carry flush dedup across lifecycles", async () => {
+      const { registered, services, clients } = setup();
+      const scope = owner(registered);
+      await registered.getService().flush(scope, "f1", ["Decided to ship"], allowAll);
+      await stopOf(services)();
+      await expect(registered.getService().flush(scope, "f1", ["Decided to ship"], allowAll))
+        .resolves.toMatchObject({ deduplicated: false });
+      expect(clients.map((client) => client.callsTo("addMemories").length)).toEqual([1, 1]);
+    });
+
+    it("settles a pending flush as outcome_unknown when the lifecycle ends", async () => {
+      const { registered, services, clients } = setup();
+      const scope = owner(registered);
+      const service = registered.getService();
+      const deferred = clients[0]?.deferNext("addMemories");
+      const pending = service.flush(scope, "f1", ["Decided to ship"], allowAll);
+      await deferred?.dispatched;
+      await stopOf(services)();
+      await expect(pending).rejects.toMatchObject({ code: "outcome_unknown" });
+    });
+
+    it("does not let a stop racing with getService erase the new lifecycle", async () => {
+      const { registered, services, clients, createClient } = setup({}, replacing, () => new SlowCloseClient());
+      const old = registered.getService();
+      const stopping = stopOf(services)();
+      const fresh = registered.getService();
+      expect(fresh).not.toBe(old);
+      expect(createClient).toHaveBeenCalledTimes(2);
+      const [oldClient] = clients;
+      if (!(oldClient instanceof SlowCloseClient)) throw new Error("expected the slow client");
+      oldClient.closing.resolve();
+      await stopping;
+      expect(registered.getService()).toBe(fresh);
+      expect(createClient).toHaveBeenCalledTimes(2);
+      expect(clients[1]?.closeCount).toBe(0);
+      expect(oldClient.closeCount).toBe(1);
+      await expect(fresh.flush(owner(registered), "f1", ["Decided to ship"], allowAll)).resolves.toMatchObject({ deduplicated: false });
+    });
+
+    it("ends the lifecycle when the host retires the memory runtime, not only on service stop", async () => {
+      const { registered, capabilities, clients } = setup();
+      const old = registered.getService();
+      await capabilities[0]?.providerRuntime?.closeAllMemorySearchManagers?.();
+      expect(clients[0]?.closeCount).toBe(1);
+      await expect(old.flush(owner(registered), "f1", ["Decided to ship"], allowAll)).rejects.toBeInstanceOf(FlushDisposedError);
+      expect(registered.getService()).not.toBe(old);
+    });
+
+    it("tolerates a stop before any service was created", async () => {
+      const { services, createClient } = setup();
+      await expect(stopOf(services)()).resolves.toBeUndefined();
+      expect(createClient).not.toHaveBeenCalled();
+    });
   });
 
   it("warns until memory-core is disabled and the slot selects this plugin", () => {
