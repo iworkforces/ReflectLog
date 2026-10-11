@@ -69,7 +69,8 @@ async def run_benchmark(
     ):
         raise ValueError("clients must be 1..32, iterations and timeout positive")
 
-    ready = [anyio.Event() for _ in range(clients)]
+    warmup_done = [anyio.Event() for _ in range(clients)]
+    settled = [anyio.Event() for _ in range(clients)]
     finished = [anyio.Event() for _ in range(clients)]
     start = anyio.Event()
     cleanup_start = anyio.Event()
@@ -79,6 +80,7 @@ async def run_benchmark(
     connection_ms: list[float] = []
     warmup_ms: list[float] = []
     cleanup_errors = 0
+    warmup_errors: list[Exception] = []
     warmup_lock = anyio.Lock()
 
     async def worker(worker_id: int, client: Client) -> None:
@@ -86,6 +88,8 @@ async def run_benchmark(
         prefix = f"reflectlog benchmark {workspace_id} run {run_id} worker {worker_id}"
         seed = f"{prefix} seed"
         memories = [seed, *(f"{prefix} item {i}" for i in range(iterations))]
+        seed_id = 0
+        warmup_failed = False
 
         async def measured(name: str, args: dict[str, object]) -> BaseModel | None:
             started_at = perf_counter()
@@ -107,30 +111,44 @@ async def run_benchmark(
         try:
             async with warmup_lock:
                 warmed_at = perf_counter()
-                warmup_calls: tuple[tuple[str, dict[str, object]], ...] = (
-                    (
-                        "add_memories",
-                        {
-                            "workspace_id": workspace_id,
-                            "memories": [seed],
-                            "allow_replace": False,
-                        },
-                    ),
-                    ("search_memories", {"workspace_id": workspace_id, "query": seed}),
-                    ("get_all_memories", {"workspace_id": workspace_id, "limit": 0}),
-                )
-                for name, args in warmup_calls:
+                try:
+                    warmup_calls: tuple[tuple[str, dict[str, object]], ...] = (
+                        (
+                            "add_memories",
+                            {
+                                "workspace_id": workspace_id,
+                                "memories": [seed],
+                                "allow_replace": False,
+                            },
+                        ),
+                        (
+                            "search_memories",
+                            {"workspace_id": workspace_id, "query": seed},
+                        ),
+                        (
+                            "get_all_memories",
+                            {"workspace_id": workspace_id, "limit": 0},
+                        ),
+                    )
+                    for name, args in warmup_calls:
+                        with anyio.fail_after(timeout_seconds):
+                            result = await client.call_tool(
+                                name, args, raise_on_error=False
+                            )
+                        parse_response(result, RESPONSE_MODELS[name])
                     with anyio.fail_after(timeout_seconds):
-                        result = await client.call_tool(
-                            name, args, raise_on_error=False
-                        )
-                    parse_response(result, RESPONSE_MODELS[name])
-                with anyio.fail_after(timeout_seconds):
-                    seeds = await all_records(client, workspace_id)
-                seed_id = next(row.id for row in seeds if row.memory == seed)
-                warmup_ms.append((perf_counter() - warmed_at) * 1000)
-            ready[worker_id].set()
+                        seeds = await all_records(client, workspace_id)
+                    seed_id = next(row.id for row in seeds if row.memory == seed)
+                    warmup_ms.append((perf_counter() - warmed_at) * 1000)
+                except Exception as exc:
+                    warmup_errors.append(exc)
+                    warmup_failed = True
+            warmup_done[worker_id].set()
+            if warmup_failed:
+                return
             await start.wait()
+            if warmup_errors:
+                return
 
             for iteration in range(iterations):
                 memory = memories[iteration + 1]
@@ -171,27 +189,33 @@ async def run_benchmark(
             finished[worker_id].set()
             await cleanup_start.wait()
         finally:
-            with anyio.CancelScope(shield=True):
-                try:
-                    with anyio.fail_after(timeout_seconds):
-                        records = await all_records(client, workspace_id)
-                        ids = [row.id for row in records if row.memory in memories]
-                        for offset in range(0, len(ids), 100):
-                            batch = ids[offset : offset + 100]
-                            deleted = parse_response(
-                                await client.call_tool(
-                                    "delete_memories",
-                                    {"workspace_id": workspace_id, "ids": batch},
-                                    raise_on_error=False,
-                                ),
-                                DeleteResponse,
-                            )
-                            if set(deleted.removed) != set(batch) or deleted.missing:
-                                raise ValueError(
-                                    "Benchmark cleanup did not remove its records"
+            try:
+                with anyio.CancelScope(shield=True):
+                    try:
+                        with anyio.fail_after(timeout_seconds):
+                            records = await all_records(client, workspace_id)
+                            ids = [row.id for row in records if row.memory in memories]
+                            for offset in range(0, len(ids), 100):
+                                batch = ids[offset : offset + 100]
+                                deleted = parse_response(
+                                    await client.call_tool(
+                                        "delete_memories",
+                                        {"workspace_id": workspace_id, "ids": batch},
+                                        raise_on_error=False,
+                                    ),
+                                    DeleteResponse,
                                 )
-                except Exception:
-                    cleanup_errors += 1
+                                if (
+                                    set(deleted.removed) != set(batch)
+                                    or deleted.missing
+                                ):
+                                    raise ValueError(
+                                        "Benchmark cleanup did not remove its records"
+                                    )
+                    except Exception:
+                        cleanup_errors += 1
+            finally:
+                settled[worker_id].set()
 
     elapsed = 0.0
     client_stack = AsyncExitStack()
@@ -214,14 +238,20 @@ async def run_benchmark(
         async with anyio.create_task_group() as group:
             for worker_id, client in enumerate(connected_clients):
                 group.start_soon(worker, worker_id, client)
-            for event in ready:
+            # Every worker leaves warmup before a warmup error cancels the run.
+            for event in warmup_done:
                 await event.wait()
-            measured_at = perf_counter()
-            start.set()
-            for event in finished:
-                await event.wait()
-            elapsed = perf_counter() - measured_at
-            cleanup_start.set()
+            if warmup_errors:
+                start.set()
+                for event in settled:
+                    await event.wait()
+            else:
+                measured_at = perf_counter()
+                start.set()
+                for event in finished:
+                    await event.wait()
+                elapsed = perf_counter() - measured_at
+                cleanup_start.set()
     except BaseException as error:
         if cleanup_errors:
             error.add_note(f"benchmark cleanup_errors={cleanup_errors}")
@@ -229,6 +259,12 @@ async def run_benchmark(
     finally:
         with anyio.CancelScope(shield=True):
             await client_stack.aclose()
+
+    if warmup_errors:
+        failure = ExceptionGroup("benchmark warmup failed", warmup_errors)
+        if cleanup_errors:
+            failure.add_note(f"benchmark cleanup_errors={cleanup_errors}")
+        raise failure
 
     total = sum(map(len, samples.values()))
     return {
