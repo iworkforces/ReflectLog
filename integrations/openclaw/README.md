@@ -222,8 +222,10 @@ flight; treat the outcome as unknown.
 
 An archive is complete only when `receipt.json` exists and `INCOMPLETE` is
 absent. Failed or interrupted runs leave incomplete archives in place with
-the marker. If completion fails after the marker was removed, the marker is
-restored. Incomplete archives aren't cleaned up or overwritten. A second archived import in the same
+the marker. If completion fails after the marker was removed, restoring it is
+attempted; if that also fails, the error says so. Treat any archive from a run
+that reported a publication failure as unusable, even without the marker.
+Incomplete archives aren't cleaned up or overwritten. A second archived import in the same
 workspace and second fails with `archive_exists` before sending batches.
 If no source was captured, no archive is created.
 
