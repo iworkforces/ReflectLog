@@ -45,6 +45,7 @@ infrastructure/
 | Salvage archive | `salvage_archive.py` | `ArchiveInspector`; fingerprints SQLite files + sidecars, copies database/WAL to scratch |
 | Salvage snapshot | `salvage_snapshot.py` | `SqliteSalvageSnapshotReader`; active rows and raw journal evidence in one read-only transaction |
 | Salvage publication | `salvage_publication.py` | `FileSystemBundlePublisher`; exclusive mkdir/files, `INCOMPLETE` first, manifest last |
+| Salvage path checks | `salvage_paths.py` | `is_directory_within`: realpath + `samefile` ancestor walk |
 | CE Step 4 | `cross_encoder_reranker.py` | `rerank`: `[]` for empty input, pass-through when disabled, else score → normalize → CE threshold → recency |
 | Remote rerank | `openrouter_reranker.py` | `RERANKER_ENGINE=openrouter`; reuses `RerankerPostProcessor` |
 | Index drift | `index_integrity.py` | `evaluate_index_integrity` → `IndexIntegrityReport` |
@@ -64,7 +65,8 @@ infrastructure/
 - Search `OSError` → `SearchError`, never `[]`.
 - Salvage reads only a disposable SQLite copy with `mode=ro`, never `immutable=1`; committed WAL content stays visible. Never construct `MemoryStore`, replay journal rows, or open vector/FTS engines for salvage.
 - Salvage never writes to the archive. Fingerprint inspected files before copying and re-check before publication; reject symlinks at the archive root, `usearch/`, and inspected files. SHM is fingerprinted, but SQLite rebuilds it in scratch.
-- Salvage output must not exist (including dangling symlinks), must have an existing parent, and must be outside archive/scratch. Mode `0700` directory, `0600` files; complete only with `manifest.json` present and `INCOMPLETE` absent. No overwrite; incomplete bundles are unusable.
+- Salvage scratch goes under an explicit temp parent outside the archive. Vet `TMPDIR`/`TEMP`/`TMP` before `tempfile.gettempdir()` (it probes candidates by creating files), then the resolved parent and `SQLITE_TMPDIR`.
+- Salvage output must not exist (including dangling symlinks), must have an existing parent, and must be outside archive/scratch. Mode `0700` directory, `0600` files; complete only with `manifest.json` present and `INCOMPLETE` absent. No overwrite; incomplete bundles are unusable. A failed publication restores `INCOMPLETE` before cleanup, removes it last, and says "rolled back" only when cleanup finished.
 
 ## ANTI-PATTERNS
 
