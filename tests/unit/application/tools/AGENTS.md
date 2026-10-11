@@ -11,20 +11,22 @@ Unit tests for MCP tools. Tools go through `MemoryManager` only — engines stay
 ```
 tests/unit/application/tools/
 ├── conftest.py              # mock_config, mock_memory_manager, tool fixtures
-├── test_add.py
-├── test_search.py
-├── test_remove.py
-├── test_health_check.py
+├── test_add_memories.py
+├── test_search_memories.py
+├── test_get_all_memories.py
+├── test_get_memory_by_id.py
+├── test_delete_memories.py
 └── test_base.py
 ```
 
 ## WHERE TO LOOK
 | Test | Purpose |
 |------|---------|
-| `test_add.py` | `add_memories_async` counts / dry_run |
-| `test_search.py` | Query handling, `SearchError` |
-| `test_remove.py` | `delete_memories` → `list[str]`; not-found = set difference |
-| `test_health_check.py` | `search_engine_status` / `EngineReadiness` |
+| `test_add_memories.py` | `add_memories_async` counts / dry_run / allow_replace |
+| `test_search_memories.py` | Query and limit validation, records and score_kind, `SearchError` |
+| `test_get_all_memories.py` | Id-ordered records, page/total, clamping/cap, limit 0 |
+| `test_get_memory_by_id.py` | Positive id; workspace-local record or null |
+| `test_delete_memories.py` | Positive ids, batch cap, ordered dedup, actual removed/missing ids |
 | `test_base.py` | `BaseTool` name / handler / validation |
 
 ## CONVENTIONS
@@ -39,4 +41,4 @@ tests/unit/application/tools/
 - No `type: ignore`.
 
 ## NOTES
-Production also has `get_all.py`; this folder does not yet have `test_get_all.py`. Registration is `application/mcp_server.py`. Local: MagicMock(spec=MemoryManager) only.
+Registration is `application/mcp_server.py`. All five handlers return `Awaitable[dict[str, object]]`. Local: MagicMock(spec=MemoryManager) only.
