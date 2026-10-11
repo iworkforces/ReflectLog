@@ -4,15 +4,13 @@ import { Type } from "typebox";
 import { z } from "zod";
 import { MemoryAccessDeniedError, resolveToolScope, type MemoryScope } from "./access.js";
 import { PLUGIN_ID, type ReflectLogPluginConfig } from "./config.js";
-import { FlushLedger } from "./flush-ledger.js";
 import { UNTRUSTED_MEMORY_NOTICE } from "./policy.js";
-import { ReflectLogError, type AddMemoriesResult } from "./reflectlog/types.js";
+import { ReflectLogError } from "./reflectlog/types.js";
 import { MemoryInputError, type EffectGuard, type MemoryService } from "./service.js";
 
 export const MEMORY_TOOL_NAMES = ["memory_search", "memory_get", "memory_store", "memory_preview", "memory_forget", "memory_list"] as const;
 type ToolDeps = { readonly api: Pick<OpenClawPluginApi, "config">; readonly config: ReflectLogPluginConfig; readonly getService: () => MemoryService };
 type Invocation = { readonly ctx: OpenClawPluginToolContext; readonly scope: MemoryScope; readonly service: MemoryService; readonly guard: EffectGuard };
-const flushLedger = new FlushLedger<AddMemoriesResult>();
 const memories = Type.Array(Type.String(), { minItems: 1, maxItems: 20 });
 const writeParameters = Type.Object({ memories, replace: Type.Optional(Type.Boolean()) });
 const writeInput = z.object({ memories: z.array(z.string()).min(1).max(20), replace: z.boolean().optional() });
@@ -92,13 +90,13 @@ function writeTool(deps: ToolDeps, dryRun: boolean) {
     description: dryRun ? "Preview a memory write without storing anything." : "Store one self-contained durable fact per item. Replacement requires explicit opt-in.",
     parameters: writeParameters, input: writeInput,
     async run(params, { ctx, scope, service, guard }) {
-      const allowReplace = deps.config.smartReplace && params.replace === true && ctx.memoryFlush === undefined;
-      const operation = () => service.store(scope, params.memories, { dryRun, allowReplace }, guard);
-      const outcome = !dryRun && ctx.memoryFlush
-        ? await flushLedger.run(FlushLedger.key(ctx.memoryFlush.flushId, scope.workspaceId, service.prepareMemories(params.memories)), operation)
-        : { value: await operation(), deduplicated: false };
+      const flush = ctx.memoryFlush;
+      const allowReplace = deps.config.smartReplace && params.replace === true && flush === undefined;
+      const outcome = !dryRun && flush
+        ? await service.flush(scope, flush.flushId, params.memories, guard)
+        : { result: await service.store(scope, params.memories, { dryRun, allowReplace }, guard), deduplicated: false };
       guard.assertCurrent();
-      const result = outcome.value;
+      const result = outcome.result;
       const text = `${dryRun ? "Preview only, nothing stored. " : ""}Stored: ${result.storedCount}; skipped: ${result.skippedCount}; replaced: ${result.replacedCount}; deduplicated: ${outcome.deduplicated}.`;
       return textResult([text, ...result.replacements.map(item => `${item.oldMemory} -> ${item.newMemory}`)].join("\n"), { ...result, deduplicated: outcome.deduplicated });
     },

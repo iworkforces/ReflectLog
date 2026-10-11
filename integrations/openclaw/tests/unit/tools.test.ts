@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryAccessDeniedError, ownerScope } from "../../src/access.js";
 import { PLUGIN_ID, parseConfig, type ReflectLogPluginConfig } from "../../src/config.js";
 import { UNTRUSTED_MEMORY_NOTICE } from "../../src/policy.js";
+import { FlushCapacityError, FlushDisposedError } from "../../src/flush-ledger.js";
 import { ReflectLogError } from "../../src/reflectlog/types.js";
 import { MemoryInputError, MemoryService } from "../../src/service.js";
 import {
@@ -25,22 +26,26 @@ const ownerContext: OpenClawPluginToolContext = { agentId: "main", memoryAudienc
 
 type Create = typeof createMemorySearchTool;
 
-function setup(options: { ctx?: OpenClawPluginToolContext; host?: OpenClawConfig; config?: ReflectLogPluginConfig } = {}) {
+function setup(options: {
+  ctx?: OpenClawPluginToolContext; host?: OpenClawConfig; config?: ReflectLogPluginConfig;
+  flush?: { maxEntries?: number; ttlMs?: number; now?: () => number };
+} = {}) {
   const pluginConfig = options.config ?? smart;
   const client = new FakeReflectLogClient();
-  const service = new MemoryService(client, pluginConfig);
+  const service = new MemoryService(client, pluginConfig, { flush: options.flush ?? {} });
   const deps = { api: { config: options.host ?? configured }, config: pluginConfig, getService: () => service };
-  const build = (create: Create): AnyAgentTool | null => create(deps)(options.ctx ?? ownerContext);
-  const tool = (create: Create): AnyAgentTool => {
-    const built = build(create);
+  const build = (create: Create, ctx?: OpenClawPluginToolContext): AnyAgentTool | null =>
+    create(deps)(ctx ?? options.ctx ?? ownerContext);
+  const tool = (create: Create, ctx?: OpenClawPluginToolContext): AnyAgentTool => {
+    const built = build(create, ctx);
     if (!built) throw new Error("tool unavailable");
     return built;
   };
-  return { client, build, tool };
+  return { client, service, build, tool };
 }
 
-async function run(tool: AnyAgentTool, params: unknown) {
-  const result = await tool.execute("call-1", params);
+async function run(tool: AnyAgentTool, params: unknown, signal?: AbortSignal) {
+  const result = await tool.execute("call-1", params, signal);
   const text = result.content.map((block) => (block.type === "text" ? block.text : "")).join("");
   return { text, details: result.details };
 }
@@ -175,6 +180,128 @@ describe("memory tools", () => {
     await expect(run(tool(createMemoryStoreTool), { memories: ["Prefers tea"] })).rejects.toMatchObject({
       code: "outcome_unknown",
       message: expect.stringContaining("Check with memory_search before retrying"),
+    });
+  });
+
+  describe("flush writes", () => {
+    const flushContext = (flushId = "flush-1"): OpenClawPluginToolContext => ({ ...ownerContext, memoryFlush: { flushId } });
+    const params = { memories: ["Decided to ship on Friday"] };
+
+    it("share one write between invocations built from different contexts and both see the result", async () => {
+      const { client, tool } = setup();
+      const write = client.deferNext("addMemories");
+      const first = run(tool(createMemoryStoreTool, flushContext()), params);
+      await write.dispatched;
+      const second = run(tool(createMemoryStoreTool, flushContext()), params);
+      write.resolve();
+      const outcomes = await Promise.all([first, second]);
+      expect(outcomes.map(({ details }) => details)).toEqual([
+        expect.objectContaining({ storedCount: 1, deduplicated: false }),
+        expect.objectContaining({ storedCount: 1, deduplicated: true }),
+      ]);
+      expect(outcomes[1]?.text).toContain("deduplicated: true.");
+      expect(client.callsTo("addMemories")).toHaveLength(1);
+      expect(client.callsTo("addMemories")[0]?.params).toMatchObject({ dryRun: false, allowReplace: false });
+    });
+
+    it("keeps dedup per service: a second service built for the same flush writes on its own", async () => {
+      const first = setup({ ctx: flushContext() });
+      const second = setup({ ctx: flushContext() });
+      await run(first.tool(createMemoryStoreTool), params);
+      expect((await run(second.tool(createMemoryStoreTool), params)).details).toMatchObject({ deduplicated: false });
+      expect(first.client.callsTo("addMemories")).toHaveLength(1);
+      expect(second.client.callsTo("addMemories")).toHaveLength(1);
+    });
+
+    it("withholds the result from a waiter whose audience is revoked at release while the other still gets it", async () => {
+      const { client, tool } = setup();
+      const state = { revoked: false };
+      const write = client.deferNext("addMemories");
+      const revokable: OpenClawPluginToolContext = {
+        ...flushContext(), assertMemoryAudienceCurrent: () => { if (state.revoked) throw new Error("audience revoked"); },
+      };
+      const authorized = run(tool(createMemoryStoreTool, flushContext()), params);
+      await write.dispatched;
+      const revoked = run(tool(createMemoryStoreTool, revokable), params);
+      state.revoked = true;
+      write.resolve();
+      await expect(revoked).rejects.toThrow("audience revoked");
+      expect((await authorized).details).toMatchObject({ storedCount: 1 });
+      expect(client.callsTo("addMemories")).toHaveLength(1);
+    });
+
+    it("does not cancel the write for an authorized waiter when the invocation that started it is cancelled", async () => {
+      const { client, tool } = setup();
+      const write = client.deferNext("addMemories");
+      const controller = new AbortController();
+      const cancelled = run(tool(createMemoryStoreTool, flushContext()), params, controller.signal);
+      await write.dispatched;
+      const other = run(tool(createMemoryStoreTool, flushContext()), params);
+      controller.abort(new Error("host cancelled"));
+      await expect(cancelled).rejects.toThrow("host cancelled");
+      write.resolve();
+      expect((await other).details).toMatchObject({ storedCount: 1, deduplicated: true });
+      expect(client.callsTo("addMemories")).toHaveLength(1);
+      expect(client.records(owner.workspaceId)).toHaveLength(1);
+    });
+
+    it("does not dispatch for a waiter revoked before the connection came up, and a later retry can", async () => {
+      const { client, tool } = setup();
+      const state = { revoked: false };
+      const connecting = client.holdConnect("addMemories");
+      const only = run(tool(createMemoryStoreTool, {
+        ...flushContext(), assertInvocationCurrent: () => { if (state.revoked) throw new Error("invocation revoked"); },
+      }), params);
+      state.revoked = true;
+      connecting.release();
+      await expect(only).rejects.toThrow("invocation revoked");
+      expect(client.calls).toEqual([]);
+      expect((await run(tool(createMemoryStoreTool, flushContext()), params)).details).toMatchObject({ deduplicated: false });
+      expect(client.callsTo("addMemories")).toHaveLength(1);
+    });
+
+    it("tells the agent not to retry an unconfirmed flush and never redispatches it", async () => {
+      const { client, tool } = setup({ ctx: flushContext() });
+      const write = client.deferNext("addMemories");
+      const first = run(tool(createMemoryStoreTool), params);
+      await write.dispatched;
+      write.applyThenFail(new Error("response lost"));
+      const check = { code: "outcome_unknown", message: expect.stringContaining("Check with memory_search before retrying") };
+      await expect(first).rejects.toMatchObject(check);
+      await expect(run(tool(createMemoryStoreTool), params)).rejects.toMatchObject(check);
+      expect(client.callsTo("addMemories")).toHaveLength(1);
+    });
+
+    it("explains a full ledger without echoing memory text and sends nothing", async () => {
+      const { client, tool } = setup({ ctx: flushContext(), flush: { maxEntries: 1 } });
+      const write = client.deferNext("addMemories");
+      const first = run(tool(createMemoryStoreTool), params);
+      await write.dispatched;
+      const rejected = run(tool(createMemoryStoreTool), { memories: ["Secret second fact"] });
+      await expect(rejected).rejects.toThrow(FlushCapacityError);
+      await expect(rejected).rejects.toThrow(/nothing was sent/);
+      await expect(rejected).rejects.not.toThrow(/Secret second fact/);
+      write.resolve();
+      await first;
+      expect(client.callsTo("addMemories")).toHaveLength(1);
+    });
+
+    it("explains a disposed backend and sends nothing", async () => {
+      const { client, service, tool } = setup({ ctx: flushContext() });
+      service.dispose();
+      await expect(run(tool(createMemoryStoreTool), params)).rejects.toThrow(FlushDisposedError);
+      await expect(run(tool(createMemoryStoreTool), params)).rejects.toThrow(/nothing was sent/);
+      expect(client.calls).toEqual([]);
+    });
+
+    it("leaves non-flush and preview writes outside the flush ledger", async () => {
+      const { client, tool } = setup();
+      await run(tool(createMemoryStoreTool), params);
+      await run(tool(createMemoryStoreTool), params);
+      await run(tool(createMemoryPreviewTool, flushContext()), params);
+      await run(tool(createMemoryPreviewTool, flushContext()), params);
+      expect(client.callsTo("addMemories").map((call) => (call.params as { dryRun: boolean }).dryRun))
+        .toEqual([false, false, true, true]);
     });
   });
 });
