@@ -133,7 +133,7 @@ def set_env_vars(monkeypatch: MonkeyPatch, tmp_path: Path) -> dict[str, str]:
     env_vars = {
         "WORKSPACE_ID": "test_project",
         "OPENROUTER_API_KEY": "test_key",
-        "MCP_TRANSPORT": "stdio",
+        "MCP_TRANSPORT": "http",
         "MCP_PORT": "9103",
         "MCP_HOST": "127.0.0.1",
         "MCP_PATH": "/mcp",

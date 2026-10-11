@@ -38,9 +38,7 @@ class TransitionStatus(StrEnum):
 class TransportMode(StrEnum):
     """MCP transport selected by ``MCP_TRANSPORT``."""
 
-    STDIO = "stdio"
     HTTP = "http"
-    SSE = "sse"
     STREAMABLE_HTTP = "streamable-http"
 
 
