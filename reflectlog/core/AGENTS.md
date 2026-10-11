@@ -32,6 +32,8 @@ core/
 | Semantic contract | types.py | `ISemanticSearchEngine.embedder: Embeddings`; `search` → `(memory, score, created_at)` |
 | Stored row | types.py | `IStoredMemory`: id, workspace_id, content, created_at |
 | Workspace lease | storage_coordination.py | `IStorageCoordinator`, `LeaseMode` SHARED\|EXCLUSIVE |
+| Salvage contracts | salvage.py | Frozen observed records, raw journal values, sidecar/schema reports, bundle, archive/snapshot/publication protocols |
+| Salvage failures | exceptions.py | `SalvageError`: input, unsupported schema, malformed record, damaged database, archive changed, unsafe output, publication |
 | Closed sets | enums.py | `RerankerEngine.CROSS_ENCODER` / `OPENROUTER` / `NONE`; `parse_str_enum` |
 | Config wrap | config_adapters.py | wraps frozen `Config`; `_coerce_reranker_engine` |
 | Journal kinds | enums.py | `TransitionKind` add\|delete\|replace |
@@ -46,6 +48,8 @@ core/
 - Lease protocol lives here; Portalocker implementation is `infrastructure/storage_coordinator.py`.
 - `access.py` gone. No `getattr` / `optional_attr` / `invoke_if_callable` / `type(obj).__dict__`.
 - `prompts.py` is replacement + MCP instructions only.
+- `salvage.py` defines `ISalvageSnapshotReader`, `IArchiveInspection`, `IArchiveInspector`, and `IBundlePublisher`; no I/O or engines. Raw journal evidence is separate from active records, never resolved into content.
+- Salvage constants: `RECORDS_FILENAME="memories.jsonl"`, `MANIFEST_FILENAME="manifest.json"`, `INCOMPLETE_MARKER="INCOMPLETE"`. `SalvageError` messages carry paths, row ids, column names, and reasons, never memory content.
 
 ## ANTI-PATTERNS
 

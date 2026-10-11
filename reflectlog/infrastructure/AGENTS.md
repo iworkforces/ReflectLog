@@ -42,6 +42,9 @@ infrastructure/
 | Embed identity | `embedding_identity.py` | `ensure_embedding_identity` before HNSW open |
 | FTS | `tantivy_engine.py` | Tombstone+commit; `compact()` only |
 | Identity/journal | `memory_store.py` | unique `(workspace_id, content)` |
+| Salvage archive | `salvage_archive.py` | `ArchiveInspector`; fingerprints SQLite files + sidecars, copies database/WAL to scratch |
+| Salvage snapshot | `salvage_snapshot.py` | `SqliteSalvageSnapshotReader`; active rows and raw journal evidence in one read-only transaction |
+| Salvage publication | `salvage_publication.py` | `FileSystemBundlePublisher`; exclusive mkdir/files, `INCOMPLETE` first, manifest last |
 | CE Step 4 | `cross_encoder_reranker.py` | `rerank`: `[]` for empty input, pass-through when disabled, else score → normalize → CE threshold → recency |
 | Remote rerank | `openrouter_reranker.py` | `RERANKER_ENGINE=openrouter`; reuses `RerankerPostProcessor` |
 | Index drift | `index_integrity.py` | `evaluate_index_integrity` → `IndexIntegrityReport` |
@@ -59,6 +62,9 @@ infrastructure/
 - Tantivy delete = tombstone+commit. `compact()` is maintenance only.
 - Factories: `from_config()`, not `from_app_config()`.
 - Search `OSError` → `SearchError`, never `[]`.
+- Salvage reads only a disposable SQLite copy with `mode=ro`, never `immutable=1`; committed WAL content stays visible. Never construct `MemoryStore`, replay journal rows, or open vector/FTS engines for salvage.
+- Salvage never writes to the archive. Fingerprint inspected files before copying and re-check before publication; reject symlinks at the archive root, `usearch/`, and inspected files. SHM is fingerprinted, but SQLite rebuilds it in scratch.
+- Salvage output must not exist (including dangling symlinks), must have an existing parent, and must be outside archive/scratch. Mode `0700` directory, `0600` files; complete only with `manifest.json` present and `INCOMPLETE` absent. No overwrite; incomplete bundles are unusable.
 
 ## ANTI-PATTERNS
 

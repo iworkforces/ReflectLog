@@ -39,6 +39,7 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 | Embedding identity | `infrastructure/embedding_identity.py` | Sidecar before HNSW open |
 | Add / search | `application/memory/` | 3-phase add; 4-step hybrid search |
 | Journal replay | `application/memory/replacement_recovery.py` | Restart converge |
+| Offline content salvage | `application/salvage/` + `infrastructure/salvage_*.py` | Archived SQLite copy to JSONL + manifest; contracts in `core/salvage.py` |
 | Workspace lease | `infrastructure/storage_coordinator.py` | Portalocker + generation sidecar |
 | Config | `application/config/settings.py` | Frozen env `Config` |
 | Protocols | `core/` | `ISemanticSearchEngine`, `IStorageCoordinator` |
@@ -106,12 +107,14 @@ uv sync
 ./start-lint.sh --check
 ./start-unittest.sh --coverage
 uv run reflectlog --transport http --port 9103
+uv run reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
 (cd integrations/openclaw && pnpm check)   # TypeScript plugin: typecheck + vitest + build
 ```
 
 ## NOTES
 
 - Installed script: `reflectlog = reflectlog.server:main`. `mcp_server.main` is a thinner second entry.
+- `salvage` dispatches before server env/config loading; never constructs `MemoryManager` or opens engines. Application service owns orchestration; only disposable SQLite copies are opened. No journal replay, embeddings, or credentials.
 - `ty` + pyright include `tests`; tests execution env relaxes mock noise.
 - Default pytest paths (`tests/unit`, `tests/integration`, `tests/security`) omit `tests/load/` and root `tests/test_*.py`. `start-unittest.sh --parallel` and `-k` run `pytest tests` instead, which bypasses that list.
 - Hooks: edit `scripts/git-hooks/`, install via `scripts/setup-git-hooks.sh`. Pre-push = typecheck + lint `--all` (writes). No pytest in hooks. `--all` never fails the push on leftover lint; CI `--check` is the gate.
