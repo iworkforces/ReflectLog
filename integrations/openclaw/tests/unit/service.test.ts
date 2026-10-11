@@ -120,6 +120,50 @@ describe("get", () => {
 });
 
 describe("store and forget", () => {
+  it("withholds an acknowledged store result as outcome_unknown when authority is revoked", async () => {
+    const { client, service, scope } = setup();
+    const cause = new ReflectLogError("aborted", "caller revoked");
+    const guard = { assertCurrent: () => { if (client.records(scope.workspaceId).length > 0) throw cause; } };
+    const failure = await service.store(scope, ["tea"], { dryRun: false, allowReplace: false }, guard)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ReflectLogError);
+    expect(failure).toMatchObject({ code: "outcome_unknown", cause });
+    expect(client.records(scope.workspaceId)).toHaveLength(1);
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+  });
+
+  it("withholds a dry-run result with the original guard error", async () => {
+    const { client, service, scope } = setup();
+    const cause = new ReflectLogError("aborted", "caller revoked");
+    const guard = { assertCurrent: () => { if (client.calls.length > 0) throw cause; } };
+    await expect(service.store(scope, ["tea"], { dryRun: true, allowReplace: false }, guard)).rejects.toBe(cause);
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    expect(client.records(scope.workspaceId)).toEqual([]);
+  });
+
+  it.each(["store", "forget"] as const)("preserves a pre-dispatch %s guard error without calling the backend", async (operation) => {
+    const { client, service, scope } = setup();
+    const cause = new ReflectLogError("aborted", "caller revoked");
+    const guard = { assertCurrent: () => { throw cause; } };
+    const pending = operation === "store"
+      ? service.store(scope, ["tea"], { dryRun: false, allowReplace: false }, guard)
+      : service.forget(scope, [`${scope.tag}:1`], guard);
+    await expect(pending).rejects.toBe(cause);
+    expect(client.calls).toEqual([]);
+  });
+
+  it("withholds an acknowledged delete result as outcome_unknown when authority is revoked", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["tea"]);
+    const cause = new ReflectLogError("aborted", "caller revoked");
+    const guard = { assertCurrent: () => { if (client.records(scope.workspaceId).length === 0) throw cause; } };
+    const failure = await service.forget(scope, [`${scope.tag}:1`], guard).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ReflectLogError);
+    expect(failure).toMatchObject({ code: "outcome_unknown", cause });
+    expect(client.records(scope.workspaceId)).toEqual([]);
+    expect(client.callsTo("deleteMemories")).toHaveLength(1);
+  });
+
   it("normalizes and stores memories", async () => {
     const { client, service, scope } = setup();
     const result = await service.store(scope, ["  likes\r\njazz  "], { dryRun: false, allowReplace: false }, allowAll);

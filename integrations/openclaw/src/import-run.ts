@@ -64,10 +64,11 @@ function errno(error: unknown): string | undefined {
 }
 
 /**
- * Classify a failed `store`. This is sound only because the client rethrows
- * EVERY failure after a mutation may have been sent as `outcome_unknown`
- * (`mcp-client.ts` `invoke`: `uncertain = mutation && sent`), keeping its own
- * codes only for failures proven to precede dispatch. So any other
+ * Classify a failed `store`. The client normalizes post-send mutation failures
+ * as `outcome_unknown` (`mcp-client.ts` `invoke`: `uncertain = mutation && sent`),
+ * and the service normalizes post-acknowledgement guard failures the same way,
+ * withholding the result from revoked callers. Other client codes are kept
+ * only for failures proven to precede dispatch. So any other
  * `ReflectLogError`, a `MemoryInputError` or a `FlushDisposedError` means
  * nothing reached the server; every other error type is treated conservatively
  * as an unknown outcome.

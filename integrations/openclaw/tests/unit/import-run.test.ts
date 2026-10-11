@@ -184,6 +184,27 @@ describe("runImport", () => {
     expect(await readReceipt()).toMatchObject({ outcome: "failed", failure: { stage: "batch", code: "unavailable", batch: 1 } });
   });
 
+  it("reports outcome_unknown and stops when the guard fails after an acknowledged store", async () => {
+    await writeFile(join(dir, "MEMORY.md"), facts(25));
+    const cause = new ReflectLogError("aborted", "caller revoked");
+    const guard = { assertCurrent: () => { if (client.records(scope.workspaceId).length > 0) throw cause; } };
+    const result = await runImport({
+      service, scope, workspaceDir: dir, dryRun: false, archive: true, now: () => NOW,
+      guard, fs: { archive: fs },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.batches).toEqual([
+      { index: 1, size: 20, state: "outcome_unknown", errorCode: "outcome_unknown" },
+      { index: 2, size: 5, state: "not_attempted" },
+    ]);
+    expect(client.records(scope.workspaceId)).toHaveLength(20);
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    expect(result.totals.stored).toBe(0);
+    expect(result.cause).toMatchObject({ code: "outcome_unknown", cause });
+    expect(await readReceipt()).toMatchObject({ outcome: "failed", batches: result.batches });
+    expect(fs.leaked()).toEqual([]);
+  });
+
   it("fails a batch rejected by the service as failed_before_dispatch", async () => {
     await writeFile(join(dir, "MEMORY.md"), "Tea");
     service.dispose();

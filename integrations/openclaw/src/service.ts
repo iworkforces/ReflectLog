@@ -4,6 +4,7 @@ import { FlushCoordinator } from "./flush-coordinator.js";
 import { FlushDisposedError, FlushLedger } from "./flush-ledger.js";
 import { looksLikePromptInjection, normalizeMemoryText } from "./policy.js";
 import { formatRef, parseRef, revisionOf } from "./references.js";
+import { ReflectLogError } from "./reflectlog/types.js";
 import type {
   AddMemoriesResult,
   ReflectLogClient,
@@ -307,7 +308,8 @@ export class MemoryService {
       },
       { signal: guard.signal },
     );
-    guard.assertCurrent();
+    if (options.dryRun) guard.assertCurrent();
+    else this.#assertMutationCurrent(guard);
     return result;
   }
 
@@ -388,7 +390,7 @@ export class MemoryService {
       { workspaceId: scope.workspaceId, ids: [...byId.keys()] },
       { signal: guard.signal },
     );
-    guard.assertCurrent();
+    this.#assertMutationCurrent(guard);
     const removed = result.removed.flatMap((id) => {
       const ref = byId.get(id);
       return ref === undefined ? [] : [ref];
@@ -400,6 +402,19 @@ export class MemoryService {
       }
     }
     return { removed, missing };
+  }
+
+  /** A revoked caller gets no result and must not mistake an acknowledged mutation for an unsent one. */
+  #assertMutationCurrent(guard: EffectGuard): void {
+    try {
+      guard.assertCurrent();
+    } catch (cause) {
+      throw new ReflectLogError(
+        "outcome_unknown",
+        "the mutation may have been applied, but the caller is no longer current",
+        { cause },
+      );
+    }
   }
 
   async health(scope: MemoryScope, guard: EffectGuard): Promise<void> {
