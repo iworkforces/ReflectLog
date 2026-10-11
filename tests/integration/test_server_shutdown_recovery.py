@@ -7,6 +7,7 @@ from collections.abc import Callable
 import os
 from pathlib import Path
 import signal
+import socket
 import sys
 import threading
 from typing import cast
@@ -212,34 +213,38 @@ async def test_signal_shutdown_drains_real_storage_and_reopens(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_installed_stdio_signal_persists_with_idle_stdin(
+async def test_installed_http_signal_persists(
     set_env_vars: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     if sys.platform == "win32":
         pytest.skip("POSIX SIGTERM path")
     monkeypatch.setenv("NUMBA_WARMUP", "false")
-    master, slave = os.openpty()
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "shutdown-test-token")
+    monkeypatch.setenv("MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("PYTHONUNBUFFERED", "1")
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "reflectlog.server",
+        "--transport",
+        "http",
+        "--port",
+        str(port),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    assert process.stdout is not None
     try:
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "reflectlog.server",
-            "--transport",
-            "stdio",
-            stdin=slave,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+        startup = await asyncio.wait_for(
+            process.stdout.readuntil(b"Application startup complete"), 30
         )
-    finally:
-        os.close(slave)
-    assert process.stderr is not None
-    try:
-        _ = await asyncio.wait_for(process.stderr.readuntil(b"Starting MCP server"), 15)
         process.send_signal(signal.SIGTERM)
-        output = await asyncio.wait_for(
-            process.stderr.readuntil(b"Server shutdown complete"), 5
-        )
+        output = startup + await asyncio.wait_for(process.stdout.read(), 15)
         assert b"Received SIGTERM" in output
+        assert b"Server shutdown complete" in output
         assert await asyncio.wait_for(process.wait(), 2) == -signal.SIGTERM
     finally:
         if process.returncode is None:
@@ -249,7 +254,6 @@ async def test_installed_stdio_signal_persists_with_idle_stdin(
             except TimeoutError:
                 process.kill()
                 await process.wait()
-        os.close(master)
 
 
 def _child_wait_for_term(path: str) -> None:
