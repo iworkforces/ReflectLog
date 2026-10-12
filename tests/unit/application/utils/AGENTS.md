@@ -10,7 +10,6 @@ Unit tests for logging, security helpers, config reload, and Numba scoring wrapp
 ## STRUCTURE
 ```
 tests/unit/application/utils/
-├── conftest.py                 # NUMBA_DISABLE_JIT=1 + reload
 ├── test_logging.py             # StructuredLogger, redaction
 ├── test_security.py            # SecretString, validate_workspace_id
 ├── test_config_reload.py       # ConfigReloadManager / SIGHUP
@@ -26,7 +25,7 @@ tests/unit/application/utils/
 | `test_config_reload.py` | Reload manager + signal handler |
 
 ## CONVENTIONS
-- `conftest.py` purges `numba` and reloads with `NUMBA_DISABLE_JIT=1` so coverage can see bodies.
+- `tests/conftest.py` disables the Numba JIT for the whole session so coverage can see scoring bodies. No conftest here.
 - Never log secrets or memory text.
 - Recency is not applied before CE normalize/threshold.
 

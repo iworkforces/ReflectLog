@@ -31,9 +31,8 @@ tests/
 
 ## FIXTURES
 
-1. `tests/conftest.py` — `mock_usearch_engine` (`is_ready=False`, `add_batch` `side_effect`), `mock_memory_class` (patches `reflectlog.application.memory.manager.USearchEngine`), `set_env_vars`, `reset_env_after_test`.
-2. `tests/unit/application/memory/conftest.py` — `NUMBA_DISABLE_JIT=1` + purge/reload numba.
-3. `tests/unit/application/utils/conftest.py` — same JIT disable.
+1. `tests/conftest.py` top — `NUMBA_DISABLE_JIT=1` + `numba.core.config.reload_config()` before any reflectlog import, so the whole session runs without the JIT (coverage traces scoring bodies; same as CI). Never purge or reload numba in a subdirectory conftest: dispatchers created earlier fail with `cannot augment Function(...)`.
+2. `tests/conftest.py` fixtures — `mock_usearch_engine` (`is_ready=False`, `add_batch` `side_effect`), `mock_memory_class` (patches `reflectlog.application.memory.manager.USearchEngine`), `set_env_vars`, `reset_env_after_test`.
 
 ## CONVENTIONS
 

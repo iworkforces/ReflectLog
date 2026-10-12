@@ -6,13 +6,12 @@
 
 ## OVERVIEW
 
-3-phase add, 4-step search, factory, journal replay. Engines mocked. This `conftest.py` sets `NUMBA_DISABLE_JIT=1` and reloads numba.
+3-phase add, 4-step search, factory, journal replay. Engines mocked. The Numba JIT is disabled suite-wide by `tests/conftest.py`.
 
 ## STRUCTURE
 
 ```
 tests/unit/application/memory/
-├── conftest.py                  # NUMBA_DISABLE_JIT=1; purge + reload numba
 ├── test_manager.py              # MemoryManager internals
 ├── test_add_phases.py
 ├── test_search_strategies.py
