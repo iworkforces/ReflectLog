@@ -103,6 +103,17 @@ def test_capture_record_utc_and_bounded_sides(plugin_import):
     assert user.endswith("…") and assistant.endswith("…")
 
 
+@pytest.mark.parametrize("user,assistant", [("u \ud800", "a"), ("u", "a \udfff")])
+def test_capture_invalid_unicode_skipped(plugin_import, user, assistant):
+    # Given an unpaired surrogate on either side, when building, then nothing is captured.
+    assert (
+        plugin_import("core.policy").build_turn_record(
+            user, assistant, platform="cli", now=datetime.now(timezone.utc)
+        )
+        is None
+    )
+
+
 def test_capture_blank_user_skipped(plugin_import):
     # Given no visible user content, when building, then assistant-only records are skipped.
     assert (

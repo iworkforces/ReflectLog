@@ -40,6 +40,14 @@ def normalize(text: str) -> str:
     ).strip()
 
 
+def _encodable(text: str) -> bool:
+    try:
+        _ = text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def looks_like_prompt_injection(text: str) -> bool:
     collapsed = re.sub(r"\s+", " ", text).strip()
     return any(pattern.search(collapsed) for pattern in _INJECTION_PATTERNS)
@@ -57,7 +65,7 @@ def validate_store_batch(items: Sequence[object]) -> tuple[str, ...]:
             continue
         text = normalize(item)
         normalized.append(text)
-        if not text or len(text) > 30720:
+        if not text or len(text) > 30720 or not _encodable(text):
             invalid.append(index)
         if looks_like_prompt_injection(text):
             injections.append(index)
@@ -78,13 +86,16 @@ def check_auto_write(text: str) -> str | None:
 
 
 def recall_query(text: str) -> str | None:
-    return normalize(text)[:1000] or None
+    query = normalize(text)[:1000]
+    return query if query and _encodable(query) else None
 
 
 def validate_search_query(text: str) -> str:
     result = normalize(text)
     if not result or len(result) > 1000:
         raise PolicyError("query: expected 1 to 1000 characters")
+    if not _encodable(result):
+        raise PolicyError("query: invalid Unicode")
     return result
 
 
@@ -92,7 +103,7 @@ def build_turn_record(
     user: str, assistant: str, *, platform: str, now: datetime
 ) -> str | None:
     user_text = normalize(user)
-    if not user_text:
+    if not user_text or not _encodable(user + assistant):
         return None
     assistant_text = normalize(assistant)
     user_text = user_text[:1999] + "…" if len(user_text) > 2000 else user_text

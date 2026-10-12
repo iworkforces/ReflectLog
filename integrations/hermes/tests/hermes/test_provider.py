@@ -142,6 +142,24 @@ def test_author_block_survives_compression(hermes_provider):
     )
 
 
+def test_invalid_unicode_never_reaches_the_wire(hermes_provider):
+    # Given text with an unpaired surrogate, as a JSON "\ud800" escape decodes.
+    provider, fake = hermes_provider()
+    text = "cobalt \ud800 widgets"
+    # When it reaches recall, explicit tools, and automatic mirroring.
+    recalled = provider.prefetch(text)
+    search = json.loads(provider.handle_tool_call("reflectlog_search", {"query": text}))
+    store = json.loads(
+        provider.handle_tool_call("reflectlog_store", {"memories": [text]})
+    )
+    provider.on_memory_write("add", "MEMORY.md", text)
+    # Then recall fails soft, tools return a coded error, and nothing is sent.
+    assert recalled == ""
+    assert search["code"] == store["code"] == "invalid_input"
+    assert provider.writer.stats()["rejected"] == 1
+    assert fake.calls["search_memories"] == fake.calls["add_memories"] == 0
+
+
 def test_shared_chat_disabled(hermes_provider):
     # Given a shared chat without opt-in.
     provider, fake = hermes_provider(
