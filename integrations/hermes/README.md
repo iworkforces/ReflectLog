@@ -180,9 +180,12 @@ returned, because it can echo credentials.
 
 `outcome_unknown` means a write may or may not have applied. The client never
 automatically resends a possibly dispatched mutation. The one exception is the
-server's own session rejection (HTTP 400 or 404 with JSON-RPC error `-32600` and
-a null id), which MCP sends before running anything. An unreadable result from
-an add or delete is also `outcome_unknown`. Check with `reflectlog_search` or
+server's own session rejection, which MCP sends before running anything: HTTP
+400 or 404 with a JSON-RPC `2.0` body carrying error `-32600` and an explicit
+`"id": null`. Any other 400 or 404, including one whose body cannot be read,
+still ends the session; a read reconnects once, and a write becomes
+`outcome_unknown`. An unreadable result from an add or delete is also
+`outcome_unknown`. Check with `reflectlog_search` or
 `reflectlog_list` before deciding whether to retry.
 
 ## Development
