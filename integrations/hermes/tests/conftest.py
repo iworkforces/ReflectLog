@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from importlib import import_module, util
+import os
 from pathlib import Path
+import shutil
 import sys
+import tempfile
 from types import ModuleType
 from typing import TYPE_CHECKING
 
@@ -15,6 +18,24 @@ if TYPE_CHECKING:
 
 PLUGIN_PACKAGE = "reflectlog_hermes_plugin"
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
+_SESSION_HOME = pytest.StashKey[tuple[str, str | None]]()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # Importing Hermes' plugins.memory scaffolds $HERMES_HOME (default ~/.hermes);
+    # collection-time imports get a throwaway home instead of the developer's.
+    home = tempfile.mkdtemp(prefix="reflectlog-hermes-home-")
+    config.stash[_SESSION_HOME] = (home, os.environ.get("HERMES_HOME"))
+    os.environ["HERMES_HOME"] = home
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    home, previous = config.stash[_SESSION_HOME]
+    if previous is None:
+        _ = os.environ.pop("HERMES_HOME", None)
+    else:
+        os.environ["HERMES_HOME"] = previous
+    shutil.rmtree(home)
 
 
 def load_plugin_package(plugin_dir: Path, package_name: str) -> ModuleType:
