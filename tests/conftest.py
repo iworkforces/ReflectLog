@@ -1,5 +1,19 @@
 """Shared fixtures and configuration for all tests."""
 
+import os
+
+# The suite runs with the Numba JIT disabled so coverage can trace the scoring
+# bodies. `@jit` decides at decoration time, so this must precede every
+# reflectlog import. pytest has already imported numba (filterwarnings names
+# numba.core.errors), hence the config reload. Never purge numba from
+# sys.modules instead: dispatchers created earlier would then mix two numba
+# copies and fail with "cannot augment Function(...)".
+os.environ["NUMBA_DISABLE_JIT"] = "1"
+
+from numba.core import config as numba_config
+
+numba_config.reload_config()
+
 from collections.abc import Callable, Generator
 from dataclasses import replace
 from pathlib import Path
