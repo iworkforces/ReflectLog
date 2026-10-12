@@ -75,6 +75,7 @@ class _SessionInvalidError(Exception):
 
 # JSON-RPC codes the server can only return before a tool runs.
 _PRE_EXECUTION_RPC_CODES = frozenset({-32700, -32600, -32601, -32602})
+_SESSION_STATUSES = frozenset({400, 404})
 
 
 def _session_rejection(body: bytes) -> bool:
@@ -339,15 +340,20 @@ class ReflectLogClient:
         def work(
             exchange: _Exchange[tuple[dict[str, object], str | None]],
         ) -> tuple[dict[str, object], str | None]:
-            with (
-                self._http.stream(
-                    "POST", self._url, json=payload, headers=headers, timeout=timeout
-                ) as response,
-                exchange.attached(response),
-            ):
-                return self._receive(
-                    response, identity, session, deadline, notification=notification
-                )
+            with self._http.stream(
+                "POST", self._url, json=payload, headers=headers, timeout=timeout
+            ) as response:
+                if session and response.status_code in _SESSION_STATUSES:
+                    # The session is dead even if the caller abandons this body.
+                    self._invalidate(session.generation)
+                with exchange.attached(response):
+                    return self._receive(
+                        response,
+                        identity,
+                        session,
+                        deadline,
+                        notification=notification,
+                    )
 
         return self._bounded(work, deadline)
 
@@ -363,12 +369,14 @@ class ReflectLogClient:
         _ = self._remaining(deadline)
         if response.status_code in {401, 403}:
             raise ReflectLogError("unauthorized", "ReflectLog authentication failed")
-        if response.status_code in {400, 404} and session:
+        if response.status_code in _SESSION_STATUSES and session:
             # Any such status ends the session, but only the server's own
             # pre-dispatch rejection proves that a mutation never ran.
             try:
                 body = self._body(response, deadline)
-            except ReflectLogError:
+            except ReflectLogError as error:
+                if error.code == "timeout":
+                    raise
                 raise _SessionInvalidError(False) from None
             raise _SessionInvalidError(_session_rejection(body))
         if response.status_code >= 400:

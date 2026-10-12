@@ -8,7 +8,8 @@ validation/execution/malformed/mismatch/missing faults, plus rpc_params (JSON-RP
 MCP SDK's pre-dispatch body; audit400 (a 400 after running), noid400/version400
 (-32600 session errors without an explicit null id / with the wrong jsonrpc after
 running), nested400/big404 (unparsable / oversized session error bodies after
-running), nested (an unparsable 200 body), bad_result (unreadable structuredContent
+running), stall404 (a 404 body that ends only when closed, after running),
+nested (an unparsable 200 body), bad_result (unreadable structuredContent
 after running) and slow_headers (slow_s before any response after running) model
 post-dispatch failures; stall answers with a body that ends only when closed, and
 close_delay/close_error make that close slow or raise; delete_delay slows session
@@ -262,6 +263,8 @@ class FakeReflectLogServer:
             return httpx.Response(400, text="[" * 100_000)
         if fault == "big404":
             return httpx.Response(404, text="x" * 8192)
+        if fault == "stall404":
+            return httpx.Response(404, stream=Stalled(self))
         if fault == "nested":
             return httpx.Response(
                 200, text="[" * 100_000, headers={"content-type": "application/json"}

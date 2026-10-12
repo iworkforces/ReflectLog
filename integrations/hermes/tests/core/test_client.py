@@ -252,6 +252,48 @@ def test_unreadable_session_error_body(wire, error_type, monkeypatch, plugin_imp
     assert server.dispatches["add_memories"] == 1
 
 
+@pytest.mark.parametrize("mutation", [True, False])
+def test_withheld_session_error_body_ends_the_session(wire, mutation, error_type):
+    # given a 404 whose body never arrives before the deadline
+    server, client = wire
+    client.probe("ws")
+    tool = "add_memories" if mutation else "get_all_memories"
+    server.faults[tool].append("stall404")
+    start = time.monotonic()
+    # when
+    with pytest.raises(error_type) as error:
+        if mutation:
+            client.add_memories("ws", ["text"], deadline=start + 0.1)
+        else:
+            client.probe("ws", deadline=start + 0.1)
+    total = client.probe("ws")
+    # then the dead session is not reused and the applied mutation is not resent
+    assert error.value.code == ("outcome_unknown" if mutation else "timeout")
+    assert total == (1 if mutation else 0)
+    assert server.handshakes == 2
+    assert server.dispatches["add_memories"] == (1 if mutation else 0)
+
+
+class LateBody(httpx.SyncByteStream):
+    def __iter__(self):
+        time.sleep(0.1)
+        yield b"late"
+
+
+def test_session_error_body_timeout_stays_a_timeout(wire, error_type, plugin_import):
+    # given a 404 whose first body chunk lands after the deadline
+    _, client = wire
+    session = plugin_import("core.client")._Session(1, "session-1", "2025-06-18")
+    response = httpx.Response(404, stream=LateBody())
+    # when the worker reads it
+    with pytest.raises(error_type) as error:
+        client._receive(
+            response, 1, session, time.monotonic() + 0.05, notification=False
+        )
+    # then the deadline is reported, not an unreadable session error
+    assert error.value.code == "timeout"
+
+
 def test_unreadable_results(wire, error_type):
     # given
     server, client = wire
