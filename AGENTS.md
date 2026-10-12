@@ -36,7 +36,7 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 | MCP + auth | `application/mcp_server.py` | Tools via `MemoryManager` only |
 | MCP surface | `application/tools/` | `add_memories`, `search_memories`, `get_all_memories`, `get_memory_by_id`, `delete_memories`; explicit `workspace_id` |
 | Memory facade | `application/memory/manager.py` | Locks, journal, public API |
-| Workspace pin | `application/memory/workspace_registry.py` | `acquire()` per tool call; idle TTL 900s |
+| Workspace pin | `application/memory/workspace_registry.py` | `acquire()` per tool call; idle TTL 900s; optional `WORKSPACE_MAX_RESIDENT` |
 | Embedding identity | `infrastructure/embedding_identity.py` | Sidecar before HNSW open |
 | Add / search | `application/memory/` | 3-phase add; 4-step hybrid search |
 | Journal replay | `application/memory/replacement_recovery.py` | Restart converge |
@@ -86,6 +86,7 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 - No `getattr`, `optional_attr()`, `invoke_if_callable()`, or `type(obj).__dict__`.
 - No MagicMock auto-attrs as APIs; put the method on a protocol.
 - Tools never touch engines; go through `MemoryManager`.
+- Resident capacity admission belongs in `WorkspaceRegistry`, never in tools.
 - No compact-on-delete. No embed-batch pad with `[]`. No single-list fusion min-max.
 - No recency before CE normalize/threshold. Skip CE if ≤1 hit (pipeline owns skip).
 - No HNSW load when SQLite is missing/empty/unreadable.

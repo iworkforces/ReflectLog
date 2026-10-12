@@ -31,6 +31,7 @@ Adapters (`Config` → protocol configs) live in `core/config_adapters.py` (`fro
 | WeMM | `EMBEDDER_PROVIDER=wemm` | `WeMMModel` + `WEMM_EMBEDDING_DIMS` + `WEMM_DEVICE` |
 | Presets | `presets.py` | `apply_preset_to_env` overwrites the keys it sets |
 | Workspace | regex `^[A-Za-z0-9_.-]{1,64}$` | Path `..` / leading `/` rejected |
+| Resident capacity | `WORKSPACE_MAX_RESIDENT` | `Config.workspace_max_resident: int \| None = None`; unset means unlimited; positive integers only |
 
 ## CONVENTIONS
 
@@ -38,6 +39,7 @@ Adapters (`Config` → protocol configs) live in `core/config_adapters.py` (`fro
 - Typed enum fields include `EmbedderProvider`, `WeMMModel`, `WeMMDevice`, `TransportMode`, `RerankerEngine`, `FusionMethod`.
 - Dataclass field defaults are WeMM-2B / 2048. `from_environment()` does not use those when `EMBEDDER_PROVIDER` is unset.
 - MCP tools take `workspace_id` per call. Do not treat a process-global `WORKSPACE_ID` as the selector.
+- Capacity parses only when present; blank, zero, negative, fractional, or non-numeric values fail at startup. `_validate_workspace_capacity` also rejects boolean/non-integer config values.
 - API keys are `SecretString`; use `.get_secret_value()`. Never log them.
 - `setup_config_reload()` exists but is not registered at process startup.
 

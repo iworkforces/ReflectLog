@@ -34,7 +34,7 @@ application/
 | Salvage orchestration | `salvage/service.py` | Application-owned `ContentSalvageService`; core protocols, `from_defaults()` wires infrastructure |
 | Salvage payloads | `salvage/manifest.py` | Deterministic `memories.jsonl` + `manifest.json`; stable `unresolved_reasons` codes |
 | Facade | `memory/manager.py` | Portalocker → `_write_lock` → `_lock` |
-| Workspace pin | `memory/workspace_registry.py` | Idle TTL 900s, max 8 idle; reaper in lifespan |
+| Workspace pin | `memory/workspace_registry.py` | Idle TTL 900s, max 8 idle; optional `WORKSPACE_MAX_RESIDENT`; reaper in lifespan |
 | Add | `memory/add_phases.py` | Embed outside exclusive; leftover ADD after generation |
 | Search | `memory/search_strategies.py` | 4-step; skip CE if ≤1 hit |
 | Config reload | `config/settings.py` `setup_config_reload` | SIGHUP helper; not called at startup |
@@ -56,5 +56,6 @@ application/
 
 - Tools must not import engines or fusion.
 - Do not call `setup_config_reload()` from `server.py` / `FastMCPServer`.
+- Capacity admission stays in `WorkspaceRegistry`; tools keep their schemas.
 - Do not treat leftover `utils/*.pyc` (`http_client`, `metrics`, `circuit_breaker`) as APIs.
 - Do not construct engines via `EngineFactory` at runtime.

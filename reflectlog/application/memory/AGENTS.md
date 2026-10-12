@@ -27,7 +27,7 @@ memory/
 | Task | Location | Notes |
 |------|----------|-------|
 | Public API | `manager.py` | Portalocker → `_write_lock` → `_lock` |
-| Per-workspace pin | `workspace_registry.py` | Not a second facade; builds `MemoryManager` |
+| Per-workspace pin | `workspace_registry.py` | Builds `MemoryManager`; idle TTL 900s, max 8 idle; optional `WORKSPACE_MAX_RESIDENT` |
 | Persist / replace | `add_phases.py` | Embed outside exclusive; NEW then OLD |
 | Restart converge | `replacement_recovery.py` | Generation after converge; leftover ADD then replace complete |
 | Exact identity | `match_utils.has_exact_match` | SQLite `(workspace_id, content)` only |
@@ -35,6 +35,7 @@ memory/
 
 ## CONVENTIONS
 
+- Registry capacity counts canonical ids across loaded/building/closing/failed-close managers; resident reuse takes no slot. At capacity, persist/close the longest-idle manager before loading; await existing closes. Failed closes stay counted; shutdown retries without a timeout.
 - 3-phase add is the async path only. Sync `add_memories` journals `ADD` and skips smart replace.
 - `DuplicateDetectionPhase` → `SmartReplacementPhase` → `StoragePhase`.
 - 4-step search: parallel backends → RRF/concat → fusion threshold → CE if >1 hit.

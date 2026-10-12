@@ -35,7 +35,7 @@ reflectlog/
 | Salvage I/O | `infrastructure/salvage_archive.py`, `infrastructure/salvage_snapshot.py`, `infrastructure/salvage_publication.py` | Fingerprint, disposable read-only SQLite, exclusive publication |
 | MCP tools | `application/mcp_server.py` | `workspace_id` on every call; registry then tool |
 | Engines | `application/memory/manager.py` | Inlines `from_config()`; `EngineFactory` unused at runtime |
-| Workspace pin | `application/memory/workspace_registry.py` | Built on first tool call; idle TTL 900s |
+| Workspace pin | `application/memory/workspace_registry.py` | Built on first tool call; idle TTL 900s, max 8 idle; optional `WORKSPACE_MAX_RESIDENT` |
 | Workspace lease | `infrastructure/storage_coordinator.py` | Lives here, not in `core/` |
 | Lease protocol | `core/storage_coordination.py` | `IStorageCoordinator`, `LeaseMode` |
 | Embeddings | `infrastructure/embeddings/` | `WeMMEmbeddings`, `LangchainQwenEmbeddings`, `CachedEmbeddings` |
