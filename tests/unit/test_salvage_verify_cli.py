@@ -316,6 +316,36 @@ def test_runner_when_unexpected_exception() -> None:
             _ = run(argparse.Namespace(bundle="x", workspace_id=WS))
 
 
+def test_dispatch_does_not_load_server_environment(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from reflectlog.server import main
+
+    bundle = export_bundle(tmp_path)
+    argv = [
+        "reflectlog",
+        "salvage-verify",
+        "--bundle",
+        str(bundle),
+        "--workspace-id",
+        WS,
+    ]
+    with (
+        patch("sys.argv", argv),
+        patch(
+            "reflectlog.server._apply_cli_env_vars",
+            side_effect=AssertionError("offline verification must not load server env"),
+        ),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out)["status"] == "ready"
+
+
 @pytest.mark.parametrize("command", ["salvage", "salvage-verify"])
 def test_parser_when_command_selected(command: str) -> None:
     options = (
