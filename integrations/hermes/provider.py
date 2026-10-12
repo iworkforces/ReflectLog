@@ -374,10 +374,11 @@ class ReflectLogMemoryProvider(MemoryProvider):
         with self._lock:
             if not self._initialized or self._closing:
                 return
+            # Compression switches sessions mid-turn; the author block stays
+            # until on_turn_start re-checks the next author.
             self._session = new_session_id
             self._generation += 1
             self._status = None
-            self._blocked = False
 
     def identity_signature(self) -> dict[str, Any]:
         try:

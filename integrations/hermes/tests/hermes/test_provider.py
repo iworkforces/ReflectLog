@@ -116,6 +116,32 @@ def test_author_gate_and_session_binding(hermes_provider):
     assert provider.binding.workspace_id == workspace
 
 
+def test_author_block_survives_compression(hermes_provider):
+    # Given an owner-bound DM whose current turn belongs to another author.
+    provider, fake = hermes_provider(
+        platform="telegram", user_id="owner", chat_type="dm"
+    )
+    provider.handle_tool_call("reflectlog_store", {"memories": ["cobalt widgets"]})
+    provider.on_turn_start(1, "cobalt widgets", author_id="intruder")
+    # When compression switches the session in the middle of that turn.
+    provider.on_session_switch(
+        "compressed", parent_session_id="session", reset=False, reason="compression"
+    )
+    provider.on_memory_write("add", "MEMORY.md", "teal dashboards")
+    assert provider.writer.drain(2)
+    # Then recall, tools, and mirroring stay blocked until the next author check.
+    assert provider.prefetch("cobalt widgets", session_id="compressed") == ""
+    assert (
+        json.loads(provider.handle_tool_call("reflectlog_list", {}))["code"]
+        == "disabled"
+    )
+    assert fake.dispatches["add_memories"] == 1
+    provider.on_turn_start(2, "cobalt widgets", author_id="owner")
+    assert "cobalt widgets" in provider.prefetch(
+        "cobalt widgets", session_id="compressed"
+    )
+
+
 def test_shared_chat_disabled(hermes_provider):
     # Given a shared chat without opt-in.
     provider, fake = hermes_provider(
