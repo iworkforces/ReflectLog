@@ -86,6 +86,7 @@ class WorkspaceRegistry:
         self._evicting: dict[str, asyncio.Task[Exception | None]] = {}
         self._quarantined: dict[str, MemoryManager] = {}
         self._lock = anyio.Lock()
+        self._admission_changed = anyio.Event()
         self._drained = anyio.Event()
         self._drained.set()
         self._closed = anyio.Event()
@@ -138,6 +139,10 @@ class WorkspaceRegistry:
         ):
             self._drained.set()
 
+    def _notify_admission_locked(self) -> None:
+        self._admission_changed.set()
+        self._admission_changed = anyio.Event()
+
     async def _acquire_entry(self, key: str) -> _Entry:
         with anyio.CancelScope(shield=True):
             while True:
@@ -153,6 +158,7 @@ class WorkspaceRegistry:
                     pending_build = self._building.get(key)
                     entry = self._entries.get(key)
                     capacity_wait: set[asyncio.Task[Exception | None]] = set()
+                    admission_changed = self._admission_changed
                     if pending_close is None and pending_build is None:
                         if entry is not None:
                             if self._drained.is_set():
@@ -167,9 +173,7 @@ class WorkspaceRegistry:
                                 self._drained = anyio.Event()
                             break
                 if capacity_wait:
-                    _ = await asyncio.wait(
-                        capacity_wait, return_when=asyncio.FIRST_COMPLETED
-                    )
+                    await admission_changed.wait()
                 elif pending_close is not None:
                     _ = await asyncio.wait({pending_close})
                 elif pending_build is not None:
@@ -181,24 +185,36 @@ class WorkspaceRegistry:
                 async with self._lock:
                     _ = self._building.pop(key)
                     pending_build.set()
+                    self._notify_admission_locked()
                     self._notify_drained_locked()
                 raise
+            pin_error: Exception | None = None
+            cleanup_task: asyncio.Task[Exception | None] | None = None
             async with self._lock:
-                if (
-                    type(manager) is MemoryManager
-                    and manager.config.embedder_provider is EmbedderProvider.WEMM
-                    and self._wemm_pin is None
-                ):
-                    self._wemm_pin = acquire_wemm(wemm_config(manager.config))
-                entry = _Entry(manager, 0, self._clock())
-                self._entries[key] = entry
+                try:
+                    if (
+                        type(manager) is MemoryManager
+                        and manager.config.embedder_provider is EmbedderProvider.WEMM
+                        and self._wemm_pin is None
+                    ):
+                        self._wemm_pin = acquire_wemm(wemm_config(manager.config))
+                except Exception as error:
+                    pin_error = error
+                    cleanup_task = self._schedule_eviction_locked(key, manager)
                 _ = self._building.pop(key)
                 pending_build.set()
-                if self._closing:
-                    self._notify_drained_locked()
-                    raise RuntimeError("WorkspaceRegistry is closed")
-                entry.active += 1
-                return entry
+                self._notify_admission_locked()
+                if pin_error is None:
+                    entry = _Entry(manager, 0, self._clock())
+                    self._entries[key] = entry
+                    if self._closing:
+                        self._notify_drained_locked()
+                        raise RuntimeError("WorkspaceRegistry is closed")
+                    entry.active += 1
+                    return entry
+            if cleanup_task is not None:
+                _ = await cleanup_task
+            raise pin_error
         raise RuntimeError("Workspace acquisition was cancelled")
 
     def _make_room_locked(self) -> set[asyncio.Task[Exception | None]]:
@@ -257,11 +273,13 @@ class WorkspaceRegistry:
             async with self._lock:
                 self._quarantined[key] = manager
                 _ = self._evicting.pop(key)
+                self._notify_admission_locked()
                 self._notify_drained_locked()
             return error
         async with self._lock:
             _ = self._quarantined.pop(key, None)
             _ = self._evicting.pop(key)
+            self._notify_admission_locked()
             self._notify_drained_locked()
         return None
 
@@ -306,6 +324,7 @@ class WorkspaceRegistry:
             async with self._lock:
                 if not self._closing:
                     self._closing = True
+                    self._notify_admission_locked()
                     other_closer = False
                 elif not self._closed.is_set():
                     other_closer = True

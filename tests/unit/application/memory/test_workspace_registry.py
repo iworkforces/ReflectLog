@@ -1,22 +1,26 @@
 from annotationlib import Format
 import asyncio
+from dataclasses import replace
 import inspect
 import threading
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import anyio
 import pytest
 
 from reflectlog.application.config.settings import Config
+from reflectlog.application.memory import workspace_registry
 from reflectlog.application.memory.manager import MemoryManager
 from reflectlog.application.memory.workspace_registry import (
     WorkspaceCapacityError,
     WorkspaceRegistry,
 )
 from reflectlog.application.utils.security import SecretString
+from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import ConfigurationError
 from reflectlog.core.search_health import SearchFailureSnapshot
+from reflectlog.infrastructure.embeddings.wemm_service import WeMMBorrow
 
 
 def fake_manager(config: Config) -> MagicMock:
@@ -1584,3 +1588,299 @@ async def test_capacity_awaits_idle_ttl_eviction_already_in_flight(
             await registry.close()
     assert pool.alive == 0
     assert all(was_closed(manager) for manager in pool.managers.values())
+
+
+@pytest.mark.unit
+async def test_waiter_notices_capacity_freed_by_another_eviction(
+    config: Config,
+) -> None:
+    pool = Pool()
+    a_started, a_gate = pool.hold_close("a")
+    c_started, c_gate = pool.hold_build("c")
+    now = [0.0]
+    registry = WorkspaceRegistry(
+        config, pool.factory, clock=lambda: now[0], idle_ttl=900, max_resident=2
+    )
+    async with registry.acquire("a"):
+        pass
+    now[0] = 1
+    b_held = anyio.Event()
+    b_release = anyio.Event()
+    c_release = anyio.Event()
+
+    async def holder() -> None:
+        async with registry.acquire("b"):
+            b_held.set()
+            await b_release.wait()
+
+    async def requester() -> None:
+        async with registry.acquire("c"):
+            await c_release.wait()
+
+    holder_task = asyncio.create_task(holder())
+    requester_task: asyncio.Task[None] | None = None
+    try:
+        await b_held.wait()
+        requester_task = asyncio.create_task(requester())
+        assert await anyio.to_thread.run_sync(a_started.wait, 5)
+        b_release.set()
+        await holder_task
+        now[0] = 1000
+        await registry.prune()
+        assert pool.events == ["build:a", "build:b", "close:b"]
+        assert await anyio.to_thread.run_sync(c_started.wait, 5)
+        assert not was_closed(pool.managers["a"])
+    finally:
+        a_gate.set()
+        c_gate.set()
+        b_release.set()
+        c_release.set()
+        await holder_task
+        if requester_task is not None:
+            await requester_task
+        await registry.close()
+    assert pool.events[:4] == ["build:a", "build:b", "close:b", "build:c"]
+    assert sorted(pool.events[4:]) == ["close:a", "close:c"]
+    assert pool.alive == 0
+    assert all(manager.close.call_count == 1 for manager in pool.managers.values())
+    assert registry._quarantined == {}
+
+
+@pytest.mark.unit
+async def test_waiter_notices_capacity_freed_by_failed_build(config: Config) -> None:
+    pool = Pool()
+    pool.build_failures.add("x")
+    x_started, x_gate = pool.hold_build("x")
+    a_started, a_gate = pool.hold_close("a")
+    c_started, c_gate = pool.hold_build("c")
+    registry = WorkspaceRegistry(config, pool.factory, max_resident=2)
+    async with registry.acquire("a"):
+        pass
+
+    async def failing_build() -> None:
+        with pytest.raises(OSError, match="constructor failed"):
+            async with registry.acquire("x"):
+                pytest.fail("Failed construction returned a manager")
+
+    async def requester() -> None:
+        async with registry.acquire("c"):
+            pass
+
+    builder_task = asyncio.create_task(failing_build())
+    requester_task: asyncio.Task[None] | None = None
+    try:
+        assert await anyio.to_thread.run_sync(x_started.wait, 5)
+        requester_task = asyncio.create_task(requester())
+        assert await anyio.to_thread.run_sync(a_started.wait, 5)
+        x_gate.set()
+        await builder_task
+        assert await anyio.to_thread.run_sync(c_started.wait, 5)
+        assert not was_closed(pool.managers["a"])
+    finally:
+        x_gate.set()
+        a_gate.set()
+        c_gate.set()
+        await builder_task
+        if requester_task is not None:
+            await requester_task
+        await registry.close()
+    assert pool.alive == 0
+    assert pool.events.count("close:a") == pool.events.count("close:c") == 1
+    assert registry._quarantined == {}
+
+
+@pytest.mark.unit
+async def test_waiter_on_failing_in_flight_eviction_gets_capacity_error(
+    config: Config,
+) -> None:
+    pool = Pool()
+    started, gate = pool.hold_close("a")
+    pool.close_failures["a"] = 1
+    now = [0.0]
+    checked = anyio.Event()
+    observe_request = False
+
+    def clock() -> float:
+        if observe_request:
+            checked.set()
+        return now[0]
+
+    registry = WorkspaceRegistry(
+        config, pool.factory, clock=clock, idle_ttl=900, max_resident=1
+    )
+    async with registry.acquire("a"):
+        pass
+    now[0] = 901.0
+
+    async def requester() -> None:
+        with pytest.raises(WorkspaceCapacityError):
+            async with registry.acquire("b"):
+                pytest.fail("Capacity was not freed")
+
+    prune_task = asyncio.create_task(registry.prune())
+    requester_task: asyncio.Task[None] | None = None
+    try:
+        assert await anyio.to_thread.run_sync(started.wait, 5)
+        observe_request = True
+        requester_task = asyncio.create_task(requester())
+        with anyio.fail_after(5):
+            await checked.wait()
+        assert not requester_task.done()
+        gate.set()
+        await prune_task
+        await requester_task
+        assert pool.events == ["build:a", "close-failed:a"]
+    finally:
+        gate.set()
+        await prune_task
+        if requester_task is not None:
+            await requester_task
+        await registry.close()
+    assert pool.events == ["build:a", "close-failed:a", "close:a"]
+
+
+class PinFailure(Exception):
+    """Distinctive error raised by the patched WeMM pin."""
+
+
+class WemmManager:
+    """Stands in for `MemoryManager` while `workspace_registry.MemoryManager` is patched."""
+
+    def __init__(self, config: Config, close_failures: int) -> None:
+        self.config = config
+        self.close_calls = 0
+        self.close_failures = close_failures
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.close_failures > 0:
+            self.close_failures -= 1
+            raise OSError("storage unavailable")
+
+
+class WemmWorld:
+    """Patches the registry's WeMM pin so the first `pin_failures` pins raise."""
+
+    def __init__(
+        self, monkeypatch: pytest.MonkeyPatch, config: Config, pin_failures: int
+    ) -> None:
+        self.config = replace(config, embedder_provider=EmbedderProvider.WEMM)
+        self.pin_failures = pin_failures
+        self.close_failures = 0
+        self.managers: list[WemmManager] = []
+        self.pins: list[MagicMock] = []
+        self.build_started = threading.Event()
+        self.build_gate: threading.Event | None = None
+        monkeypatch.setattr(workspace_registry, "MemoryManager", WemmManager)
+        monkeypatch.setattr(workspace_registry, "wemm_config", lambda config: config)
+        monkeypatch.setattr(workspace_registry, "acquire_wemm", self.acquire_pin)
+
+    def factory(self, concrete: Config) -> MemoryManager:
+        self.build_started.set()
+        if self.build_gate is not None and len(self.managers) == 0:
+            assert self.build_gate.wait(timeout=5)
+        manager = WemmManager(concrete, self.close_failures)
+        self.close_failures = 0
+        self.managers.append(manager)
+        return cast("MemoryManager", manager)
+
+    def acquire_pin(self, _config: object) -> WeMMBorrow:
+        if self.pin_failures > 0:
+            self.pin_failures -= 1
+            raise PinFailure("pin unavailable")
+        pin = MagicMock(spec=WeMMBorrow)
+        self.pins.append(pin)
+        return pin
+
+    def registry(self, **options: Any) -> WorkspaceRegistry:
+        return WorkspaceRegistry(self.config, self.factory, **options)
+
+
+@pytest.mark.unit
+async def test_pin_failure_releases_reservation_and_closes_manager(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = WemmWorld(monkeypatch, config, pin_failures=1)
+    registry = world.registry(max_resident=1)
+    with pytest.raises(PinFailure, match="pin unavailable"):
+        async with registry.acquire("one"):
+            pytest.fail("Failed pin returned a manager")
+    assert [manager.close_calls for manager in world.managers] == [1]
+    assert registry._building == {}
+    assert registry._evicting == {}
+    async with registry.acquire("one") as rebuilt:
+        assert rebuilt is world.managers[1]
+    async with registry.acquire("two") as other:
+        assert other is world.managers[2]
+    await registry.close()
+    assert [manager.close_calls for manager in world.managers] == [1, 1, 1]
+    assert len(world.pins) == 1
+    assert world.pins[0].close.call_count == 1
+
+
+@pytest.mark.unit
+async def test_same_key_waiter_builds_after_pin_failure(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = WemmWorld(monkeypatch, config, pin_failures=1)
+    world.build_gate = threading.Event()
+    checked = anyio.Event()
+    observe_request = False
+
+    def clock() -> float:
+        if observe_request:
+            checked.set()
+        return 0.0
+
+    registry = world.registry(clock=clock)
+
+    async def request() -> MemoryManager:
+        async with registry.acquire("shared") as manager:
+            return manager
+
+    failing = asyncio.create_task(request())
+    waiter: asyncio.Task[MemoryManager] | None = None
+    try:
+        assert await anyio.to_thread.run_sync(world.build_started.wait, 5)
+        observe_request = True
+        waiter = asyncio.create_task(request())
+        with anyio.fail_after(5):
+            await checked.wait()
+        world.build_gate.set()
+        done, _ = await asyncio.wait({failing, waiter}, timeout=5)
+        assert done == {failing, waiter}
+        with pytest.raises(PinFailure):
+            failing.result()
+        assert waiter.result() is world.managers[1]
+        assert world.managers[0].close_calls == 1
+        assert registry._building == {}
+    finally:
+        world.build_gate.set()
+        tasks = [failing] if waiter is None else [failing, waiter]
+        _ = await asyncio.gather(*tasks, return_exceptions=True)
+        await registry.close()
+    assert [manager.close_calls for manager in world.managers] == [1, 1]
+
+
+@pytest.mark.unit
+async def test_pin_failure_with_failing_close_stays_counted_and_retried(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = WemmWorld(monkeypatch, config, pin_failures=1)
+    world.close_failures = 1
+    registry = world.registry(max_resident=1)
+    with pytest.raises(PinFailure, match="pin unavailable"):
+        async with registry.acquire("one"):
+            pytest.fail("Failed pin returned a manager")
+    assert [manager.close_calls for manager in world.managers] == [1]
+    with pytest.raises(WorkspaceCapacityError):
+        async with registry.acquire("two"):
+            pytest.fail("Quarantined manager freed its slot")
+    with pytest.raises(RuntimeError, match="pending close"):
+        async with registry.acquire("one"):
+            pytest.fail("Quarantined manager was reused")
+    assert len(world.managers) == 1
+    await registry.close()
+    assert [manager.close_calls for manager in world.managers] == [2]
+    await registry.close()
+    assert world.managers[0].close_calls == 2
