@@ -111,7 +111,8 @@ Non-DM chats are inactive unless `shared_chats` is `true`, including with
 profile scope or an override. User-scoped recall in a shared room would expose
 a person's memories to other participants. A different per-turn author, such
 as a bot, blocks recall, writes, and tools when it does not match the bound
-participant ids. Automatic writes require a primary context.
+participant ids. The block lasts until the next turn starts, including across
+context compression. Automatic writes require a primary context.
 
 The plugin passes `workspace_id` on every server call. It is routing, not an
 authorization boundary. The plugin enforces the context and participant gates;
@@ -120,7 +121,9 @@ agent tools do not accept a workspace argument.
 ## Recall and automatic writes
 
 Each non-trivial turn can trigger a synchronous search bounded by
-`recall_timeout`, including connection setup. Recall uses up to `recall_limit`
+`recall_timeout`. The budget covers waiting for the provider, connection setup,
+and the whole response, so a slow server cannot hold the turn past it. Recall
+returns nothing when the budget runs out. Recall uses up to `recall_limit`
 hits and caps the formatted block at `recall_max_chars`. Hermes places it
 inside its own `<memory-context>` fence with this header:
 
@@ -168,13 +171,19 @@ arguments are rejected.
   `removed` and `missing`.
 
 Store mutations and forgetting require a primary context; read tools and
-store dry runs can operate in an active read-only context. Errors carry a
-`code`: `unavailable`, `timeout`, `outcome_unknown`, `tool_error`, `unauthorized`,
-`incompatible`, `malformed`, `disabled`, or `invalid_input`.
+store dry runs can operate in an active read-only context. Text that cannot be
+encoded as UTF-8, such as an unpaired surrogate, is rejected before anything is
+sent. Errors carry a `code`: `unavailable`, `timeout`, `outcome_unknown`,
+`tool_error`, `unauthorized`, `incompatible`, `malformed`, `disabled`, or
+`invalid_input`. Error messages come from the plugin; server error text is never
+returned, because it can echo credentials.
 
 `outcome_unknown` means a write may or may not have applied. The client never
-automatically resends a possibly dispatched mutation. Check with
-`reflectlog_search` or `reflectlog_list` before deciding whether to retry.
+automatically resends a possibly dispatched mutation. The one exception is the
+server's own session rejection (HTTP 400 or 404 with JSON-RPC error `-32600` and
+a null id), which MCP sends before running anything. An unreadable result from
+an add or delete is also `outcome_unknown`. Check with `reflectlog_search` or
+`reflectlog_list` before deciding whether to retry.
 
 ## Development
 
