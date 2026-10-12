@@ -12,12 +12,20 @@ import json
 import socket
 import threading
 import time
-from typing import TYPE_CHECKING, Protocol, TypeGuard, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Generic,
+    Protocol,
+    TypeGuard,
+    TypeVar,
+    cast,
+    runtime_checkable,
+)
 
 import httpx
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 from .models import (
     AddResult,
@@ -60,11 +68,28 @@ def _object(value: object) -> dict[str, object]:
 
 
 class _SessionInvalidError(Exception):
-    pass
+    def __init__(self, definitive: bool) -> None:
+        super().__init__()
+        self.definitive = definitive
 
 
 # JSON-RPC codes the server can only return before a tool runs.
 _PRE_EXECUTION_RPC_CODES = frozenset({-32700, -32600, -32601, -32602})
+
+
+def _session_rejection(body: bytes) -> bool:
+    """Match the MCP SDK's pre-dispatch session error: -32600 with a null id."""
+    try:
+        value: object = json.loads(body)
+    except (ValueError, UnicodeError):
+        return False
+    if not _mapping(value) or value.get("id") is not None:
+        return False
+    error = value.get("error")
+    if not _mapping(error) or error.get("code") != -32600:
+        return False
+    message = error.get("message")
+    return isinstance(message, str) and "session" in message.lower()
 
 
 class _RpcError(Exception):
@@ -88,6 +113,23 @@ def _interrupt(response: httpx.Response) -> None:
             with suppress(OSError):
                 connection.shutdown(socket.SHUT_RDWR)
     response.close()
+
+
+_T = TypeVar("_T")
+
+
+class _Exchange(Generic[_T]):
+    """One HTTP exchange on a daemon thread, so the caller stops at its deadline.
+
+    httpx timeouts apply per I/O operation; only the waiting caller can enforce
+    a total budget across connect, headers, and body.
+    """
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.response: httpx.Response | None = None
+        self.value: _T | None = None
+        self.error: Exception | None = None
 
 
 @dataclass(frozen=True)
@@ -169,20 +211,35 @@ class ReflectLogClient:
             )
         return _object(message.get("result"))
 
-    def _read(
-        self, response: httpx.Response, identity: int, deadline: float
-    ) -> dict[str, object]:
-        timer = threading.Timer(self._remaining(deadline), _interrupt, (response,))
-        timer.daemon = True
-        timer.start()
-        try:
-            return self._read_stream(response, identity, deadline)
-        except httpx.StreamError:
-            # The watchdog can close the response before iteration starts.
+    def _bounded(self, work: Callable[[_Exchange[_T]], _T], deadline: float) -> _T:
+        remaining = self._remaining(deadline)
+        exchange: _Exchange[_T] = _Exchange()
+
+        def run() -> None:
+            try:
+                exchange.value = work(exchange)
+            except Exception as error:  # re-raised by the waiting caller
+                exchange.error = error
+            finally:
+                exchange.done.set()
+
+        threading.Thread(target=run, name="reflectlog-http", daemon=True).start()
+        if not exchange.done.wait(remaining):
+            if exchange.response is not None:
+                _interrupt(exchange.response)
+            raise ReflectLogError("timeout", "ReflectLog deadline exceeded")
+        if exchange.error is not None:
+            raise exchange.error
+        return cast("_T", exchange.value)
+
+    def _body(self, response: httpx.Response, deadline: float) -> bytes:
+        body = bytearray()
+        for chunk in response.iter_bytes():
             _ = self._remaining(deadline)
-            raise ReflectLogError("malformed", "MCP stream closed early") from None
-        finally:
-            timer.cancel()
+            body.extend(chunk)
+            if len(body) > MAX_RESPONSE_BYTES:
+                raise ReflectLogError("malformed", "MCP response exceeds size limit")
+        return bytes(body)
 
     def _read_stream(
         self, response: httpx.Response, identity: int, deadline: float
@@ -243,39 +300,46 @@ class ReflectLogClient:
             min(self._request_timeout, remaining),
             connect=min(self._connect_timeout, remaining),
         )
-        with self._http.stream(
-            "POST",
-            self._url,
-            json=payload,
-            headers=self._headers(session),
-            timeout=timeout,
-        ) as response:
-            _ = self._remaining(deadline)
-            if response.status_code in {401, 403}:
-                raise ReflectLogError(
-                    "unauthorized", "ReflectLog authentication failed"
+        headers = self._headers(session)
+
+        def work(
+            exchange: _Exchange[tuple[dict[str, object], str | None]],
+        ) -> tuple[dict[str, object], str | None]:
+            with self._http.stream(
+                "POST", self._url, json=payload, headers=headers, timeout=timeout
+            ) as response:
+                exchange.response = response
+                return self._receive(
+                    response, identity, session, deadline, notification=notification
                 )
-            if response.status_code == 404 and session:
-                raise _SessionInvalidError
-            if response.status_code == 400 and session:
-                # A 400 is only safe to retry when it explicitly rejects the session.
-                body = bytearray()
-                for chunk in response.iter_bytes():
-                    _ = self._remaining(deadline)
-                    body.extend(chunk)
-                    if len(body) > MAX_RESPONSE_BYTES:
-                        raise ReflectLogError(
-                            "malformed", "MCP response exceeds size limit"
-                        )
-                if b"session" in bytes(body).lower():
-                    raise _SessionInvalidError
-            if response.status_code >= 400:
-                raise ReflectLogError("unavailable", "ReflectLog HTTP request failed")
-            if notification and response.status_code in {200, 202, 204}:
-                return {}, response.headers.get("mcp-session-id")
-            return self._read(response, identity, deadline), response.headers.get(
-                "mcp-session-id"
+
+        return self._bounded(work, deadline)
+
+    def _receive(
+        self,
+        response: httpx.Response,
+        identity: int,
+        session: _Session | None,
+        deadline: float,
+        *,
+        notification: bool,
+    ) -> tuple[dict[str, object], str | None]:
+        _ = self._remaining(deadline)
+        if response.status_code in {401, 403}:
+            raise ReflectLogError("unauthorized", "ReflectLog authentication failed")
+        if response.status_code in {400, 404} and session:
+            # Any such status ends the session, but only the server's own
+            # pre-dispatch rejection proves that a mutation never ran.
+            raise _SessionInvalidError(
+                _session_rejection(self._body(response, deadline))
             )
+        if response.status_code >= 400:
+            raise ReflectLogError("unavailable", "ReflectLog HTTP request failed")
+        if notification and response.status_code in {200, 202, 204}:
+            return {}, response.headers.get("mcp-session-id")
+        return self._read_stream(response, identity, deadline), response.headers.get(
+            "mcp-session-id"
+        )
 
     def _ensure_session(self, deadline: float) -> _Session:
         with self._lock:
@@ -396,8 +460,12 @@ class ReflectLogClient:
                             code, "ReflectLog tool failed", server_detail=text
                         )
                     return _object(result.get("structuredContent"))
-                except _SessionInvalidError:
+                except _SessionInvalidError as error:
                     self._invalidate(session.generation if session else generation)
+                    if mutation and dispatched and not error.definitive:
+                        raise ReflectLogError(
+                            "outcome_unknown", "ReflectLog mutation outcome unknown"
+                        ) from None
                     if attempt:
                         raise ReflectLogError(
                             "unavailable", "ReflectLog session rejected"
@@ -460,19 +528,20 @@ class ReflectLogClient:
         allow_replace: bool = False,
         deadline: float | None = None,
     ) -> AddResult:
-        return parse_add_result(
-            self._call(
-                "add_memories",
-                {
-                    "workspace_id": workspace_id,
-                    "memories": list(memories),
-                    "dry_run": dry_run,
-                    "allow_replace": allow_replace,
-                },
-                deadline,
-                mutation=not dry_run,
-            )
+        result = self._call(
+            "add_memories",
+            {
+                "workspace_id": workspace_id,
+                "memories": list(memories),
+                "dry_run": dry_run,
+                "allow_replace": allow_replace,
+            },
+            deadline,
+            mutation=not dry_run,
         )
+        if dry_run:
+            return parse_add_result(result)
+        return self._acknowledged(parse_add_result, result)
 
     def search_memories(
         self,
@@ -520,14 +589,25 @@ class ReflectLogClient:
     def delete_memories(
         self, workspace_id: str, ids: Sequence[int], *, deadline: float | None = None
     ) -> DeleteResult:
-        return parse_delete_result(
+        return self._acknowledged(
+            parse_delete_result,
             self._call(
                 "delete_memories",
                 {"workspace_id": workspace_id, "ids": list(ids)},
                 deadline,
                 mutation=True,
-            )
+            ),
         )
+
+    @staticmethod
+    def _acknowledged(parse: Callable[[object], _T], result: object) -> _T:
+        try:
+            return parse(result)
+        except ReflectLogError:
+            # The mutation already ran; an unreadable acknowledgement hides its effect.
+            raise ReflectLogError(
+                "outcome_unknown", "ReflectLog mutation response invalid"
+            ) from None
 
     def probe(self, workspace_id: str, *, deadline: float | None = None) -> int:
         return self.get_all_memories(workspace_id, limit=0, deadline=deadline).total
@@ -544,14 +624,17 @@ class ReflectLogClient:
             return
         try:
             if session and budget_s > 0:
-                with self._http.stream(
-                    "DELETE",
-                    self._url,
-                    headers=self._headers(session),
-                    timeout=min(budget_s, self._request_timeout),
-                ):
-                    pass
-        except httpx.HTTPError:
-            pass
+                headers = self._headers(session)
+                timeout = min(budget_s, self._request_timeout)
+
+                def work(exchange: _Exchange[None]) -> None:
+                    with self._http.stream(
+                        "DELETE", self._url, headers=headers, timeout=timeout
+                    ) as response:
+                        exchange.response = response
+
+                # Ending the server session is best effort within the budget.
+                with suppress(ReflectLogError, httpx.HTTPError):
+                    self._bounded(work, time.monotonic() + budget_s)
         finally:
             self._http.close()

@@ -79,7 +79,7 @@ def test_incompatible(wire, drop, error_type):
 
 
 @pytest.mark.parametrize(
-    "fault", ["session400", "session404", "read_error", "read_timeout"]
+    "fault", ["session400", "session404", "audit400", "read_error", "read_timeout"]
 )
 def test_reads_retry_once(wire, fault):
     # given
@@ -112,6 +112,8 @@ def test_second_session_failure(wire, error_type):
         ("connect", "unavailable", 0),
         ("session404", None, 1),
         ("session400", None, 1),
+        ("audit400", "outcome_unknown", 1),
+        ("bad_result", "outcome_unknown", 1),
         ("validation", "tool_error", 1),
         ("execution", "outcome_unknown", 1),
         ("rpc_params", "tool_error", 1),
@@ -176,6 +178,45 @@ def test_heartbeat_deadline(wire, mutation, error_type):
     assert time.monotonic() - start < 0.5
 
 
+@pytest.mark.parametrize("mutation", [True, False])
+def test_slow_headers_deadline(wire, mutation, error_type):
+    # given
+    server, client = wire
+    client.probe("ws")
+    tool = "add_memories" if mutation else "get_all_memories"
+    server.faults[tool].append("slow_headers")
+    before = server.dispatches[tool]
+    start = time.monotonic()
+    # when
+    with pytest.raises(error_type) as error:
+        if mutation:
+            client.add_memories("ws", ["text"], deadline=start + 0.2)
+        else:
+            client.probe("ws", deadline=start + 0.2)
+    # then
+    assert error.value.code == ("outcome_unknown" if mutation else "timeout")
+    assert time.monotonic() - start < 0.5
+    assert server.dispatches[tool] == before + 1
+
+
+def test_unreadable_results(wire, error_type):
+    # given
+    server, client = wire
+    client.add_memories("ws", ["Alpha"])
+    record = client.get_all_memories("ws").records[0]
+    server.faults["delete_memories"].append("bad_result")
+    server.faults["add_memories"].append("bad_result")
+    # when
+    with pytest.raises(error_type) as deleted:
+        client.delete_memories("ws", [record.id])
+    with pytest.raises(error_type) as preview:
+        client.add_memories("ws", ["Beta"], dry_run=True)
+    # then
+    assert deleted.value.code == "outcome_unknown"
+    assert server.dispatches["delete_memories"] == 1
+    assert preview.value.code == "malformed"
+
+
 def test_concurrent_initialization(wire):
     # given
     server, client = wire
@@ -218,6 +259,19 @@ def test_idle_close(wire, error_type):
     with pytest.raises(error_type) as error:
         client.probe("ws")
     assert error.value.code == "unavailable"
+
+
+def test_close_is_bounded(wire):
+    # given
+    server, client = wire
+    client.probe("ws")
+    server.delete_delay = 1.0
+    start = time.monotonic()
+    # when
+    client.close(0.1)
+    # then
+    assert time.monotonic() - start < 0.4
+    assert server.deletes == 1
 
 
 def test_active_close(wire):

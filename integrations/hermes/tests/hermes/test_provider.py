@@ -142,6 +142,32 @@ def test_author_block_survives_compression(hermes_provider):
     )
 
 
+def test_recall_lock_wait_counts_against_budget(hermes_provider):
+    # Given a half-second recall budget and a provider lock held elsewhere.
+    provider, fake = hermes_provider({"recall_timeout": 0.5})
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with provider._lock:
+            held.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert held.wait(2)
+    start = time.monotonic()
+    # When recall runs while the lock stays busy.
+    try:
+        recalled = provider.prefetch("cobalt widgets")
+    finally:
+        release.set()
+        holder.join(2)
+    # Then it gives up inside the budget without searching.
+    assert recalled == ""
+    assert time.monotonic() - start < 0.8
+    assert fake.calls["search_memories"] == 0
+
+
 def test_invalid_unicode_never_reaches_the_wire(hermes_provider):
     # Given text with an unpaired surrogate, as a JSON "\ud800" escape decodes.
     provider, fake = hermes_provider()

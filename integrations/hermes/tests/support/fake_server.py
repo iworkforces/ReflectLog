@@ -4,10 +4,14 @@
 FakeReflectLogServer(token) is callable. expire_sessions() invalidates sessions;
 faults[tool] queues connect/read_timeout/read_error/heartbeat/session400/session404,
 validation/execution/malformed/mismatch/missing faults, plus rpc_params (JSON-RPC
--32602 before running) and rpc_internal (-32603 after running). framing selects json/plain/
-comments/multiline. drop_tool and allow_replace configure compatibility; requests,
-dispatches, handshakes and deletes expose receipts. entered/release optionally gate
-tools/call for event-based concurrency tests. All state is guarded by an RLock.
+-32602 before running) and rpc_internal (-32603 after running). session400/404 use the
+MCP SDK's pre-dispatch body; audit400 (a 400 after running), bad_result (unreadable
+structuredContent after running) and slow_headers (slow_s before any response
+after running) model post-dispatch failures; delete_delay slows session DELETE.
+framing selects json/plain/comments/multiline. drop_tool and allow_replace configure
+compatibility; requests, dispatches, handshakes and deletes expose receipts.
+entered/release optionally gate tools/call for event-based concurrency tests. All
+state is guarded by an RLock.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from collections import Counter, defaultdict, deque
 import json
 import re
 import threading
+import time
 
 import httpx
 
@@ -62,11 +67,25 @@ class FakeReflectLogServer:
         self.next_id = 1
         self.entered = None
         self.release = None
+        self.slow_s = 1.0
+        self.delete_delay = 0.0
         self.lock = threading.RLock()
 
     def expire_sessions(self):
         with self.lock:
             self.sessions.clear()
+
+    @staticmethod
+    def session_error(status, message):
+        # mcp.server.streamable_http rejects sessions before dispatching anything.
+        return httpx.Response(
+            status,
+            json={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": message},
+            },
+        )
 
     def response(self, request, value, headers=None):
         if self.framing == "json":
@@ -97,12 +116,15 @@ class FakeReflectLogServer:
         )
 
     def __call__(self, request):
-        with self.lock:
-            self.requests.append(request)
-            if request.method == "DELETE":
+        if request.method == "DELETE":
+            with self.lock:
+                self.requests.append(request)
                 self.deletes += 1
                 self.sessions.discard(request.headers.get("mcp-session-id"))
-                return httpx.Response(200)
+            time.sleep(self.delete_delay)
+            return httpx.Response(200)
+        with self.lock:
+            self.requests.append(request)
             body = json.loads(request.content)
             method = body["method"]
             tool = body.get("params", {}).get("name", "")
@@ -141,9 +163,9 @@ class FakeReflectLogServer:
                 )
             session = request.headers.get("mcp-session-id")
             if not session or fault == "session400":
-                return httpx.Response(400, text="Missing session ID")
+                return self.session_error(400, "Bad Request: Missing session ID")
             if session not in self.sessions or fault == "session404":
-                return httpx.Response(404, text="Session not found")
+                return self.session_error(404, "Session not found")
             if method == "notifications/initialized":
                 return httpx.Response(202)
             if method == "tools/list":
@@ -186,6 +208,9 @@ class FakeReflectLogServer:
                 result = {"isError": True, "content": [{"type": "text", "text": text}]}
             elif fault == "rpc_params":
                 result = {}
+            elif fault == "bad_result":
+                self.execute(tool, args)
+                result = {"structuredContent": {"dry_run": False}, "isError": False}
             else:
                 result = {
                     "structuredContent": self.execute(tool, args),
@@ -195,6 +220,10 @@ class FakeReflectLogServer:
             self.entered.set()
         if self.release is not None:
             self.release.wait(5)
+        if fault == "slow_headers":
+            time.sleep(self.slow_s)
+        if fault == "audit400":
+            return httpx.Response(400, text="Session audit failed after applying it")
         if fault == "read_timeout":
             raise httpx.ReadTimeout("lost private response", request=request)
         if fault == "read_error":

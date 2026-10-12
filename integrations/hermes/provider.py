@@ -260,7 +260,11 @@ class ReflectLogMemoryProvider(MemoryProvider):
             )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        with self._lock:
+        budget = self.settings.recall_timeout
+        deadline = self._clock() + budget
+        if not self._lock.acquire(timeout=budget):
+            return ""
+        try:
             context, writer = self._tool_context(), self.writer
             self._status = None
             if (
@@ -273,6 +277,8 @@ class ReflectLogMemoryProvider(MemoryProvider):
             ):
                 return ""
             generation = self._generation
+        finally:
+            self._lock.release()
         normalized = recall_query(query)
         if normalized is None:
             return ""
@@ -281,7 +287,7 @@ class ReflectLogMemoryProvider(MemoryProvider):
                 context.workspace_id,
                 normalized,
                 limit=context.settings.recall_limit,
-                deadline=self._clock() + context.settings.recall_timeout,
+                deadline=deadline,
             )
         except ReflectLogError as error:
             if error.code in {"unavailable", "timeout"}:
@@ -290,11 +296,15 @@ class ReflectLogMemoryProvider(MemoryProvider):
         text, count = format_recall(
             result.hits, max_chars=context.settings.recall_max_chars
         )
-        with self._lock:
+        if not self._lock.acquire(timeout=max(deadline - self._clock(), 0)):
+            return ""
+        try:
             if generation != self._generation or self._tool_context() is None:
                 return ""
             self._status = _recall_status("ReflectLog", count) if count else None
             return text
+        finally:
+            self._lock.release()
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         return None
