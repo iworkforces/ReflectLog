@@ -254,3 +254,145 @@ class IBundlePublisher(Protocol):
             SalvagePublicationError: If any publication step failed.
         """
         ...
+
+
+AUTHENTICITY_NOT_VERIFIED = "not_verified"
+
+
+class UnresolvedReason(StrEnum):
+    """Closed set of ``unresolved_reasons`` codes the exporter can write."""
+
+    JOURNAL_PENDING_INTENT = "journal_pending_intent"
+    JOURNAL_UNKNOWN_EVIDENCE = "journal_unknown_evidence"
+    JOURNAL_FOREIGN_WORKSPACE_EVIDENCE = "journal_foreign_workspace_evidence"
+    JOURNAL_MISSING = "journal_missing"
+    JOURNAL_UNSUPPORTED = "journal_unsupported"
+
+
+class VerificationStatus(StrEnum):
+    """Outcome of verifying one bundle.
+
+    ``READY`` and ``NOT_READY`` both mean the bundle is internally consistent;
+    neither means it is authentic or that ``add_memories`` will accept every
+    record. ``NOT_READY`` is a valid bundle whose manifest honestly reports
+    unresolved journal evidence.
+    """
+
+    READY = "ready"
+    NOT_READY = "not_ready"
+    INVALID = "invalid"
+
+
+class BundleEntry(StrEnum):
+    """Part of a bundle an issue refers to."""
+
+    BUNDLE = "bundle"
+    MARKER = "marker"
+    MANIFEST = "manifest"
+    RECORDS = "records"
+
+
+class VerificationIssueCode(StrEnum):
+    """Closed vocabulary of verification failures; never carries content."""
+
+    EXPECTED_WORKSPACE_INVALID = "expected_workspace_invalid"
+    BUNDLE_MISSING = "bundle_missing"
+    BUNDLE_SYMLINK = "bundle_symlink"
+    BUNDLE_NOT_DIRECTORY = "bundle_not_directory"
+    BUNDLE_UNREADABLE = "bundle_unreadable"
+    INCOMPLETE_MARKER_PRESENT = "incomplete_marker_present"
+    FILE_MISSING = "file_missing"
+    FILE_SYMLINK = "file_symlink"
+    FILE_NOT_REGULAR = "file_not_regular"
+    FILE_UNREADABLE = "file_unreadable"
+    CHANGED_DURING_READ = "changed_during_read"
+    UTF8_INVALID = "utf8_invalid"
+    BOM_PRESENT = "bom_present"
+    JSON_INVALID = "json_invalid"
+    DUPLICATE_KEY = "duplicate_key"
+    NON_FINITE_NUMBER = "non_finite_number"
+    NOT_OBJECT = "not_object"
+    MANIFEST_SCHEMA_INVALID = "manifest_schema_invalid"
+    FORMAT_UNSUPPORTED = "format_unsupported"
+    VERSION_UNSUPPORTED = "version_unsupported"
+    WORKSPACE_MISMATCH = "workspace_mismatch"
+    RECORDS_PATH_INVALID = "records_path_invalid"
+    UNRESOLVED_REASON_INVALID = "unresolved_reason_invalid"
+    READINESS_INCONSISTENT = "readiness_inconsistent"
+    DIGEST_MISMATCH = "digest_mismatch"
+    COUNT_MISMATCH = "count_mismatch"
+    MISSING_FINAL_NEWLINE = "missing_final_newline"
+    RECORD_FIELDS_INVALID = "record_fields_invalid"
+    RECORD_ID_INVALID = "record_id_invalid"
+    RECORD_CONTENT_INVALID = "record_content_invalid"
+    RECORD_TIMESTAMP_INVALID = "record_timestamp_invalid"
+    RECORD_ID_DUPLICATE = "record_id_duplicate"
+    RECORD_ID_OUT_OF_ORDER = "record_id_out_of_order"
+    RECORD_CONTENT_DUPLICATE = "record_content_duplicate"
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationIssue:
+    """One content-free finding: a code, the bundle part, and a 1-based line."""
+
+    code: VerificationIssueCode
+    entry: BundleEntry
+    line: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationResult:
+    """What verification observed about one bundle.
+
+    A ``READY`` or ``NOT_READY`` status means the bundle's own bytes agree with
+    its own manifest. It is not authenticity: anyone able to write the bundle
+    can write a matching digest. It is also no promise that ``add_memories``
+    accepts the content, because records are checked for format only and are
+    never run through add validation.
+
+    ``workspace_id`` is the canonical expected workspace (``None`` when the
+    requested id was invalid). ``record_count`` is the number of records parsed
+    from the captured bytes when every record parsed cleanly, otherwise
+    ``None``. ``rebuild_ready`` and ``unresolved_reasons`` are taken from the
+    manifest only when it parsed and used closed-set reason codes.
+    """
+
+    status: VerificationStatus
+    workspace_id: str | None
+    record_count: int | None
+    rebuild_ready: bool | None
+    unresolved_reasons: tuple[str, ...]
+    issues: tuple[VerificationIssue, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedFile:
+    """The exact bytes of one bundle file, read once from one descriptor."""
+
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class BundleCapture:
+    """Result of reading a bundle directory without modifying it.
+
+    ``issues`` hold filesystem-level findings. A file that was missing,
+    unsafe, unreadable, or observed to change is ``None`` and has an issue.
+    """
+
+    manifest: CapturedFile | None
+    records: CapturedFile | None
+    issues: tuple[VerificationIssue, ...]
+
+
+@runtime_checkable
+class IBundleReader(Protocol):
+    """Capture the required files of an exported bundle, read-only."""
+
+    def capture(self, bundle_dir: str) -> BundleCapture:
+        """Read ``manifest.json`` and ``memories.jsonl`` from ``bundle_dir``.
+
+        Never writes, repairs, or follows symlinks. Detects observed changes
+        during the read only; it is not a guarantee against every race.
+        """
+        ...
