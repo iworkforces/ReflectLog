@@ -20,7 +20,7 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 │   ├── plugins/         # Present; not wired at startup
 │   └── utility/         # HTTP pool, Numba scoring, OS credentials
 ├── tests/               # unit/ mirrors package; integration uses real engines
-├── integrations/openclaw/  # TypeScript plugin: pnpm + vitest; no root script or CI
+├── integrations/openclaw/  # TypeScript plugin: pnpm + vitest + compiled smoke; scoped CI, no root script
 |-- integrations/hermes/    # Python memory provider: uv + pytest; no root script or CI
 ├── stubs/               # ty extra-paths + pyright stubPath
 ├── scripts/             # Copied git hooks + platform gates + ad-hoc
@@ -128,7 +128,7 @@ uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/
 - `cd.yml`: after both workflows pass on a `main` push, tags and releases `v<pyproject version>`.
 - CLI version: `reflectlog/version.py` reads `importlib.metadata.version("reflectlog")`, falling back to `"0.0.0"` when not installed. The number itself comes from `pyproject.toml`.
 - Python: `requires-python >=3.14.7`, `.python-version` is 3.14.8, CI uses 3.14.7.
-- `integrations/openclaw` is not run by any root script or workflow; run its `pnpm` scripts by hand.
+- `integrations/openclaw` is not run by root scripts or Python workflows; its scoped `openclaw-quality` workflow runs `pnpm check` on Ubuntu with Node 24/26.
 - `integrations/hermes` is not run by any root script or workflow; run its `uv` checks by hand.
 - Lease, generation, and embedding-identity rules: `docs/storage-coordination.md`.
 
