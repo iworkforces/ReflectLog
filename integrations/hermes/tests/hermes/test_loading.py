@@ -43,6 +43,18 @@ def test_manifest_version():
     assert manifest["version"] == project["project"]["version"]
 
 
+def test_pyproject_joins_the_hermes_workspace():
+    # Given the project file Hermes copies into a uv workspace rooted at hermes-agent.
+    plugin = tomllib.loads((PLUGIN / "pyproject.toml").read_text())
+    dev = tomllib.loads((PLUGIN / "dev" / "pyproject.toml").read_text())
+    # When uv reads it as a member, a hermes-agent source or dev group would
+    # fail the install, so those settings belong to the dev project.
+    # Then the member declares only runtime dependencies, which dev mirrors.
+    assert "dependency-groups" not in plugin
+    assert "uv" not in plugin.get("tool", {})
+    assert dev["project"]["dependencies"] == plugin["project"]["dependencies"]
+
+
 def test_package_import_is_lazy(tmp_path):
     # Given a clean process without prior dependency imports.
     script = f"import importlib.util,sys; s=importlib.util.spec_from_file_location('probe', {str(PLUGIN / '__init__.py')!r}, submodule_search_locations=[{str(PLUGIN)!r}]); m=importlib.util.module_from_spec(s); sys.modules['probe']=m; s.loader.exec_module(m); assert not any(n in sys.modules for n in ('agent','httpx'))"
