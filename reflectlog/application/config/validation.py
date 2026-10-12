@@ -663,6 +663,18 @@ def _validate_server_config(
     _ = validator.validate_port(config.port)
 
 
+def _validate_workspace_capacity(
+    validator: ConfigurationValidator,
+    capacity: object,
+) -> None:
+    if capacity is None:
+        return
+    if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
+        validator.add_error(
+            "WORKSPACE_MAX_RESIDENT", capacity, "Must be a positive integer or None"
+        )
+
+
 def _validate_search_config(
     validator: ConfigurationValidator,
     config: Config,
@@ -772,6 +784,7 @@ def validate_config(
     _validate_server_config(
         validator, config, allow_unbound_workspace=allow_unbound_workspace
     )
+    _validate_workspace_capacity(validator, config.workspace_max_resident)
     _validate_search_config(validator, config)
     _validate_storage_config(validator, config)
     _validate_embedder_config(validator, config)

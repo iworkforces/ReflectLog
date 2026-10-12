@@ -146,7 +146,20 @@ Every tool call requires an explicit `workspace_id: str`.
 `WORKSPACE_ID` in the environment or `.env` is not used as a default. Active
 workspace managers are cached per workspace. Idle managers expire after 15
 minutes without a call; a sweep runs every 60 seconds, with at most 8 idle
-managers retained. There is no MCP health-check tool. Search-failure counters
+managers retained. `WORKSPACE_MAX_RESIDENT` optionally caps resident workspaces;
+unset means unlimited. Only positive integers are accepted; blank, zero,
+negative, fractional, and non-numeric values fail at startup. Canonical workspace
+ids count once across loaded, building, closing, and failed-close managers.
+Reusing a resident workspace takes no extra slot. At capacity, a new workspace
+first closes the longest-idle manager, even before the idle timeout, and waits
+for close to persist its pending writes before loading the new manager. An
+in-progress close is awaited. If none is idle or closing, the call fails before
+loading with `Resident workspace limit reached; no idle workspace could be released`;
+retry later. Existing sessions keep working. Failed closes remain counted until
+a close succeeds; shutdown retries them without a timeout. This applies to all
+five tools without changing their schemas.
+
+There is no MCP health-check tool. Search-failure counters
 remain internal to each workspace manager and are not exposed over MCP.
 
 `ALLOWED_TOOLS` optionally filters the five names with a comma-separated list.
@@ -208,6 +221,7 @@ SMART_REPLACE_THRESHOLD=0.7       # Confidence threshold
 MCP_TRANSPORT=http                # http (default) or streamable-http
 MCP_PORT=9103                     # Port for HTTP transport
 LOG_LEVEL=INFO                    # Logging level
+# WORKSPACE_MAX_RESIDENT=         # Unset: unlimited; set to a positive integer
 ```
 
 See `.env.example` for all available options.

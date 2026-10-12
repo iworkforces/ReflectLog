@@ -2,6 +2,7 @@ from annotationlib import Format
 import asyncio
 import inspect
 import threading
+from typing import Any
 from unittest.mock import MagicMock
 
 import anyio
@@ -9,7 +10,10 @@ import pytest
 
 from reflectlog.application.config.settings import Config
 from reflectlog.application.memory.manager import MemoryManager
-from reflectlog.application.memory.workspace_registry import WorkspaceRegistry
+from reflectlog.application.memory.workspace_registry import (
+    WorkspaceCapacityError,
+    WorkspaceRegistry,
+)
 from reflectlog.application.utils.security import SecretString
 from reflectlog.core.exceptions import ConfigurationError
 from reflectlog.core.search_health import SearchFailureSnapshot
@@ -1007,3 +1011,576 @@ async def test_direct_cancel_of_pinned_user_drains_closing_registry(
         assert created[0].close.call_count == 1
     finally:
         user_task.cancel()
+
+
+class Pool:
+    """Thread-safe factory and close recorder for resident-capacity tests."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.managers: dict[str, MagicMock] = {}
+        self.alive = 0
+        self.peak = 0
+        self.build_started: dict[str, threading.Event] = {}
+        self.build_gates: dict[str, threading.Event] = {}
+        self.close_started: dict[str, threading.Event] = {}
+        self.close_gates: dict[str, threading.Event] = {}
+        self.close_failures: dict[str, int] = {}
+        self.build_failures: set[str] = set()
+        self._guard = threading.Lock()
+
+    def hold_build(self, key: str) -> tuple[threading.Event, threading.Event]:
+        started, gate = threading.Event(), threading.Event()
+        self.build_started[key] = started
+        self.build_gates[key] = gate
+        return started, gate
+
+    def hold_close(self, key: str) -> tuple[threading.Event, threading.Event]:
+        started, gate = threading.Event(), threading.Event()
+        self.close_started[key] = started
+        self.close_gates[key] = gate
+        return started, gate
+
+    def factory(self, concrete: Config) -> MagicMock:
+        key = concrete.workspace_id
+        with self._guard:
+            self.events.append(f"build:{key}")
+            self.alive += 1
+            self.peak = max(self.peak, self.alive)
+        started = self.build_started.get(key)
+        if started is not None:
+            started.set()
+        gate = self.build_gates.get(key)
+        if gate is not None:
+            assert gate.wait(timeout=5)
+        if key in self.build_failures:
+            with self._guard:
+                self.alive -= 1
+            raise OSError("constructor failed")
+        manager = fake_manager(concrete)
+        manager.close.side_effect = lambda: self._close(key, manager)
+        with self._guard:
+            self.managers[key] = manager
+        return manager
+
+    def _close(self, key: str, manager: MagicMock) -> None:
+        started = self.close_started.get(key)
+        if started is not None:
+            started.set()
+        gate = self.close_gates.get(key)
+        if gate is not None:
+            assert gate.wait(timeout=5)
+        with self._guard:
+            if self.close_failures.get(key, 0) > 0:
+                self.close_failures[key] -= 1
+                self.events.append(f"close-failed:{key}")
+                raise OSError("storage unavailable")
+            manager.closed = True
+            self.alive -= 1
+            self.events.append(f"close:{key}")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("limit", [True, False, 0, -1, 1.5, "2"])
+def test_max_resident_rejects_invalid_values(config: Config, limit: object) -> None:
+    options: dict[str, Any] = {"max_resident": limit}
+    with pytest.raises(ConfigurationError, match="max_resident") as failure:
+        WorkspaceRegistry(config, fake_manager, **options)
+    assert str(limit) not in str(failure.value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("limit", [None, 1, 3])
+def test_max_resident_accepts_none_or_positive_int(
+    config: Config, limit: int | None
+) -> None:
+    WorkspaceRegistry(config, fake_manager, max_resident=limit)
+
+
+@pytest.mark.unit
+async def test_capacity_error_is_prompt_and_content_free(config: Config) -> None:
+    pool = Pool()
+    registry = WorkspaceRegistry(config, pool.factory, max_resident=1)
+    async with registry.acquire("tenant-red") as held:
+        with anyio.fail_after(1):
+            with pytest.raises(WorkspaceCapacityError) as failure:
+                async with registry.acquire("tenant-blue"):
+                    pytest.fail("Over-capacity acquisition returned a manager")
+        assert pool.events == ["build:tenant-red"]
+        assert "tenant-red" not in str(failure.value)
+        assert "tenant-blue" not in str(failure.value)
+        assert not was_closed(held)
+    async with registry.acquire("tenant-blue") as admitted:
+        assert admitted.config.workspace_id == "tenant-blue"
+    assert pool.events == ["build:tenant-red", "close:tenant-red", "build:tenant-blue"]
+    await registry.close()
+
+
+@pytest.mark.unit
+async def test_pressure_eviction_closes_idle_manager_before_building(
+    config: Config,
+) -> None:
+    pool = Pool()
+    started, gate = pool.hold_close("old")
+    registry = WorkspaceRegistry(
+        config, pool.factory, clock=lambda: 0.0, max_resident=1
+    )
+    async with registry.acquire("old"):
+        pass
+
+    async def newcomer() -> None:
+        async with registry.acquire("new"):
+            pass
+
+    newcomer_task = asyncio.create_task(newcomer())
+    try:
+        assert await anyio.to_thread.run_sync(started.wait, 5)
+        assert pool.events == ["build:old"]
+        assert not newcomer_task.done()
+    finally:
+        gate.set()
+        await newcomer_task
+        await registry.close()
+    assert pool.events[:3] == ["build:old", "close:old", "build:new"]
+    assert pool.managers["old"].close.call_count == 1
+
+
+@pytest.mark.unit
+async def test_pressure_eviction_closes_oldest_idle_first(config: Config) -> None:
+    pool = Pool()
+    now = [0.0]
+    registry = WorkspaceRegistry(
+        config, pool.factory, clock=lambda: now[0], max_resident=2
+    )
+    async with registry.acquire("old"):
+        pass
+    now[0] = 1
+    async with registry.acquire("young"):
+        pass
+    now[0] = 2
+    async with registry.acquire("third"):
+        pass
+    assert pool.events == ["build:old", "build:young", "close:old", "build:third"]
+    assert not was_closed(pool.managers["young"])
+    await registry.close()
+
+
+@pytest.mark.unit
+async def test_pressure_eviction_orders_by_idle_time_not_insertion(
+    config: Config,
+) -> None:
+    pool = Pool()
+    now = [0.0]
+    registry = WorkspaceRegistry(
+        config, pool.factory, clock=lambda: now[0], max_resident=2
+    )
+    async with registry.acquire("first"):
+        now[0] = 1
+        async with registry.acquire("second"):
+            now[0] = 2
+        now[0] = 3
+    now[0] = 4
+    async with registry.acquire("third"):
+        pass
+    assert pool.events == ["build:first", "build:second", "close:second", "build:third"]
+    assert not was_closed(pool.managers["first"])
+    await registry.close()
+
+
+@pytest.mark.unit
+async def test_same_key_reuse_never_needs_a_slot(config: Config) -> None:
+    pool = Pool()
+    registry = WorkspaceRegistry(config, pool.factory, max_resident=1)
+    async with registry.acquire("Alpha") as first:
+        async with registry.acquire("alpha") as same:
+            async with registry.acquire("ALPHA") as again:
+                assert same is first
+                assert again is first
+    assert pool.events == ["build:alpha"]
+    await registry.close()
+
+
+@pytest.mark.unit
+async def test_concurrent_same_key_under_limit_builds_once(config: Config) -> None:
+    pool = Pool()
+    registry = WorkspaceRegistry(config, pool.factory, max_resident=1)
+    release = anyio.Event()
+    entered = anyio.Event()
+    seen: list[MemoryManager] = []
+
+    async def worker() -> None:
+        async with registry.acquire("Shared") as manager:
+            seen.append(manager)
+            entered.set()
+            await release.wait()
+
+    async with anyio.create_task_group() as group:
+        for _ in range(12):
+            group.start_soon(worker)
+        await entered.wait()
+        release.set()
+    assert pool.events == ["build:shared"]
+    assert len(seen) == 12
+    assert all(manager is pool.managers["shared"] for manager in seen)
+    await registry.close()
+
+
+@pytest.mark.unit
+async def test_simultaneous_new_keys_never_exceed_the_limit(config: Config) -> None:
+    pool = Pool()
+    registry = WorkspaceRegistry(config, pool.factory, max_resident=2)
+    release = anyio.Event()
+    settled = anyio.Event()
+    outcomes: list[str] = []
+
+    def record(outcome: str) -> None:
+        outcomes.append(outcome)
+        if len(outcomes) == 5:
+            settled.set()
+
+    async def worker(index: int) -> None:
+        try:
+            async with registry.acquire(f"key-{index}"):
+                record("held")
+                await release.wait()
+        except WorkspaceCapacityError:
+            record("rejected")
+
+    async with anyio.create_task_group() as group:
+        for index in range(5):
+            group.start_soon(worker, index)
+        with anyio.fail_after(5):
+            await settled.wait()
+        assert outcomes.count("held") == 2
+        assert outcomes.count("rejected") == 3
+        assert len(pool.events) == 2
+        release.set()
+    assert pool.peak <= 2
+    await registry.close()
+    assert pool.alive == 0
+
+
+@pytest.mark.unit
+async def test_burst_over_idle_managers_stays_within_the_limit(config: Config) -> None:
+    pool = Pool()
+    now = [0.0]
+    registry = WorkspaceRegistry(
+        config, pool.factory, clock=lambda: now[0], max_resident=2
+    )
+    async with registry.acquire("a"):
+        pass
+    now[0] = 1
+    async with registry.acquire("b"):
+        pass
+
+    async def worker(key: str) -> None:
+        async with registry.acquire(key):
+            pass
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(worker, "c")
+        group.start_soon(worker, "d")
+    assert pool.peak <= 2
+    assert pool.events.count("close:a") == 1
+    assert pool.events.count("close:b") == 1
+    assert "build:c" in pool.events
+    assert "build:d" in pool.events
+    assert not was_closed(pool.managers["c"])
+    assert not was_closed(pool.managers["d"])
+    await registry.close()
+    assert pool.alive == 0
+    assert all(manager.close.call_count == 1 for manager in pool.managers.values())
+
+
+@pytest.mark.unit
+async def test_unrelated_use_is_not_blocked_by_pressure_eviction(
+    config: Config,
+) -> None:
+    pool = Pool()
+    started, gate = pool.hold_close("a")
+    now = [0.0]
+    registry = WorkspaceRegistry(
+        config, pool.factory, clock=lambda: now[0], max_resident=2
+    )
+    async with registry.acquire("a"):
+        pass
+    now[0] = 1
+    async with registry.acquire("c"):
+        pass
+
+    async def newcomer() -> None:
+        async with registry.acquire("b"):
+            pass
+
+    newcomer_task = asyncio.create_task(newcomer())
+    try:
+        assert await anyio.to_thread.run_sync(started.wait, 5)
+        with anyio.fail_after(1):
+            async with registry.acquire("c") as resident:
+                assert resident is pool.managers["c"]
+        assert "build:b" not in pool.events
+        assert not newcomer_task.done()
+    finally:
+        gate.set()
+        await newcomer_task
+        await registry.close()
+    assert pool.events.index("close:a") < pool.events.index("build:b")
+    assert pool.peak <= 2
+
+
+@pytest.mark.unit
+async def test_factory_failure_releases_its_reservation(config: Config) -> None:
+    pool = Pool()
+    pool.build_failures.add("bad")
+    registry = WorkspaceRegistry(config, pool.factory, max_resident=1)
+    with pytest.raises(OSError, match="constructor failed"):
+        async with registry.acquire("bad"):
+            pytest.fail("Failed construction returned a manager")
+    async with registry.acquire("good") as manager:
+        assert manager.config.workspace_id == "good"
+    assert pool.events == ["build:bad", "build:good"]
+    await registry.close()
+
+
+@pytest.mark.unit
+async def test_cancelled_construction_stays_counted_until_closed(
+    config: Config,
+) -> None:
+    pool = Pool()
+    started, gate = pool.hold_build("slow")
+    registry = WorkspaceRegistry(config, pool.factory, max_resident=1)
+
+    async def user() -> None:
+        async with registry.acquire("slow"):
+            pytest.fail("Cancelled acquisition returned a manager")
+
+    user_task = asyncio.create_task(user())
+    try:
+        assert await anyio.to_thread.run_sync(started.wait, 5)
+        user_task.cancel()
+        gate.set()
+        with pytest.raises(asyncio.CancelledError):
+            await user_task
+        assert registry._entries["slow"].active == 0
+        async with registry.acquire("other"):
+            pass
+        assert pool.events == ["build:slow", "close:slow", "build:other"]
+        assert pool.managers["slow"].close.call_count == 1
+        await registry.close()
+    finally:
+        gate.set()
+
+
+@pytest.mark.unit
+async def test_failed_pressure_close_keeps_the_slot_counted(config: Config) -> None:
+    pool = Pool()
+    pool.close_failures["old"] = 1
+    registry = WorkspaceRegistry(config, pool.factory, max_resident=1)
+    async with registry.acquire("old") as old:
+        pass
+    with pytest.raises(WorkspaceCapacityError) as failure:
+        async with registry.acquire("new"):
+            pytest.fail("Capacity was not freed")
+    assert "old" not in str(failure.value)
+    assert "storage unavailable" not in str(failure.value)
+    assert pool.events == ["build:old", "close-failed:old"]
+    with pytest.raises(RuntimeError, match="pending close"):
+        async with registry.acquire("OLD"):
+            pytest.fail("Quarantined manager was reused")
+    assert not was_closed(old)
+    await registry.close()
+    assert was_closed(old)
+    assert pool.managers["old"].close.call_count == 2
+    assert pool.events == ["build:old", "close-failed:old", "close:old"]
+
+
+@pytest.mark.unit
+async def test_failed_pressure_close_moves_on_to_next_idle_manager(
+    config: Config,
+) -> None:
+    pool = Pool()
+    pool.close_failures["bad"] = 1
+    now = [0.0]
+    registry = WorkspaceRegistry(
+        config, pool.factory, clock=lambda: now[0], max_resident=2
+    )
+    async with registry.acquire("bad") as bad:
+        pass
+    now[0] = 1
+    async with registry.acquire("good"):
+        pass
+    async with registry.acquire("new"):
+        pass
+    assert pool.events == [
+        "build:bad",
+        "build:good",
+        "close-failed:bad",
+        "close:good",
+        "build:new",
+    ]
+    assert pool.peak <= 2
+    await registry.close()
+    assert was_closed(bad)
+    assert pool.alive == 0
+
+
+@pytest.mark.unit
+async def test_shutdown_overlapping_pressure_eviction_rejects_the_waiter(
+    config: Config,
+) -> None:
+    pool = Pool()
+    started, gate = pool.hold_close("old")
+    registry = WorkspaceRegistry(config, pool.factory, max_resident=1)
+    async with registry.acquire("old"):
+        pass
+
+    async def requester() -> None:
+        with pytest.raises(
+            RuntimeError, match="WorkspaceRegistry is closed"
+        ) as failure:
+            async with registry.acquire("new"):
+                pytest.fail("Closing registry built a manager")
+        assert not isinstance(failure.value, WorkspaceCapacityError)
+
+    requester_task = asyncio.create_task(requester())
+    close_task: asyncio.Task[None] | None = None
+    try:
+        assert await anyio.to_thread.run_sync(started.wait, 5)
+        close_task = asyncio.create_task(registry.close())
+        while not registry._closing:
+            await anyio.lowlevel.checkpoint()
+        assert not close_task.done()
+    finally:
+        gate.set()
+        await requester_task
+        if close_task is not None:
+            await close_task
+    assert pool.events == ["build:old", "close:old"]
+    assert pool.managers["old"].close.call_count == 1
+
+
+@pytest.mark.unit
+async def test_eviction_in_flight_keeps_counting_against_limit(config: Config) -> None:
+    pool = Pool()
+    started, gate = pool.hold_close("a")
+    checked = anyio.Event()
+    observe_request = False
+
+    def clock() -> float:
+        if observe_request:
+            checked.set()
+        return 0.0
+
+    registry = WorkspaceRegistry(config, pool.factory, clock=clock, max_resident=1)
+    async with registry.acquire("a"):
+        pass
+    release = anyio.Event()
+    settled = anyio.Event()
+    held: list[str] = []
+    rejected: list[str] = []
+
+    def record_settled() -> None:
+        if len(held) + len(rejected) == 2:
+            settled.set()
+
+    async def requester(key: str) -> None:
+        try:
+            async with registry.acquire(key):
+                held.append(key)
+                record_settled()
+                await release.wait()
+        except WorkspaceCapacityError:
+            rejected.append(key)
+            record_settled()
+
+    tasks = [asyncio.create_task(requester("b"))]
+    try:
+        assert await anyio.to_thread.run_sync(started.wait, 5)
+        observe_request = True
+        tasks.append(asyncio.create_task(requester("c")))
+        with anyio.fail_after(5):
+            await checked.wait()
+        # The clock handshake runs inside pruning under the acquisition lock.
+        # Admission would already have reserved a build before yielding.
+        assert registry._building == {}
+        assert pool.events == ["build:a"]
+        assert pool.alive == pool.peak == 1
+        assert not tasks[1].done()
+        assert held == rejected == []
+
+        gate.set()
+        with anyio.fail_after(5):
+            await settled.wait()
+        assert len(held) == len(rejected) == 1
+        assert set(held + rejected) == {"b", "c"}
+        assert pool.events == ["build:a", "close:a", f"build:{held[0]}"]
+        assert f"build:{rejected[0]}" not in pool.events
+        assert pool.alive == pool.peak == 1
+    finally:
+        gate.set()
+        release.set()
+        await asyncio.gather(*tasks)
+        await registry.close()
+    assert pool.alive == 0
+    assert all(manager.close.call_count == 1 for manager in pool.managers.values())
+    assert all(was_closed(manager) for manager in pool.managers.values())
+
+
+@pytest.mark.unit
+async def test_capacity_awaits_idle_ttl_eviction_already_in_flight(
+    config: Config,
+) -> None:
+    pool = Pool()
+    started, gate = pool.hold_close("a")
+    now = [0.0]
+    checked = anyio.Event()
+    observe_request = False
+
+    def clock() -> float:
+        if observe_request:
+            checked.set()
+        return now[0]
+
+    registry = WorkspaceRegistry(
+        config, pool.factory, clock=clock, idle_ttl=900, max_resident=1
+    )
+    async with registry.acquire("a"):
+        pass
+    now[0] = 901.0
+    admitted = anyio.Event()
+
+    async def requester() -> None:
+        async with registry.acquire("b") as manager:
+            assert manager is pool.managers["b"]
+            admitted.set()
+
+    prune_task = asyncio.create_task(registry.prune())
+    requester_task: asyncio.Task[None] | None = None
+    try:
+        assert await anyio.to_thread.run_sync(started.wait, 5)
+        observe_request = True
+        requester_task = asyncio.create_task(requester())
+        with anyio.fail_after(5):
+            await checked.wait()
+        assert not requester_task.done()
+        assert not admitted.is_set()
+        assert pool.events == ["build:a"]
+        assert registry._building == {}
+
+        gate.set()
+        await prune_task
+        with anyio.fail_after(5):
+            await requester_task
+            assert admitted.is_set()
+        assert pool.events == ["build:a", "close:a", "build:b"]
+        assert pool.alive == pool.peak == 1
+    finally:
+        gate.set()
+        await prune_task
+        try:
+            if requester_task is not None:
+                await requester_task
+        finally:
+            await registry.close()
+    assert pool.alive == 0
+    assert all(was_closed(manager) for manager in pool.managers.values())

@@ -143,7 +143,9 @@ class FastMCPServer:
 
         self._startup_metrics: dict[str, float] | None = None
         self._registry = WorkspaceRegistry(
-            self.config, manager_factory=self._create_manager
+            self.config,
+            manager_factory=self._create_manager,
+            max_resident=self.config.workspace_max_resident,
         )
         self._closed = False
         self._close_task: asyncio.Task[None] | None = None

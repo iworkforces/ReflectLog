@@ -199,6 +199,7 @@ class MetricsConfigDict(TypedDict):
 
 class ServerConfigDict(TypedDict):
     add_max_concurrency: int
+    workspace_max_resident: int | None
     eager_initialization: bool
     eager_initialize_search_engines: bool | None
     eager_initialize_reranker: bool | None
@@ -357,6 +358,8 @@ class Config:
 
     # Concurrency settings
     add_max_concurrency: int = 4  # Max concurrent memory additions
+    # Max resident workspace managers (None = unlimited)
+    workspace_max_resident: int | None = None
 
     # Initialization settings
     eager_initialization: bool = True  # Pre-warm engines during MemoryManager init
@@ -646,10 +649,17 @@ class Config:
     @staticmethod
     def _parse_init_config() -> ServerConfigDict:
         """Parse initialization-related configuration from environment variables."""
+        raw_capacity = os.environ.get("WORKSPACE_MAX_RESIDENT")
+        workspace_max_resident = (
+            _parse_env_int("WORKSPACE_MAX_RESIDENT", raw_capacity, minimum=1)
+            if raw_capacity is not None
+            else None
+        )
         return {
             "add_max_concurrency": _parse_env_int(
                 "ADD_MAX_CONCURRENCY", "4", minimum=1
             ),
+            "workspace_max_resident": workspace_max_resident,
             "eager_initialization": os.environ.get(
                 "EAGER_INITIALIZATION", "true"
             ).lower()
