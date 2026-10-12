@@ -1,7 +1,7 @@
 # Hermes Memory Plugin
 
 **Generated:** 2026-10-12
-**Commit:** 1831200
+**Commit:** 918f835
 **Branch:** develop
 
 ## OVERVIEW
@@ -49,10 +49,11 @@ hermes/
 ## CONNECTION CONTRACT
 
 - Stateful streamable HTTP MCP via `httpx`; default `http://127.0.0.1:9103/mcp`. `REFLECTLOG_URL` overrides config. JSON and SSE response framing are supported.
+- httpx timeouts are per I/O operation, so `_bounded` in `core/client.py` runs each exchange on a daemon thread and the caller stops at one absolute deadline: connect, headers, body, and the close-time session `DELETE`. `prefetch` also spends `recall_timeout` on provider lock waits.
 - Bearer token from `REFLECTLOG_MCP_TOKEN` in the Hermes profile environment; must equal server `MCP_AUTH_TOKEN`. `requires_env` prompts on install; never persist the token in `reflectlog.json`.
 - Handshake needs `add_memories`, `search_memories`, `get_all_memories`, `get_memory_by_id`, `delete_memories`, and `add_memories.allow_replace`, else `incompatible`.
 - Every remote call passes `workspace_id`. Derived ids are `h-<profile slug>-<24 hex>` from SHA-256 of compact JSON `["reflectlog-hermes/v1", namespace, profile, subject]`. ReflectLog uses ids for routing; plugin gates enforce access.
-- Default user routing fails closed for missing gateway participants and non-primary contexts with participants. Owner CLI/cron/subagent routing has subject `null`. Profile scope and explicit overrides bypass user-derived routing checks. Shared chats default inactive; mismatched per-turn authors block access.
+- Default user routing fails closed for missing gateway participants and non-primary contexts with participants. Owner CLI/cron/subagent routing has subject `null`. Profile scope and explicit overrides bypass user-derived routing checks. Shared chats default inactive; mismatched per-turn authors block access until the next `on_turn_start`. `on_session_switch` (compression runs it mid-turn) must not clear the block.
 
 ## CONVENTIONS
 
@@ -65,11 +66,12 @@ hermes/
 
 ## ANTI-PATTERNS
 
-- Never resend a possibly dispatched mutation; report `outcome_unknown`. Reads and dry-run adds may retry once. Require proof of pre-dispatch failure before resending a mutation.
+- Never resend a possibly dispatched mutation; report `outcome_unknown`. Reads and dry-run adds may retry once. The only proof that allows resending a mutation is the MCP SDK's session rejection: HTTP 400/404 with JSON-RPC `-32600` and a null id (`_session_rejection`). Any other 400/404 still ends the session. An unreadable add/delete result is `outcome_unknown`, not `malformed`.
+- Reject text that cannot encode as UTF-8 in `core/policy.py`; it must never reach request serialization.
 - No smart replacement on automatic writes: always `allow_replace=false`, even when `smart_replace` is enabled.
 - No destructive mirroring. Mirror new add/replace content only; ignore removes. Remote forgetting is explicit.
 - No network in `is_available`, status, `identity_signature`, or `register`. Availability is a local config/token check.
-- Never log tokens, memory text, queries, or server error text. Do not put secrets in configuration or status output.
+- Never log tokens, memory text, or queries. Never log or return server error text (`server_detail`); tool errors carry the plugin's own message. Do not put secrets in configuration or status output.
 - No lazy workspace on an uninitialized provider. Require the initialized, active binding; do not infer authority from a workspace id.
 - Do not promise queue durability or exactly-once writes. Breaker state and queued jobs are process-local; full queues drop work.
 - Do not wrap recall in a second `<memory-context>` fence or treat recalled text as instructions.
