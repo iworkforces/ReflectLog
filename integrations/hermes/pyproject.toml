@@ -1,0 +1,57 @@
+[project]
+name = "hermes-plugin-reflectlog"
+version = "0.1.0"
+description = "ReflectLog memory-provider plugin for Hermes Agent"
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.27,<1"]
+
+[dependency-groups]
+dev = ["pytest", "ruff", "pyright", "hermes-agent"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+hermes-agent = { git = "https://github.com/NousResearch/hermes-agent.git", tag = "v0.21.6" }
+
+[tool.uv.dependency-groups]
+dev = { requires-python = ">=3.14,<3.15" }
+
+[tool.uv.extra-build-variables]
+hermes-agent = { HERMES_NIX_BUILD = "1" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error"]
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "RUF", "Q", "ANN", "TC"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**/*.py" = ["E", "W", "F", "N", "UP", "B", "C4", "RUF", "SIM105", "SIM117", "SIM300", "ANN", "TC"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+single-line-exclusions = ["typing", "collections.abc"]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
+multiline-quotes = "double"
+docstring-quotes = "double"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+include = ["."]
+exclude = [".venv", "**/__pycache__", ".pytest_cache", ".ruff_cache"]
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+strict = ["core", "provider.py", "tool_handlers.py", "__init__.py", "qa"]
+venvPath = "."
+venv = ".venv"
