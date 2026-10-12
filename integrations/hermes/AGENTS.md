@@ -1,7 +1,7 @@
 # Hermes Memory Plugin
 
 **Generated:** 2026-10-12
-**Commit:** 918f835
+**Commit:** 9f1227c
 **Branch:** develop
 
 ## OVERVIEW
@@ -49,7 +49,7 @@ hermes/
 ## CONNECTION CONTRACT
 
 - Stateful streamable HTTP MCP via `httpx`; default `http://127.0.0.1:9103/mcp`. `REFLECTLOG_URL` overrides config. JSON and SSE response framing are supported.
-- httpx timeouts are per I/O operation, so `_bounded` in `core/client.py` runs each exchange on a daemon thread and the caller stops at one absolute deadline: connect, headers, body, and the close-time session `DELETE`. `prefetch` also spends `recall_timeout` on provider lock waits.
+- httpx timeouts are per I/O operation, so `_bounded` in `core/client.py` runs each exchange on a daemon thread and the caller stops at one absolute deadline: connect, headers, body, and the close-time session `DELETE`. On expiry the caller starts `_Exchange.cancel` on its own thread and returns; never interrupt or close on the caller. Cancel only shuts down a response that is still `attached`, since a detached connection may be back in the pool. `prefetch` also spends `recall_timeout` on provider lock waits.
 - Bearer token from `REFLECTLOG_MCP_TOKEN` in the Hermes profile environment; must equal server `MCP_AUTH_TOKEN`. `requires_env` prompts on install; never persist the token in `reflectlog.json`.
 - Handshake needs `add_memories`, `search_memories`, `get_all_memories`, `get_memory_by_id`, `delete_memories`, and `add_memories.allow_replace`, else `incompatible`.
 - Every remote call passes `workspace_id`. Derived ids are `h-<profile slug>-<24 hex>` from SHA-256 of compact JSON `["reflectlog-hermes/v1", namespace, profile, subject]`. ReflectLog uses ids for routing; plugin gates enforce access.
@@ -66,7 +66,7 @@ hermes/
 
 ## ANTI-PATTERNS
 
-- Never resend a possibly dispatched mutation; report `outcome_unknown`. Reads and dry-run adds may retry once. The only proof that allows resending a mutation is the MCP SDK's session rejection: HTTP 400/404 with JSON-RPC `-32600` and a null id (`_session_rejection`). Any other 400/404 still ends the session. An unreadable add/delete result is `outcome_unknown`, not `malformed`.
+- Never resend a possibly dispatched mutation; report `outcome_unknown`. Reads and dry-run adds may retry once. The only proof that allows resending a mutation is the MCP SDK's session rejection: HTTP 400/404 with `jsonrpc` `"2.0"`, error `-32600`, and an explicit `"id": null` (`_session_rejection`). Any other 400/404, including an unreadable or unparsable body, still ends the session. Every `json.loads` of server bytes also catches `RecursionError`. An unreadable add/delete result is `outcome_unknown`, not `malformed`.
 - Reject text that cannot encode as UTF-8 in `core/policy.py`; it must never reach request serialization.
 - No smart replacement on automatic writes: always `allow_replace=false`, even when `smart_replace` is enabled.
 - No destructive mirroring. Mirror new add/replace content only; ignore removes. Remote forgetting is explicit.
