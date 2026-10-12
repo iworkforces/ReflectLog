@@ -20,7 +20,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
+    "test:dist": "node --test tests/compiled/smoke.test.mjs",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm test:dist"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",

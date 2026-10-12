@@ -319,5 +319,25 @@ From `integrations/openclaw`, run:
 pnpm check
 ```
 
-This runs typecheck, vitest, then build. Root scripts and CI don't run this
-plugin's checks.
+This runs typecheck, vitest, build, then `pnpm test:dist`. To run the compiled
+smoke alone, run `pnpm build` first. A native Node child imports
+`@iworkforces/openclaw-memory-reflectlog` through its `dist/index.js` package
+export, without a TypeScript loader or mocked SDK. It registers with the real
+OpenClaw `2026.10.2` registry through a version-guarded adapter that locates the
+internal registry chunk by content because the host exports no registry factory.
+Host version or registry-seam differences fail closed.
+
+The smoke checks the memory capability, six `memory_*` tools, recall names,
+plugin service, and `reflectlog` CLI registration through real Commander. It
+also checks disabled registration for invalid config, missing-token failure
+before connection, and fresh service reuse after provider close or service stop
+retires a lazily allocated service. It needs no token, network, or gateway;
+credentials in its environment, network attempts, unhandled rejections,
+warnings, and lingering handles fail the run.
+
+Root scripts and Python workflows do not run these checks. The scoped
+`openclaw-quality` workflow runs on Ubuntu with Node 24 and 26 and pnpm 12.9.1,
+using `pnpm install --frozen-lockfile` then `pnpm check`. Pushes to `develop` or
+`main` and pull requests trigger it when they touch `integrations/openclaw/**`
+or `.github/workflows/openclaw-quality.yml`; it also supports manual dispatch.
+Node must satisfy `>=24.16.0 <25 || >=26.1.0`.
