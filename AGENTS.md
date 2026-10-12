@@ -112,7 +112,7 @@ uv sync
 uv run reflectlog --transport http --port 9103
 uv run reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
 uv run reflectlog salvage-verify --bundle BUNDLE_DIR --workspace-id ID
-(cd integrations/openclaw && pnpm check)   # TypeScript plugin: typecheck + vitest + build
+(cd integrations/openclaw && pnpm check)   # TypeScript plugin: typecheck + vitest + build + compiled smoke
 uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/pyproject.toml integrations/hermes/tests  # Python plugin; see child guide for all checks
 ```
 
