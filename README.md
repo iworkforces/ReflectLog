@@ -379,6 +379,36 @@ unchanged; there is no import tool. See
 [offline content salvage](docs/storage-coordination.md#offline-content-salvage)
 for the manifest, publication, and failure contract.
 
+##### Verifying a bundle
+
+```bash
+uv run reflectlog salvage-verify --bundle NEW_DIR --workspace-id ID
+```
+
+Verification is offline and read-only. It loads no server configuration,
+credentials, models, SQLite database, or engines, creates no files, and never
+repairs, replays a journal, or imports content. It checks publication, the
+manifest and workspace id, record format, SHA-256, count, and readiness against
+the manifest's journal evidence. Empty bundles are valid.
+
+Stdout contains one content-free JSON line, for example for an empty ready
+bundle with workspace id `my-project`:
+
+```json
+{"authenticity": "not_verified", "errors": [], "rebuild_ready": true, "record_count": 0, "status": "ready", "unresolved_reasons": [], "workspace_id": "my-project"}
+```
+
+Exit 0 means `ready`; exit 1 means `not_ready` (consistent but unresolved journal
+evidence) or `invalid`. Exit 2 means a usage error, with stderr only and no
+stdout. Missing arguments print usage; an invalid workspace id prints
+`reflectlog salvage-verify: --workspace-id is not a valid workspace id`.
+Errors use `{code, entry, line}` objects, never memory content.
+
+A matching hash only shows that the files agree, not who wrote them;
+`authenticity` is always `not_verified`. Verification does not apply
+`add_memories` validation, so valid bundle content can still be rejected on
+re-add. See the storage guide for the exact checks.
+
 ## Architecture
 
 ```
@@ -421,6 +451,7 @@ ReflectLog/
 
 # Export content from an archived, stopped workspace
 uv run reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
+uv run reflectlog salvage-verify --bundle NEW_DIR --workspace-id ID
 ```
 
 ### Testing

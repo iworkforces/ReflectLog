@@ -152,6 +152,42 @@ record, damaged or unreadable database, observed archive change, unsafe
 output, and publication failure. Error messages don't include memory content.
 Unexpected exceptions propagate.
 
+### Verifying a bundle
+
+```bash
+uv run reflectlog salvage-verify --bundle BUNDLE_DIR --workspace-id ID
+```
+
+The command dispatches before environment/config loading. It reads only the
+bundle, without credentials, models, SQLite, engines, scratch or output files.
+It never repairs, replays a journal, or imports records. Checks include:
+
+- No `INCOMPLETE` entry, including a dangling symlink; no symlinked bundle root
+  or required files, non-regular files, or changes observed during the read.
+- A version 1 `reflectlog.content-salvage` manifest with exactly the exported
+  keys, the canonical expected workspace id, and records file `memories.jsonl`.
+- SHA-256 and record count against the same captured bytes used for parsing.
+- Strict UTF-8 JSONL with a final newline and exactly `source_id`, `content`,
+  `source_created_at`: non-boolean integer ids, ascending and unique; non-empty
+  content, unique by exact comparison; timestamps text or null. Empty bundles
+  are valid.
+- `rebuild_ready` and `unresolved_reasons` consistent with the journal evidence
+  recorded in the manifest, without inspecting the archive or replaying intent.
+
+Read-time change detection covers observed changes only. Verification does not
+check authorship or apply `add_memories` limits, trimming, positive-id rules, or
+ISO timestamp validation. Valid bundle text can still fail re-add validation.
+A matching hash shows internal agreement; `authenticity` is always
+`not_verified`.
+
+One content-free JSON line reports `status`, canonical expected `workspace_id`,
+`record_count`, `rebuild_ready`, `unresolved_reasons`, `errors` (`{code, entry,
+line}` objects), and `authenticity`. Exit 0 means `ready`; 1 means `not_ready`
+(internally consistent with unresolved journal evidence) or `invalid`; 2 means
+a usage error, with stderr only and no stdout.
+
+### Rebuilding a workspace
+
 To rebuild from a complete bundle after reviewing its journal evidence:
 
 1. Keep the original archive unchanged. Storage is `indexes/` relative to the
