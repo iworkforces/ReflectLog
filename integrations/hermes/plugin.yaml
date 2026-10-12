@@ -1,7 +1,7 @@
 name: reflectlog
 version: 0.1.0
 description: Workspace-scoped ReflectLog memory for Hermes Agent
-author: iWorkforces
+author: iworkforces
 requires_env:
   - name: REFLECTLOG_MCP_AUTH_TOKEN
     description: Must equal the ReflectLog server REFLECTLOG_MCP_AUTH_TOKEN

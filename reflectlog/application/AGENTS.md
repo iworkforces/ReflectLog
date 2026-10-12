@@ -56,7 +56,7 @@ application/
 ## ANTI-PATTERNS
 
 - Tools must not import engines or fusion.
-- Do not call `setup_config_reload()` from `server.py` / `FastMCPServer`.
 - Capacity admission stays in `WorkspaceRegistry`; tools keep their schemas.
+- Do not call `setup_config_reload()` from `server.py` / `FastMCPServer`.
 - Do not treat leftover `utils/*.pyc` (`http_client`, `metrics`, `circuit_breaker`) as APIs.
 - Do not construct engines via `EngineFactory` at runtime.

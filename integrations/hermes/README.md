@@ -14,7 +14,7 @@ The development dependency is pinned to Hermes Agent `v0.21.6`, release commit
 Install and enable the plugin:
 
 ```bash
-hermes plugins install iWorkforces/ReflectLog/integrations/hermes --enable
+hermes plugins install iworkforces/ReflectLog/integrations/hermes --enable
 ```
 
 For a local clone:

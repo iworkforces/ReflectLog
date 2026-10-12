@@ -23,7 +23,7 @@ ReflectLog is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io)
 
 ```bash
 # Clone the repository
-git clone https://github.com/iWorkforces/ReflectLog.git
+git clone https://github.com/iworkforces/ReflectLog.git
 cd ReflectLog
 
 # Install dependencies using uv
