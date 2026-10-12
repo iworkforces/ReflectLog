@@ -33,7 +33,7 @@ tests/unit/
 
 - Patch constructors on the **import site**: `reflectlog.application.memory.manager.USearchEngine`.
 - MagicMock `spec=`; stub `is_ready=False`, `add_batch` `side_effect`.
-- `NUMBA_DISABLE_JIT` only in `application/memory/conftest.py` and `application/utils/conftest.py`.
+- `NUMBA_DISABLE_JIT=1` is set once, at the top of `tests/conftest.py`, before any reflectlog import. No subdirectory conftest touches numba.
 - Dual manager files: `application/test_memory_manager.py` vs `application/memory/test_manager.py`.
 
 ## ANTI-PATTERNS

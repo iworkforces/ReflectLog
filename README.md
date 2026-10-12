@@ -128,6 +128,8 @@ Pick the configuration for your client:
 
   Check with `opencode mcp list`.
 
+- **Hermes Agent:** Install the [ReflectLog memory-provider plugin](integrations/hermes/README.md), rather than adding a plain MCP server entry.
+
 ## Usage
 
 ### MCP Tools

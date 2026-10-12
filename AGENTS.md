@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`; stdio and sse are gone). One `MemoryManager` per workspace. USearch + SQLite identity + Tantivy FTS + raw RRF, optional local FlagReranker or remote OpenRouter rerank. Local WeMM is the field default; env load still defaults to OpenAI. LLM is for smart replacement only. A separate TypeScript OpenClaw plugin lives in `integrations/openclaw/`.
+Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`; stdio and sse are gone). One `MemoryManager` per workspace. USearch + SQLite identity + Tantivy FTS + raw RRF, optional local FlagReranker or remote OpenRouter rerank. Local WeMM is the field default; env load still defaults to OpenAI. LLM is for smart replacement only. A separate TypeScript OpenClaw plugin lives in `integrations/openclaw/`. A separate Python Hermes memory-provider plugin lives in `integrations/hermes/`.
 
 ## STRUCTURE
 
@@ -21,6 +21,7 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 │   └── utility/         # HTTP pool, Numba scoring, OS credentials
 ├── tests/               # unit/ mirrors package; integration uses real engines
 ├── integrations/openclaw/  # TypeScript plugin: pnpm + vitest; no root script or CI
+|-- integrations/hermes/    # Python memory provider: uv + pytest; no root script or CI
 ├── stubs/               # ty extra-paths + pyright stubPath
 ├── scripts/             # Copied git hooks + platform gates + ad-hoc
 ├── .github/workflows/   # pr-quality, platform-storage, cd (release)
@@ -48,6 +49,7 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 | HTTP | `utility/http.py` | `HttpClientFactory` |
 | Score math | `utility/scoring.py` | Numba RRF / min-max / recency |
 | OpenClaw plugin | `integrations/openclaw/` | MCP client for the five tools; see child guide |
+| Hermes plugin | `integrations/hermes/` | Memory provider, MCP client for the five tools; see child guide |
 | Release | `.github/workflows/cd.yml` | Tags `v<pyproject version>` after CI passes on `main` |
 
 ## CODE MAP
@@ -109,6 +111,7 @@ uv sync
 uv run reflectlog --transport http --port 9103
 uv run reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
 (cd integrations/openclaw && pnpm check)   # TypeScript plugin: typecheck + vitest + build
+uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/pyproject.toml integrations/hermes/tests  # Python plugin; see child guide for all checks
 ```
 
 ## NOTES
@@ -125,11 +128,12 @@ uv run reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --o
 - CLI version: `reflectlog/version.py` reads `importlib.metadata.version("reflectlog")`, falling back to `"0.0.0"` when not installed. The number itself comes from `pyproject.toml`.
 - Python: `requires-python >=3.14.7`, `.python-version` is 3.14.8, CI uses 3.14.7.
 - `integrations/openclaw` is not run by any root script or workflow; run its `pnpm` scripts by hand.
+- `integrations/hermes` is not run by any root script or workflow; run its `uv` checks by hand.
 - Lease, generation, and embedding-identity rules: `docs/storage-coordination.md`.
 
 ## GUIDANCE HIERARCHY
 
-Children: `reflectlog/{application,core,infrastructure,plugins,utility}`, `integrations/openclaw` (TypeScript, own toolchain), and `tests/` mirrors.
+Children: `reflectlog/{application,core,infrastructure,plugins,utility}`, `integrations/openclaw` (TypeScript, own toolchain), `integrations/hermes` (Python, own uv project), and `tests/` mirrors.
 Deep: `memory/fusion`, `memory/reranking` (pointer), `utility/platforms`, `infrastructure/embeddings`, `infrastructure/search` (marker).
 `workspace_registry.py` and `embedding_identity.py` stay in their parent guides.
 No guides on empty `infrastructure/{llm,memory,reranking}`.

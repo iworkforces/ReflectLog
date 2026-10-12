@@ -7,3 +7,4 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - '@openclaw/ai@2026.10.1'
   - openclaw@2026.10.1
+  - zod@4.6.6
