@@ -285,6 +285,133 @@ def _forbidden(*args: object, **kwargs: object) -> None:
     raise AssertionError("capture must not mutate or create scratch")
 
 
+def test_directory_is_rejected_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _bundle(tmp_path / "bundle")
+    records = bundle / RECORDS_FILENAME
+    records.unlink()
+    records.mkdir()
+    real_open = os.open
+
+    def guarded_open(path: str, flags: int) -> int:
+        assert path != str(records), "nonregular entries must never be opened"
+        return real_open(path, flags)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", guarded_open)
+        result = FileSystemBundleReader().capture(str(bundle))
+
+    assert _issues(result) == {(Code.FILE_NOT_REGULAR, BundleEntry.RECORDS)}
+    assert result.records is None
+
+
+def test_capture_does_not_reread_paths_after_descriptor_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _bundle(tmp_path / "bundle")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_bytes", _forbidden)
+        patch.setattr(Path, "read_text", _forbidden)
+        result = FileSystemBundleReader().capture(str(bundle))
+
+    assert _issues(result) == set()
+    assert result.manifest is not None
+    assert result.records is not None
+
+
+def test_incomplete_descriptor_read_is_discarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _bundle(tmp_path / "bundle")
+    real_read = os.read
+
+    def shortened_read(descriptor: int, size: int) -> bytes:
+        return real_read(descriptor, size)[1:]
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "read", shortened_read)
+        result = FileSystemBundleReader().capture(str(bundle))
+
+    assert _issues(result) == {
+        (Code.CHANGED_DURING_READ, entry) for _, entry in REQUIRED
+    }
+    assert result.manifest is None
+    assert result.records is None
+
+
+def test_replacement_between_lstat_and_open_is_discarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _bundle(tmp_path / "bundle")
+    records = bundle / RECORDS_FILENAME
+    replacement = tmp_path / "replacement"
+    _ = replacement.write_bytes(b"replacement")
+    if records.stat().st_ino == 0 or replacement.stat().st_ino == 0:
+        pytest.skip("filesystem does not expose inode identity")
+    assert records.stat().st_ino != replacement.stat().st_ino
+    real_open = os.open
+
+    def replaced_open(path: str, flags: int) -> int:
+        if path == str(records):
+            os.replace(replacement, records)
+        return real_open(path, flags)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", replaced_open)
+        result = FileSystemBundleReader().capture(str(bundle))
+
+    assert _issues(result) == {(Code.CHANGED_DURING_READ, BundleEntry.RECORDS)}
+    assert result.records is None
+
+
+def test_nonregular_open_descriptor_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _bundle(tmp_path / "bundle")
+    directory_mode = bundle.stat().st_mode
+    real_fstat = os.fstat
+
+    def nonregular_fstat(descriptor: int) -> os.stat_result:
+        fields = list(real_fstat(descriptor))
+        fields[0] = directory_mode
+        return os.stat_result(fields)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fstat", nonregular_fstat)
+        result = FileSystemBundleReader().capture(str(bundle))
+
+    assert _issues(result) == {(Code.FILE_NOT_REGULAR, entry) for _, entry in REQUIRED}
+    assert result.manifest is None
+    assert result.records is None
+
+
+def test_capture_accepts_unavailable_initial_inode_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _bundle(tmp_path / "bundle")
+    real_lstat = os.lstat
+    seen: set[str] = set()
+
+    def initial_inode_unavailable(path: str) -> os.stat_result:
+        info = real_lstat(path)
+        if path in seen:
+            return info
+        seen.add(path)
+        fields = list(info)
+        fields[1] = 0
+        return os.stat_result(fields)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "lstat", initial_inode_unavailable)
+        result = FileSystemBundleReader().capture(str(bundle))
+
+    assert _issues(result) == set()
+    assert result.manifest is not None
+    assert result.records is not None
+
+
 @pytest.mark.parametrize("bad", [False, True])
 def test_capture_is_read_only_and_scratch_free(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: bool
