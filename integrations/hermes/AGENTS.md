@@ -1,7 +1,7 @@
 # Hermes Memory Plugin
 
 **Generated:** 2026-10-12
-**Commit:** 9f1227c
+**Commit:** 6b8afc9
 **Branch:** develop
 
 ## OVERVIEW
@@ -66,7 +66,7 @@ hermes/
 
 ## ANTI-PATTERNS
 
-- Never resend a possibly dispatched mutation; report `outcome_unknown`. Reads and dry-run adds may retry once. The only proof that allows resending a mutation is the MCP SDK's session rejection: HTTP 400/404 with `jsonrpc` `"2.0"`, error `-32600`, and an explicit `"id": null` (`_session_rejection`). Any other 400/404, including an unreadable or unparsable body, still ends the session. Every `json.loads` of server bytes also catches `RecursionError`. An unreadable add/delete result is `outcome_unknown`, not `malformed`.
+- Never resend a possibly dispatched mutation; report `outcome_unknown`. Reads and dry-run adds may retry once. The only proof that allows resending a mutation is the MCP SDK's session rejection: HTTP 400/404 with `jsonrpc` `"2.0"`, error `-32600`, a message containing `session` (case-insensitive), and an explicit `"id": null` (`_session_rejection`). Any other 400/404, including an unreadable, unparsable, or withheld body, still ends the session: `_rpc` invalidates on the status line, before `attached()` or the deadline can abandon the exchange. A body read that hits the deadline stays `timeout`. Every `json.loads` of server bytes also catches `RecursionError`. An unreadable add/delete result is `outcome_unknown`, not `malformed`.
 - Reject text that cannot encode as UTF-8 in `core/policy.py`; it must never reach request serialization.
 - No smart replacement on automatic writes: always `allow_replace=false`, even when `smart_replace` is enabled.
 - No destructive mirroring. Mirror new add/replace content only; ignore removes. Remote forgetting is explicit.
