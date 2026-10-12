@@ -54,6 +54,42 @@ def _verify(bundle: Path, expected: str = WS) -> VerificationResult:
     )
 
 
+def test_bom_is_reported_even_when_the_only_record_is_unterminated(
+    tmp_path: Path,
+) -> None:
+    bundle = export_bundle(tmp_path)
+    write_records(bundle, codecs.BOM_UTF8 + record_line(1, "value").rstrip(b"\n"))
+
+    result = _verify(bundle)
+
+    _assert_result(
+        result,
+        status=Status.INVALID,
+        issues=(
+            (Code.BOM_PRESENT, BundleEntry.RECORDS, 1),
+            (Code.MISSING_FINAL_NEWLINE, BundleEntry.RECORDS, 1),
+        ),
+        count=None,
+    )
+
+
+def test_lone_surrogate_timestamp_is_invalid(tmp_path: Path) -> None:
+    bundle = export_bundle(tmp_path)
+    write_records(
+        bundle,
+        b'{"content":"value","source_id":1,"source_created_at":"\\ud800"}\n',
+    )
+
+    result = _verify(bundle)
+
+    _assert_result(
+        result,
+        status=Status.INVALID,
+        issues=((Code.RECORD_TIMESTAMP_INVALID, BundleEntry.RECORDS, 1),),
+        count=None,
+    )
+
+
 def _assert_result(
     result: VerificationResult,
     *,
