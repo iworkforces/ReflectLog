@@ -110,7 +110,7 @@ class ReflectLogMemoryProvider(MemoryProvider):
             _ = self._load_settings()
         except ConfigError:
             return False
-        return bool((get_secret("REFLECTLOG_MCP_TOKEN", "") or "").strip())
+        return bool((get_secret("REFLECTLOG_MCP_AUTH_TOKEN", "") or "").strip())
 
     def unavailable_reason(self) -> str:
         try:
@@ -118,7 +118,7 @@ class ReflectLogMemoryProvider(MemoryProvider):
         except ConfigError as error:
             return str(error)
         return (
-            "Set REFLECTLOG_MCP_TOKEN equal to the server MCP_AUTH_TOKEN, "
+            "Set REFLECTLOG_MCP_AUTH_TOKEN equal to the server REFLECTLOG_MCP_AUTH_TOKEN, "
             "then run hermes memory setup reflectlog"
         )
 
@@ -126,10 +126,10 @@ class ReflectLogMemoryProvider(MemoryProvider):
         return [
             {
                 "key": "token",
-                "description": "Token equal to server MCP_AUTH_TOKEN",
+                "description": "Token equal to server REFLECTLOG_MCP_AUTH_TOKEN",
                 "secret": True,
                 "required": True,
-                "env_var": "REFLECTLOG_MCP_TOKEN",
+                "env_var": "REFLECTLOG_MCP_AUTH_TOKEN",
             },
             {
                 "key": "url",
@@ -178,7 +178,7 @@ class ReflectLogMemoryProvider(MemoryProvider):
             except ConfigError:
                 logger.warning("ReflectLog disabled: invalid local configuration")
                 return
-            token = (get_secret("REFLECTLOG_MCP_TOKEN", "") or "").strip()
+            token = (get_secret("REFLECTLOG_MCP_AUTH_TOKEN", "") or "").strip()
             if not token:
                 return
             binding = resolve_binding(
@@ -420,7 +420,7 @@ class ReflectLogMemoryProvider(MemoryProvider):
             "smart_replace": settings.smart_replace,
             "shared_chats": settings.shared_chats,
             "token": "set"
-            if (get_secret("REFLECTLOG_MCP_TOKEN", "") or "").strip()
+            if (get_secret("REFLECTLOG_MCP_AUTH_TOKEN", "") or "").strip()
             else "missing",
         }
 

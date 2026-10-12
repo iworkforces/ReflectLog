@@ -314,7 +314,7 @@ def main() -> None:
     ):
         parser.error("clients must be 1..32, iterations and timeout positive")
     workspace_id = args.workspace_id or f"bench-{uuid4().hex}"
-    token = os.environ.get("REFLECTLOG_MCP_TOKEN")
+    token = os.environ.get("REFLECTLOG_MCP_AUTH_TOKEN")
     result = anyio.run(
         run_benchmark,
         args.url,

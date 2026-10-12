@@ -46,8 +46,8 @@
     },
     "authTokenEnv": {
       "label": "Token environment variable",
-      "placeholder": "REFLECTLOG_MCP_TOKEN",
-      "help": "Environment variable that holds the ReflectLog MCP_AUTH_TOKEN bearer token; the token itself never goes in config"
+      "placeholder": "REFLECTLOG_MCP_AUTH_TOKEN",
+      "help": "Environment variable that holds the ReflectLog REFLECTLOG_MCP_AUTH_TOKEN bearer token; the token itself never goes in config"
     },
     "namespace": {
       "label": "Deployment namespace",
@@ -82,7 +82,7 @@
       "authTokenEnv": {
         "type": "string",
         "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-        "default": "REFLECTLOG_MCP_TOKEN"
+        "default": "REFLECTLOG_MCP_AUTH_TOKEN"
       },
       "namespace": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,31}$", "default": "openclaw" },
       "workspaceOverrides": {

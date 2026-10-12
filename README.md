@@ -41,11 +41,11 @@ OPENROUTER_API_KEY=sk-or-your-key-here
 ### Running the Server
 
 ```bash
-# Start with the default HTTP transport (requires MCP_AUTH_TOKEN; bind-all needs ALLOW_PUBLIC_BIND=true)
-MCP_AUTH_TOKEN=change-me uv run reflectlog --port 9103
+# Start with the default HTTP transport (requires REFLECTLOG_MCP_AUTH_TOKEN; bind-all needs ALLOW_PUBLIC_BIND=true)
+REFLECTLOG_MCP_AUTH_TOKEN=change-me uv run reflectlog --port 9103
 
 # Or use the launcher
-MCP_AUTH_TOKEN=change-me ./start-reflectlog-mcp-server.sh
+REFLECTLOG_MCP_AUTH_TOKEN=change-me ./start-reflectlog-mcp-server.sh
 ```
 
 The server accepts only the `http` (default) and `streamable-http` transports.
@@ -53,13 +53,13 @@ The server accepts only the `http` (default) and `streamable-http` transports.
 
 ### Connect HTTP MCP clients
 
-Choose a secret token and use the same value for the server's `MCP_AUTH_TOKEN`
-and each client's `REFLECTLOG_MCP_TOKEN`. For example, replace `change-me` in
+Choose a secret token and use the same value for the server's `REFLECTLOG_MCP_AUTH_TOKEN`
+and each client's `REFLECTLOG_MCP_AUTH_TOKEN`. For example, replace `change-me` in
 the command above and export the matching value in the environment that starts
 each client:
 
 ```bash
-export REFLECTLOG_MCP_TOKEN='change-me'
+export REFLECTLOG_MCP_AUTH_TOKEN='change-me'
 ```
 
 The local endpoint is `http://127.0.0.1:9103/mcp`. Each client sends
@@ -80,7 +80,7 @@ Pick the configuration for your client:
       "reflectlog": {
         "type": "http",
         "url": "http://127.0.0.1:9103/mcp",
-        "headers": { "Authorization": "Bearer ${REFLECTLOG_MCP_TOKEN}" }
+        "headers": { "Authorization": "Bearer ${REFLECTLOG_MCP_AUTH_TOKEN}" }
       }
     }
   }
@@ -94,7 +94,7 @@ Pick the configuration for your client:
   ```toml
   [mcp_servers.reflectlog]
   url = "http://127.0.0.1:9103/mcp"
-  bearer_token_env_var = "REFLECTLOG_MCP_TOKEN"
+  bearer_token_env_var = "REFLECTLOG_MCP_AUTH_TOKEN"
   ```
 
   Check with `codex mcp list` or `/mcp` inside Codex.
@@ -105,7 +105,7 @@ Pick the configuration for your client:
   ```toml
   [mcp_servers.reflectlog]
   url = "http://127.0.0.1:9103/mcp"
-  headers = { Authorization = "Bearer ${REFLECTLOG_MCP_TOKEN}" }
+  headers = { Authorization = "Bearer ${REFLECTLOG_MCP_AUTH_TOKEN}" }
   ```
 
   Check with `grok mcp doctor reflectlog` or `/mcps` inside Grok Build.
@@ -120,7 +120,7 @@ Pick the configuration for your client:
         "type": "remote",
         "url": "http://127.0.0.1:9103/mcp",
         "oauth": false,
-        "headers": { "Authorization": "Bearer {env:REFLECTLOG_MCP_TOKEN}" }
+        "headers": { "Authorization": "Bearer {env:REFLECTLOG_MCP_AUTH_TOKEN}" }
       }
     }
   }

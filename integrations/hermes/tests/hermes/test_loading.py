@@ -69,7 +69,7 @@ def test_package_import_is_lazy(tmp_path):
 def test_real_cli_validate(tmp_path):
     # Given the installed Hermes CLI without a token or server.
     env = dict(os.environ, HERMES_HOME=str(tmp_path))
-    env.pop("REFLECTLOG_MCP_TOKEN", None)
+    env.pop("REFLECTLOG_MCP_AUTH_TOKEN", None)
     # When its actual validator is invoked.
     result = subprocess.run(
         [

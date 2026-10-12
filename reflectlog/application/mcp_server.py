@@ -438,7 +438,7 @@ class FastMCPServer:
         """Attach bearer middleware when a token is configured for HTTP."""
         if self._http_auth_installed:
             return
-        auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
+        auth_token = os.environ.get("REFLECTLOG_MCP_AUTH_TOKEN", "").strip()
         if not auth_token:
             return
         _ = self.mcp.add_middleware(_BearerTokenMiddleware(auth_token))
@@ -458,9 +458,11 @@ class FastMCPServer:
             raise ConfigurationError(
                 f"Refusing to bind {self.config.host} without ALLOW_PUBLIC_BIND=true"
             )
-        auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
+        auth_token = os.environ.get("REFLECTLOG_MCP_AUTH_TOKEN", "").strip()
         if not auth_token:
-            raise ConfigurationError("MCP_AUTH_TOKEN is required to run the MCP server")
+            raise ConfigurationError(
+                "REFLECTLOG_MCP_AUTH_TOKEN is required to run the MCP server"
+            )
         self._install_http_auth()
         self.logger.info(
             f"Running MCP server with {transport} transport",

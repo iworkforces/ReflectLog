@@ -132,8 +132,8 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run with default HTTP transport (requires MCP_AUTH_TOKEN)
-  MCP_AUTH_TOKEN=change-me reflectlog
+  # Run with default HTTP transport (requires REFLECTLOG_MCP_AUTH_TOKEN)
+  REFLECTLOG_MCP_AUTH_TOKEN=change-me reflectlog
 
   # Run as HTTP server
   reflectlog --transport http --port 9103
@@ -223,7 +223,7 @@ def main() -> None:
     """Main entry point for the MCP server.
 
     Supports both CLI argument parsing and environment variable configuration.
-    Defaults to HTTP transport and requires MCP_AUTH_TOKEN to serve requests.
+    Defaults to HTTP transport and requires REFLECTLOG_MCP_AUTH_TOKEN to serve requests.
 
     Graceful shutdown is handled via signal handlers for SIGINT (Ctrl+C) and SIGTERM,
     ensuring all data from TantivyEngine and USearchEngine is persisted before exit.

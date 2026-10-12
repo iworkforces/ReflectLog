@@ -26,9 +26,9 @@ hermes plugins install "file:///path/to/ReflectLog#integrations/hermes" --enable
 Hermes clones committed content from the local repository; uncommitted edits
 are not installed. It warns about `file://` sources.
 
-The manifest's `requires_env` prompts for `REFLECTLOG_MCP_TOKEN` during install.
+The manifest's `requires_env` prompts for `REFLECTLOG_MCP_AUTH_TOKEN` during install.
 Keep it in the Hermes profile environment, for example `$HERMES_HOME/.env`.
-Its value must equal the ReflectLog server's `MCP_AUTH_TOKEN`. The plugin sends
+Its value must equal the ReflectLog server's `REFLECTLOG_MCP_AUTH_TOKEN`. The plugin sends
 `Authorization: Bearer <token>`. Keep tokens out of tracked files and logs.
 
 Run the configuration wizard and choose `reflectlog`:

@@ -40,7 +40,7 @@ openclaw/
 ## CONNECTION CONTRACT
 
 - Transport is `StreamableHTTPClientTransport`. The `transport` enum is only `"http"`, meaning streamable HTTP. Do not add stdio or sse.
-- Default URL `http://127.0.0.1:9103/mcp`. Bearer token read at connect time from `process.env[authTokenEnv]` (default `REFLECTLOG_MCP_TOKEN`); missing token fails `unauthorized`.
+- Default URL `http://127.0.0.1:9103/mcp`. Bearer token read at connect time from `process.env[authTokenEnv]` (default `REFLECTLOG_MCP_AUTH_TOKEN`); missing token fails `unauthorized`.
 - Handshake needs all five ReflectLog tools and `add_memories.allow_replace`, else `incompatible`. A server `ALLOWED_TOOLS` filter can trigger this.
 - Every call passes an explicit `workspace_id`: SHA-256 of `[namespace, agent, partition, session]`, shaped `p-…` (owner) or `c-…` (conversation, keyed on the root session key). ReflectLog does not treat `workspace_id` as an auth boundary; `access.ts` is the boundary.
 

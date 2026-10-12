@@ -3,7 +3,7 @@ import { z } from "zod";
 export const PLUGIN_ID = "memory-reflectlog";
 
 export const DEFAULT_URL = "http://127.0.0.1:9103/mcp";
-export const DEFAULT_AUTH_TOKEN_ENV = "REFLECTLOG_MCP_TOKEN";
+export const DEFAULT_AUTH_TOKEN_ENV = "REFLECTLOG_MCP_AUTH_TOKEN";
 export const MAX_SEARCH_RESULTS = 50;
 
 const AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;

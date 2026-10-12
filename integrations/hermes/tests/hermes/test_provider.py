@@ -327,7 +327,7 @@ def test_local_status_without_network(hermes_provider, monkeypatch):
     assert signature["reflectlog.namespace"] == "status-test"
     assert fake.token not in json.dumps(status)
     assert not fake.requests
-    monkeypatch.setenv("REFLECTLOG_MCP_TOKEN", " \n")
+    monkeypatch.setenv("REFLECTLOG_MCP_AUTH_TOKEN", " \n")
     assert not provider.is_available()
 
 
@@ -336,7 +336,7 @@ def test_invalid_configuration_stays_inactive(
 ):
     # Given a malformed local configuration and a secret token.
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setenv("REFLECTLOG_MCP_TOKEN", "private-token")
+    monkeypatch.setenv("REFLECTLOG_MCP_AUTH_TOKEN", "private-token")
     (tmp_path / "reflectlog.json").write_text("{invalid", encoding="utf-8")
     provider = plugin_import("provider").ReflectLogMemoryProvider()
     # When Hermes initializes the provider.

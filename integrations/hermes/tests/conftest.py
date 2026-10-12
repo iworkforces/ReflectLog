@@ -81,7 +81,7 @@ def hermes_provider(plugin_import, tmp_path, monkeypatch):
     import httpx
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setenv("REFLECTLOG_MCP_TOKEN", " qa-token \n")
+    monkeypatch.setenv("REFLECTLOG_MCP_AUTH_TOKEN", " qa-token \n")
     fake = plugin_import("tests.support.fake_server").FakeReflectLogServer()
     providers = []
 

@@ -9,12 +9,12 @@ setup.
 
 The default endpoint is `http://127.0.0.1:9103/mcp`. The plugin reads its bearer
 token at connection time from the environment variable named by `authTokenEnv`,
-which defaults to `REFLECTLOG_MCP_TOKEN`. Its value must match the server's
-`MCP_AUTH_TOKEN`. Keep the token out of configuration files and logs. Set it in
+which defaults to `REFLECTLOG_MCP_AUTH_TOKEN`. Its value must match the server's
+`REFLECTLOG_MCP_AUTH_TOKEN`. Keep the token out of configuration files and logs. Set it in
 the environment that starts OpenClaw, for example:
 
 ```bash
-REFLECTLOG_MCP_TOKEN=... openclaw reflectlog status
+REFLECTLOG_MCP_AUTH_TOKEN=... openclaw reflectlog status
 ```
 
 The handshake requires `add_memories`, `search_memories`, `get_all_memories`,
@@ -37,7 +37,7 @@ runtime default:
         "config": {
           "transport": "http",
           "url": "http://127.0.0.1:9103/mcp",
-          "authTokenEnv": "REFLECTLOG_MCP_TOKEN",
+          "authTokenEnv": "REFLECTLOG_MCP_AUTH_TOKEN",
           "namespace": "openclaw",
           "workspaceOverrides": {},
           "defaultMaxResults": 6,
@@ -54,7 +54,7 @@ runtime default:
 - `transport`: only `"http"`, meaning streamable HTTP. No stdio or SSE.
 - `url`: an HTTP or HTTPS URL; default `"http://127.0.0.1:9103/mcp"`.
 - `authTokenEnv`: an environment-variable name matching
-  `^[A-Za-z_][A-Za-z0-9_]*$`; default `"REFLECTLOG_MCP_TOKEN"`.
+  `^[A-Za-z_][A-Za-z0-9_]*$`; default `"REFLECTLOG_MCP_AUTH_TOKEN"`.
 - `namespace`: deployment namespace matching `^[a-z0-9][a-z0-9_.-]{0,31}$`;
   default `"openclaw"`.
 - `workspaceOverrides`: agent-id to owner-private workspace-id map; default
