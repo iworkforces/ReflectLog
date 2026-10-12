@@ -141,6 +141,9 @@ Examples:
   # Export readable content from an archived, stopped workspace (no server)
   reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
 
+  # Verify an exported bundle offline without modifying it
+  reflectlog salvage-verify --bundle BUNDLE_DIR --workspace-id ID
+
 Workspace selection is required as workspace_id on every MCP tool call.
 WORKSPACE_ID is ignored by the server.
 
@@ -187,7 +190,7 @@ Environment Variables:
     subcommands = parser.add_subparsers(
         dest="command",
         title="commands",
-        metavar="{salvage}",
+        metavar="{salvage,salvage-verify}",
         description="Without a command, run the MCP server.",
     )
     salvage = subcommands.add_parser(
@@ -216,6 +219,23 @@ Environment Variables:
         help="New directory for memories.jsonl and manifest.json (must not exist)",
     )
 
+    verify = subcommands.add_parser(
+        "salvage-verify",
+        help="Offline, read-only verification of an exported salvage bundle",
+        description=(
+            "Offline, read-only verification of an exported salvage bundle. "
+            "No engine or model is loaded; a matching hash is not authenticity."
+        ),
+    )
+    _ = verify.add_argument(
+        "--bundle",
+        required=True,
+        help="Exported salvage bundle directory (never modified)",
+    )
+    _ = verify.add_argument(
+        "--workspace-id", required=True, help="Expected workspace id (never inferred)"
+    )
+
     return parser.parse_args()
 
 
@@ -235,6 +255,10 @@ def main() -> None:
         from reflectlog.application.salvage.cli import run
 
         sys.exit(run(args))
+    if args.command == "salvage-verify":
+        from reflectlog.application.salvage.verify_cli import run as run_verify
+
+        sys.exit(run_verify(args))
     transport_mode = _apply_cli_env_vars(args)
     output_stream = sys.stdout
 

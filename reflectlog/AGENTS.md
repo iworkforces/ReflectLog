@@ -29,9 +29,10 @@ reflectlog/
 | Task | Location | Notes |
 |------|----------|-------|
 | Startup | `server.py` | Warmup; no plugin load; no `setup_config_reload` |
-| Offline salvage CLI | `application/salvage/__init__.py`, `application/salvage/cli.py` | Lazy dispatch from `server.py` before server env/config loading |
+| Offline salvage CLI | `application/salvage/cli.py`, `application/salvage/verify_cli.py` | Export and verify dispatch lazily from `server.py` before env/config loading |
 | Salvage service + manifest | `application/salvage/service.py`, `application/salvage/manifest.py` | `ContentSalvageService.from_defaults()`; deterministic JSONL + manifest |
-| Salvage contracts | `core/salvage.py`, `core/exceptions.py` | Snapshot/bundle protocols and `SalvageError` family |
+| Bundle verification | `application/salvage/verification.py`, `infrastructure/salvage_bundle_reader.py` | `ContentSalvageVerifier`; captured bytes, closed schemas, digest/count/readiness; no writes |
+| Salvage contracts | `core/salvage.py`, `core/exceptions.py` | Snapshot/bundle protocols, verification statuses/issues/reader, `SalvageError` family |
 | Salvage I/O | `infrastructure/salvage_archive.py`, `infrastructure/salvage_snapshot.py`, `infrastructure/salvage_publication.py` | Fingerprint, disposable read-only SQLite, exclusive publication |
 | MCP tools | `application/mcp_server.py` | `workspace_id` on every call; registry then tool |
 | Engines | `application/memory/manager.py` | Inlines `from_config()`; `EngineFactory` unused at runtime |
@@ -46,7 +47,7 @@ reflectlog/
 
 - Two utility layers: `utility/` = HTTP/scoring/retry/credentials; `application/utils/` = logging/`SecretString`/validation.
 - Factories: `from_config()` (not `from_app_config()`).
-- Offline salvage uses `ContentSalvageService.from_defaults()`, not config-driven startup. No `MemoryManager`, `MemoryStore`, engines, journal replay, or model loading.
+- Offline export/verify use `ContentSalvageService.from_defaults()` / `ContentSalvageVerifier.from_defaults()`, not config-driven startup. No manager, `MemoryStore`, engines, journal replay, or models; verification opens no SQLite and creates no files.
 - Lock order: Portalocker lease → `_write_lock` → `_lock`. `threading.RLock`.
 - `access.py` deleted. No `getattr` / `optional_attr` / `invoke_if_callable` / `type(obj).__dict__`.
 
