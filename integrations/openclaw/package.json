@@ -33,9 +33,9 @@
   "devDependencies": {
     "@types/node": "^26.6.5",
     "commander": "15.0.0",
-    "openclaw": "2026.10.1",
+    "openclaw": "2026.10.2",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.4"
   },
   "openclaw": {
     "extensions": [
@@ -51,7 +51,7 @@
       "minGatewayVersion": "2026.10.1"
     },
     "build": {
-      "openclawVersion": "2026.10.1"
+      "openclawVersion": "2026.10.2"
     }
   }
 }
