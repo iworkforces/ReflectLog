@@ -213,13 +213,11 @@ def handle_tool_call(context: ToolContext, name: str, args: dict[str, object]) -
     except PolicyError as error:
         return error_result(str(error), "invalid_input")
     except ReflectLogError as error:
-        if error.code == "outcome_unknown":
-            message = (
-                "The write may or may not have been applied. Check with "
-                "reflectlog_search or reflectlog_list before retrying."
-            )
-        elif error.code == "tool_error" and error.server_detail:
-            message = error.server_detail[:500]
-        else:
-            message = str(error)
+        # Server error text is never returned: it can echo credentials.
+        message = (
+            "The write may or may not have been applied. Check with "
+            "reflectlog_search or reflectlog_list before retrying."
+            if error.code == "outcome_unknown"
+            else str(error)
+        )
         return error_result(message, error.code)

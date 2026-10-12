@@ -127,22 +127,23 @@ def test_smart_replace_opt_in(hermes_provider, enabled, expected):
     assert fake.dispatches["add_memories"] == int(enabled)
 
 
-def test_tool_error_detail_bounded(hermes_provider, plugin_import, monkeypatch, caplog):
-    # Given a classified server error with a long sensitive detail.
+def test_tool_errors_never_return_server_detail(hermes_provider, plugin_import, caplog):
+    # Given a server error whose detail echoes the configured token.
     provider, fake = hermes_provider()
     models = plugin_import("core.models")
 
     class FailingClient:
         def get_all_memories(self, *args, **kwargs):
             raise models.ReflectLogError(
-                "tool_error", "safe", server_detail="sensitive-detail-" * 100
+                "tool_error",
+                "ReflectLog tool failed",
+                server_detail="Rejected Bearer qa-token in upstream validation",
             )
 
     tools = plugin_import("tool_handlers")
     context = tools.ToolContext(FailingClient(), provider.settings, "test", True)
     # When it crosses the real Hermes JSON error helper.
     result = json.loads(tools.handle_tool_call(context, "reflectlog_list", {}))
-    # Then the returned detail is bounded and not logged.
-    assert len(result["error"]) == 500
-    assert result["code"] == "tool_error"
-    assert "sensitive-detail" not in caplog.text
+    # Then only the client's own message is returned, and nothing is logged.
+    assert result == {"error": "ReflectLog tool failed", "code": "tool_error"}
+    assert "qa-token" not in caplog.text
