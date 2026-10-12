@@ -79,7 +79,16 @@ def test_incompatible(wire, drop, error_type):
 
 
 @pytest.mark.parametrize(
-    "fault", ["session400", "session404", "audit400", "read_error", "read_timeout"]
+    "fault",
+    [
+        "session400",
+        "session404",
+        "audit400",
+        "noid400",
+        "nested400",
+        "read_error",
+        "read_timeout",
+    ],
 )
 def test_reads_retry_once(wire, fault):
     # given
@@ -113,6 +122,10 @@ def test_second_session_failure(wire, error_type):
         ("session404", None, 1),
         ("session400", None, 1),
         ("audit400", "outcome_unknown", 1),
+        ("noid400", "outcome_unknown", 1),
+        ("version400", "outcome_unknown", 1),
+        ("nested400", "outcome_unknown", 1),
+        ("nested", "outcome_unknown", 1),
         ("bad_result", "outcome_unknown", 1),
         ("validation", "tool_error", 1),
         ("execution", "outcome_unknown", 1),
@@ -148,7 +161,7 @@ def test_read_execution_error(wire, fault, error_type):
     assert error.value.code == "tool_error"
 
 
-@pytest.mark.parametrize("fault", ["malformed", "mismatch", "missing"])
+@pytest.mark.parametrize("fault", ["malformed", "mismatch", "missing", "nested"])
 def test_malformed(wire, fault, error_type):
     # given
     server, client = wire
@@ -197,6 +210,46 @@ def test_slow_headers_deadline(wire, mutation, error_type):
     assert error.value.code == ("outcome_unknown" if mutation else "timeout")
     assert time.monotonic() - start < 0.5
     assert server.dispatches[tool] == before + 1
+
+
+@pytest.mark.parametrize("mode", ["block", "raise"])
+@pytest.mark.parametrize("mutation", [True, False])
+def test_timeout_cleanup_never_delays_the_caller(wire, mode, mutation, error_type):
+    # given a body that ends only when closed, and a close that blocks or raises
+    server, client = wire
+    client.probe("ws")
+    server.close_delay = 0.4 if mode == "block" else 0.0
+    server.close_error = mode == "raise"
+    tool = "add_memories" if mutation else "get_all_memories"
+    server.faults[tool].append("stall")
+    start = time.monotonic()
+    # when
+    with pytest.raises(error_type) as error:
+        if mutation:
+            client.add_memories("ws", ["text"], deadline=start + 0.1)
+        else:
+            client.probe("ws", deadline=start + 0.1)
+    # then
+    assert error.value.code == ("outcome_unknown" if mutation else "timeout")
+    assert time.monotonic() - start < 0.35
+
+
+def test_unreadable_session_error_body(wire, error_type, monkeypatch, plugin_import):
+    # given 404 bodies too large to read, after the tool ran
+    server, client = wire
+    client.probe("ws")
+    monkeypatch.setattr(plugin_import("core.client"), "MAX_RESPONSE_BYTES", 4096)
+    server.faults["get_all_memories"].append("big404")
+    server.faults["add_memories"].append("big404")
+    # when
+    total = client.probe("ws")
+    with pytest.raises(error_type) as error:
+        client.add_memories("ws", ["memory"])
+    # then the read re-handshakes and the mutation is never resent
+    assert total == 0
+    assert server.handshakes == 2
+    assert error.value.code == "outcome_unknown"
+    assert server.dispatches["add_memories"] == 1
 
 
 def test_unreadable_results(wire, error_type):

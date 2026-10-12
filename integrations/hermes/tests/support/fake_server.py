@@ -5,9 +5,14 @@ FakeReflectLogServer(token) is callable. expire_sessions() invalidates sessions;
 faults[tool] queues connect/read_timeout/read_error/heartbeat/session400/session404,
 validation/execution/malformed/mismatch/missing faults, plus rpc_params (JSON-RPC
 -32602 before running) and rpc_internal (-32603 after running). session400/404 use the
-MCP SDK's pre-dispatch body; audit400 (a 400 after running), bad_result (unreadable
-structuredContent after running) and slow_headers (slow_s before any response
-after running) model post-dispatch failures; delete_delay slows session DELETE.
+MCP SDK's pre-dispatch body; audit400 (a 400 after running), noid400/version400
+(-32600 session errors without an explicit null id / with the wrong jsonrpc after
+running), nested400/big404 (unparsable / oversized session error bodies after
+running), nested (an unparsable 200 body), bad_result (unreadable structuredContent
+after running) and slow_headers (slow_s before any response after running) model
+post-dispatch failures; stall answers with a body that ends only when closed, and
+close_delay/close_error make that close slow or raise; delete_delay slows session
+DELETE.
 framing selects json/plain/comments/multiline. drop_tool and allow_replace configure
 compatibility; requests, dispatches, handshakes and deletes expose receipts.
 entered/release optionally gate tools/call for event-based concurrency tests. All
@@ -48,6 +53,22 @@ class Fragments(httpx.SyncByteStream):
             yield self.data[offset : offset + 7]
 
 
+class Stalled(httpx.SyncByteStream):
+    def __init__(self, server):
+        self.server = server
+        self.closed = threading.Event()
+
+    def __iter__(self):
+        self.closed.wait(5)
+        yield from ()
+
+    def close(self):
+        self.closed.set()
+        time.sleep(self.server.close_delay)
+        if self.server.close_error:
+            raise OSError("private close failure")
+
+
 class FakeReflectLogServer:
     def __init__(self, token="qa-token"):
         self.token = token
@@ -69,6 +90,8 @@ class FakeReflectLogServer:
         self.release = None
         self.slow_s = 1.0
         self.delete_delay = 0.0
+        self.close_delay = 0.0
+        self.close_error = False
         self.lock = threading.RLock()
 
     def expire_sessions(self):
@@ -224,6 +247,31 @@ class FakeReflectLogServer:
             time.sleep(self.slow_s)
         if fault == "audit400":
             return httpx.Response(400, text="Session audit failed after applying it")
+        if fault in {"noid400", "version400"}:
+            forged = {
+                "jsonrpc": "1.0" if fault == "version400" else "2.0",
+                "error": {
+                    "code": -32600,
+                    "message": "Session audit failed after applying it",
+                },
+            }
+            if fault == "version400":
+                forged["id"] = None
+            return httpx.Response(400, json=forged)
+        if fault == "nested400":
+            return httpx.Response(400, text="[" * 100_000)
+        if fault == "big404":
+            return httpx.Response(404, text="x" * 8192)
+        if fault == "nested":
+            return httpx.Response(
+                200, text="[" * 100_000, headers={"content-type": "application/json"}
+            )
+        if fault == "stall":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=Stalled(self),
+            )
         if fault == "read_timeout":
             raise httpx.ReadTimeout("lost private response", request=request)
         if fault == "read_error":

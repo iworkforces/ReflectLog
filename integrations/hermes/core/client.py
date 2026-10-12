@@ -5,7 +5,7 @@ SIZE_OK: the session/retry state machine stays together in the assigned module.
 
 from __future__ import annotations
 
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 import itertools
 import json
@@ -25,7 +25,7 @@ from typing import (
 import httpx
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Generator, Sequence
 
 from .models import (
     AddResult,
@@ -81,9 +81,14 @@ def _session_rejection(body: bytes) -> bool:
     """Match the MCP SDK's pre-dispatch session error: -32600 with a null id."""
     try:
         value: object = json.loads(body)
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
         return False
-    if not _mapping(value) or value.get("id") is not None:
+    if (
+        not _mapping(value)
+        or value.get("jsonrpc") != "2.0"
+        or "id" not in value
+        or value["id"] is not None
+    ):
         return False
     error = value.get("error")
     if not _mapping(error) or error.get("code") != -32600:
@@ -104,15 +109,13 @@ class _NetworkStream(Protocol):
     def get_extra_info(self, info: str) -> object: ...
 
 
-def _interrupt(response: httpx.Response) -> None:
-    """Unblock a silent socket as well as a cooperatively closable test stream."""
+def _shutdown(response: httpx.Response) -> None:
     stream: object = response.extensions.get("network_stream")
     if isinstance(stream, _NetworkStream):
         connection = stream.get_extra_info("socket")
         if isinstance(connection, socket.socket):
             with suppress(OSError):
                 connection.shutdown(socket.SHUT_RDWR)
-    response.close()
 
 
 _T = TypeVar("_T")
@@ -127,9 +130,38 @@ class _Exchange(Generic[_T]):
 
     def __init__(self) -> None:
         self.done = threading.Event()
-        self.response: httpx.Response | None = None
         self.value: _T | None = None
         self.error: Exception | None = None
+        self._lock = threading.Lock()
+        self._response: httpx.Response | None = None
+        self._cancelled = False
+
+    @contextmanager
+    def attached(self, response: httpx.Response) -> Generator[None]:
+        with self._lock:
+            if self._cancelled:
+                raise ReflectLogError("timeout", "ReflectLog deadline exceeded")
+            self._response = response
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._response = None
+
+    def cancel(self) -> None:
+        """Interrupt a response still being read.
+
+        A detached response may already be back in the connection pool, so its
+        socket is only shut down while attached. Closing is best effort.
+        """
+        with self._lock:
+            self._cancelled = True
+            response = self._response
+            if response is not None:
+                _shutdown(response)
+        if response is not None:
+            with suppress(OSError, httpx.HTTPError):
+                response.close()
 
 
 @dataclass(frozen=True)
@@ -192,7 +224,7 @@ class ReflectLogClient:
     def _message(self, data: bytes, identity: int) -> dict[str, object] | None:
         try:
             value: object = json.loads(data)
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             raise ReflectLogError("malformed", "Invalid MCP JSON response") from None
         message = _object(value)
         if message.get("id") != identity:
@@ -225,8 +257,10 @@ class ReflectLogClient:
 
         threading.Thread(target=run, name="reflectlog-http", daemon=True).start()
         if not exchange.done.wait(remaining):
-            if exchange.response is not None:
-                _interrupt(exchange.response)
+            # Interrupting can block or fail; the deadline does not wait for it.
+            threading.Thread(
+                target=exchange.cancel, name="reflectlog-cancel", daemon=True
+            ).start()
             raise ReflectLogError("timeout", "ReflectLog deadline exceeded")
         if exchange.error is not None:
             raise exchange.error
@@ -305,10 +339,12 @@ class ReflectLogClient:
         def work(
             exchange: _Exchange[tuple[dict[str, object], str | None]],
         ) -> tuple[dict[str, object], str | None]:
-            with self._http.stream(
-                "POST", self._url, json=payload, headers=headers, timeout=timeout
-            ) as response:
-                exchange.response = response
+            with (
+                self._http.stream(
+                    "POST", self._url, json=payload, headers=headers, timeout=timeout
+                ) as response,
+                exchange.attached(response),
+            ):
                 return self._receive(
                     response, identity, session, deadline, notification=notification
                 )
@@ -330,9 +366,11 @@ class ReflectLogClient:
         if response.status_code in {400, 404} and session:
             # Any such status ends the session, but only the server's own
             # pre-dispatch rejection proves that a mutation never ran.
-            raise _SessionInvalidError(
-                _session_rejection(self._body(response, deadline))
-            )
+            try:
+                body = self._body(response, deadline)
+            except ReflectLogError:
+                raise _SessionInvalidError(False) from None
+            raise _SessionInvalidError(_session_rejection(body))
         if response.status_code >= 400:
             raise ReflectLogError("unavailable", "ReflectLog HTTP request failed")
         if notification and response.status_code in {200, 202, 204}:
@@ -628,10 +666,13 @@ class ReflectLogClient:
                 timeout = min(budget_s, self._request_timeout)
 
                 def work(exchange: _Exchange[None]) -> None:
-                    with self._http.stream(
-                        "DELETE", self._url, headers=headers, timeout=timeout
-                    ) as response:
-                        exchange.response = response
+                    with (
+                        self._http.stream(
+                            "DELETE", self._url, headers=headers, timeout=timeout
+                        ) as response,
+                        exchange.attached(response),
+                    ):
+                        pass
 
                 # Ending the server session is best effort within the budget.
                 with suppress(ReflectLogError, httpx.HTTPError):
