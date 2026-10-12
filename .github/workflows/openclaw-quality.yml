@@ -1,0 +1,46 @@
+name: openclaw-quality
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - integrations/openclaw/**
+      - .github/workflows/openclaw-quality.yml
+  pull_request:
+    paths:
+      - integrations/openclaw/**
+      - .github/workflows/openclaw-quality.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["24", "26"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: integrations/openclaw
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.9.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+          cache-dependency-path: integrations/openclaw/pnpm-lock.yaml
+      - name: Frozen install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck, source tests, build, and compiled smoke
+        run: pnpm check
