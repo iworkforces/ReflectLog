@@ -1,7 +1,7 @@
 # Agent Guidelines for reflectlog/infrastructure/embeddings/
 
-**Generated:** 2026-09-28
-**Commit:** aaebf3c
+**Generated:** 2026-10-11
+**Commit:** 4159261
 **Branch:** develop
 
 ## OVERVIEW
@@ -13,6 +13,7 @@ Only populated child of `infrastructure/`. Local WeMM, Qwen OpenRouter, and an L
 embeddings/
 ├── cached_embeddings.py  # SHA-256 LRU; fail-closed batches
 ├── wemm_embedding.py     # Local SentenceTransformer; text only
+├── wemm_service.py       # acquire_wemm() -> WeMMBorrow; one shared model
 └── qwen3_embedding.py    # OpenAI-compat OpenRouter client
 ```
 
@@ -36,6 +37,7 @@ embeddings/
 ## CONVENTIONS
 
 - Imports: `reflectlog.infrastructure.embeddings.*`. Not at package root.
+- WeMM loads through `wemm_service.acquire_wemm(config)`: one shared, refcounted `WeMMEmbeddings`. A concurrent acquire with a different `WeMMEmbeddingConfig` raises `ValueError`.
 - WeMM query and document encoders differ. The manager sets `CachedEmbeddings.role_separated=True` for WeMM only. Qwen shares one SHA-256 key.
 - WeMM load tries `local_files_only=True`, then downloads on `OSError`. Empty, short, non-finite, or zero vectors raise.
 - Qwen is OpenAI-compatible OpenRouter. Langchain name is leftover.

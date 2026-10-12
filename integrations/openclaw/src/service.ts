@@ -1,7 +1,10 @@
 import type { MemoryScope } from "./access.js";
 import { type ReflectLogPluginConfig, MAX_SEARCH_RESULTS } from "./config.js";
+import { FlushCoordinator } from "./flush-coordinator.js";
+import { FlushDisposedError, FlushLedger } from "./flush-ledger.js";
 import { looksLikePromptInjection, normalizeMemoryText } from "./policy.js";
 import { formatRef, parseRef, revisionOf } from "./references.js";
+import { ReflectLogError } from "./reflectlog/types.js";
 import type {
   AddMemoriesResult,
   ReflectLogClient,
@@ -120,17 +123,41 @@ function sliceLines(
   };
 }
 
+export type FlushOutcome = Readonly<{ result: AddMemoriesResult; deduplicated: boolean }>;
+export type FlushLedgerOptions = ConstructorParameters<typeof FlushLedger>[0];
+
 /**
  * The single code path from every entry point (provider handle, agent tools,
  * flush, CLI) to ReflectLog. Callers resolve a {@link MemoryScope} first.
+ *
+ * One instance is one backend lifecycle: it owns its flush dedup state, which
+ * ends with {@link MemoryService.dispose}. Dedup is process-local and bounded;
+ * it is not restart-safe.
  */
 export class MemoryService {
   readonly #client: ReflectLogClient;
   readonly #config: ReflectLogPluginConfig;
+  readonly #flushes: FlushCoordinator<AddMemoriesResult>;
+  #disposed = false;
 
-  constructor(client: ReflectLogClient, config: ReflectLogPluginConfig) {
+  constructor(client: ReflectLogClient, config: ReflectLogPluginConfig, options: { flush?: FlushLedgerOptions } = {}) {
     this.#client = client;
     this.#config = config;
+    this.#flushes = new FlushCoordinator(options.flush);
+  }
+
+  /**
+   * End this backend lifecycle: pending flushes settle conservatively
+   * (dispatched => `outcome_unknown`), dedup state is dropped, and later
+   * mutations are rejected before any I/O. The caller closes the client.
+   */
+  dispose(): void {
+    this.#disposed = true;
+    this.#flushes.dispose();
+  }
+
+  #assertOpen(): void {
+    if (this.#disposed) throw new FlushDisposedError();
   }
 
   async search(
@@ -230,7 +257,12 @@ export class MemoryService {
     };
   }
 
-  /** Every record in the scope, failing rather than returning a torn snapshot. */
+  /**
+   * Every record in the scope, read page by page. This is a best-effort
+   * paginated observation, not an atomic snapshot: it fails when the total
+   * changes between pages or the pages do not add up, but a concurrent
+   * replace that keeps the count can still go unnoticed.
+   */
   async exportAll(scope: MemoryScope, guard: EffectGuard): Promise<readonly MemoryEntry[]> {
     const entries: MemoryEntry[] = [];
     let expectedTotal: number | null = null;
@@ -264,6 +296,7 @@ export class MemoryService {
     options: { dryRun: boolean; allowReplace: boolean },
     guard: EffectGuard,
   ): Promise<AddMemoriesResult> {
+    this.#assertOpen();
     const normalized = this.prepareMemories(memories);
     guard.assertCurrent();
     const result = await this.#client.addMemories(
@@ -275,8 +308,36 @@ export class MemoryService {
       },
       { signal: guard.signal },
     );
-    guard.assertCurrent();
+    if (options.dryRun) guard.assertCurrent();
+    else this.#assertMutationCurrent(guard);
     return result;
+  }
+
+  /**
+   * Add-only persistence of one pre-compaction flush, shared by every caller
+   * presenting the same `flushId` and batch to this service. Validation and
+   * authority run before the caller joins; the shared write is never replace
+   * and is dispatched only while at least one waiter is current. Each waiter
+   * re-checks its authority before it receives the result.
+   */
+  async flush(
+    scope: MemoryScope,
+    flushId: string,
+    memories: readonly string[],
+    guard: EffectGuard,
+  ): Promise<FlushOutcome> {
+    this.#assertOpen();
+    const prepared = this.prepareMemories(memories);
+    guard.assertCurrent();
+    const outcome = await this.#flushes.run(
+      FlushLedger.key(flushId, scope.workspaceId, prepared),
+      guard,
+      ({ signal, beforeDispatch }) => this.#client.addMemories(
+        { workspaceId: scope.workspaceId, memories: prepared, dryRun: false, allowReplace: false },
+        { signal, beforeDispatch },
+      ),
+    );
+    return { result: outcome.value, deduplicated: outcome.deduplicated };
   }
 
   prepareMemories(memories: readonly string[]): readonly string[] {
@@ -304,6 +365,7 @@ export class MemoryService {
 
   /** Remove by reference. Malformed or foreign references are reported missing without I/O. */
   async forget(scope: MemoryScope, refs: readonly string[], guard: EffectGuard): Promise<ForgetOutcome> {
+    this.#assertOpen();
     if (refs.length === 0) {
       throw new MemoryInputError("at least one reference is required");
     }
@@ -328,7 +390,7 @@ export class MemoryService {
       { workspaceId: scope.workspaceId, ids: [...byId.keys()] },
       { signal: guard.signal },
     );
-    guard.assertCurrent();
+    this.#assertMutationCurrent(guard);
     const removed = result.removed.flatMap((id) => {
       const ref = byId.get(id);
       return ref === undefined ? [] : [ref];
@@ -340,6 +402,19 @@ export class MemoryService {
       }
     }
     return { removed, missing };
+  }
+
+  /** A revoked caller gets no result and must not mistake an acknowledged mutation for an unsent one. */
+  #assertMutationCurrent(guard: EffectGuard): void {
+    try {
+      guard.assertCurrent();
+    } catch (cause) {
+      throw new ReflectLogError(
+        "outcome_unknown",
+        "the mutation may have been applied, but the caller is no longer current",
+        { cause },
+      );
+    }
   }
 
   async health(scope: MemoryScope, guard: EffectGuard): Promise<void> {

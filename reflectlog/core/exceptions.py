@@ -16,7 +16,15 @@ Hierarchy:
     │   │   └── GenerationError - Invalid generation sidecar
     │   └── InconsistentStateError - Dual-engine state mismatch
     ├── SearchError - Search operation failures
-    └── EmbeddingError - Embedding generation failures
+    ├── EmbeddingError - Embedding generation failures
+    └── SalvageError - Offline content-salvage failures
+        ├── SalvageInputError - Missing, symlinked, or unusable input
+        ├── SalvageUnsupportedSchemaError - Database lacks the memories schema
+        ├── SalvageMalformedRecordError - A memory row cannot be exported
+        ├── SalvageDamagedDatabaseError - SQLite file is damaged or unreadable
+        ├── SalvageArchiveChangedError - Archive changed while being salvaged
+        ├── SalvageUnsafeOutputError - Output location is unsafe or taken
+        └── SalvagePublicationError - Writing the export bundle failed
 """
 
 
@@ -188,5 +196,57 @@ class RerankerError(ReflectLogError):
     Individual document scoring failures fall back to fusion scores;
     this exception is for systemic failures.
     """
+
+    pass
+
+
+class SalvageError(ReflectLogError):
+    """Base for offline content-salvage failures.
+
+    Messages carry paths, row ids, column names, and reasons only. They never
+    include memory content, so the CLI can print them verbatim.
+    """
+
+    pass
+
+
+class SalvageInputError(SalvageError):
+    """Raised when the archive, its database, or the workspace id is unusable."""
+
+    pass
+
+
+class SalvageUnsupportedSchemaError(SalvageError):
+    """Raised when the database lacks the ``memories`` columns salvage needs."""
+
+    pass
+
+
+class SalvageMalformedRecordError(SalvageError):
+    """Raised when an active memory row cannot be exported faithfully."""
+
+    pass
+
+
+class SalvageDamagedDatabaseError(SalvageError):
+    """Raised when the SQLite copy is damaged or cannot be read."""
+
+    pass
+
+
+class SalvageArchiveChangedError(SalvageError):
+    """Raised when the archive differs before and after inspection."""
+
+    pass
+
+
+class SalvageUnsafeOutputError(SalvageError):
+    """Raised when the output path exists or lies inside the archive or scratch."""
+
+    pass
+
+
+class SalvagePublicationError(SalvageError):
+    """Raised when the export bundle could not be published."""
 
     pass

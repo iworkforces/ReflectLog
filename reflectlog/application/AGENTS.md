@@ -30,6 +30,9 @@ application/
 | Task | Location | Notes |
 |------|----------|-------|
 | Tool wiring | `mcp_server.py` | `WorkspaceRegistry.acquire` then a per-call tool |
+| Offline salvage CLI | `salvage/__init__.py`, `salvage/cli.py` | `run(args)` returns exit code; JSON summary or `reflectlog salvage: <message>` |
+| Salvage orchestration | `salvage/service.py` | Application-owned `ContentSalvageService`; core protocols, `from_defaults()` wires infrastructure |
+| Salvage payloads | `salvage/manifest.py` | Deterministic `memories.jsonl` + `manifest.json`; stable `unresolved_reasons` codes |
 | Facade | `memory/manager.py` | Portalocker → `_write_lock` → `_lock` |
 | Workspace pin | `memory/workspace_registry.py` | Idle TTL 900s, max 8 idle; reaper in lifespan |
 | Add | `memory/add_phases.py` | Embed outside exclusive; leftover ADD after generation |
@@ -40,6 +43,8 @@ application/
 ## CONVENTIONS
 
 - `FastMCPServer(server_config: Config | None = None)`; defaults to `get_config()`.
+- Salvage CLI is `application/salvage/cli.py`, lazily dispatched before server env/config loading. Service loads no config and constructs no manager, registry, engine, or model; infrastructure owns archive/snapshot/publication I/O.
+- Salvage exports observed active rows only. Raw journal evidence stays separate; pending `new_content` never becomes active content. `rebuild_ready=false` requires manual review before rebuilding.
 - Engines: manager calls `USearchConfig.from_config(ConfigAdapter(config))` (CE/replacer same). Do not route startup through `EngineFactory`.
 - Tools: `AddMemoriesTool` / `SearchMemoriesTool` / `GetAllMemoriesTool` / `GetMemoryByIdTool` / `DeleteMemoriesTool` only. Each MCP call passes `workspace_id`; all five handlers return `Awaitable[dict[str, object]]`. Never import engines or fusion.
 - `get_all_memories` returns an id-ordered records page and total from one read. Sync `MemoryManager.add_memories` skips smart replace; MCP `add_memories` uses the async pipeline.

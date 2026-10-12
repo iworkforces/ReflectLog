@@ -10,7 +10,8 @@ import {
 } from "./parse.js";
 import type { ToolResponse } from "./parse.js";
 import { ReflectLogError, REQUIRED_REFLECTLOG_TOOLS } from "./types.js";
-import type { CallOptions, ReflectLogClient } from "./types.js";
+import type { CallOptions, ReflectLogClient, ReflectLogErrorCode } from "./types.js";
+import { waitFor } from "./wait-for.js";
 
 export interface McpConnection {
   listTools(options: { readonly signal: AbortSignal; readonly timeout: number }): Promise<{
@@ -46,17 +47,6 @@ const connectSdk: ConnectFn = async (config, options) => {
     throw cause;
   }
 };
-
-/** Cancel a waiter without cancelling the single-flight connection for other callers. */
-function waitFor<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  if (signal.aborted) return Promise.reject(signal.reason);
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason);
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-  });
-}
 
 type Live = { readonly generation: number; readonly connection: McpConnection };
 
@@ -135,6 +125,7 @@ export function createReflectLogClient(
     for (let attempt = 0; attempt < 2; attempt++) {
       let sent = false;
       let current = generation;
+      let veto: { readonly error: unknown } | undefined;
       try {
         options?.signal?.throwIfAborted();
         const acquiring = acquire();
@@ -142,6 +133,12 @@ export function createReflectLogClient(
         const acquired = await waitFor(acquiring, options?.signal);
         current = acquired.generation;
         options?.signal?.throwIfAborted();
+        try {
+          options?.beforeDispatch?.();
+        } catch (error) {
+          veto = { error };
+          throw error;
+        }
         // SDK has no delivery acknowledgement: invocation is conservatively possibly sent.
         sent = true;
         const response = await waitFor(acquired.connection.callTool({
@@ -151,25 +148,29 @@ export function createReflectLogClient(
         }), options?.signal);
         return parseToolResponse(response, request.schema);
       } catch (cause) {
-        if (cause instanceof ReflectLogError) throw cause;
-        const uncertain = request.mutation && sent;
-        if (options?.signal?.aborted) throw new ReflectLogError(
-          uncertain ? "outcome_unknown" : "aborted", "ReflectLog call aborted", { cause });
-        if (cause instanceof UnauthorizedError || (cause instanceof SdkHttpError && cause.status === 401)) {
-          throw new ReflectLogError("unauthorized", "ReflectLog authentication failed", { cause });
+        if (veto) throw veto.error;
+        // Once a mutation may have been sent, every failure leaves its effect unknown.
+        const uncertain = request.mutation === true && sent;
+        const raise: (code: ReflectLogErrorCode, message: string) => never = (code, message) => {
+          throw new ReflectLogError(uncertain ? "outcome_unknown" : code, message, { cause });
+        };
+        if (cause instanceof ReflectLogError) {
+          if (!uncertain) throw cause;
+          raise("outcome_unknown", "ReflectLog did not confirm the write");
         }
-        if (cause instanceof ProtocolError) throw new ReflectLogError(
-          "tool_error", "ReflectLog returned a protocol error", { cause });
+        if (options?.signal?.aborted) raise("aborted", "ReflectLog call aborted");
+        if (cause instanceof UnauthorizedError || (cause instanceof SdkHttpError && cause.status === 401)) {
+          raise("unauthorized", "ReflectLog authentication failed");
+        }
+        if (cause instanceof ProtocolError) raise("tool_error", "ReflectLog returned a protocol error");
         if (cause instanceof SdkError && cause.code === SdkErrorCode.InvalidResult) {
-          throw new ReflectLogError("malformed", "ReflectLog returned an invalid result", { cause });
+          raise("malformed", "ReflectLog returned an invalid result");
         }
         if (sent && cause instanceof SdkError && cause.code === SdkErrorCode.RequestTimeout) {
-          throw new ReflectLogError(uncertain ? "outcome_unknown" : "timeout",
-            "ReflectLog request timed out", { cause });
+          raise("timeout", "ReflectLog request timed out");
         }
         await invalidate(current);
-        if (request.mutation || attempt === 1) throw new ReflectLogError(
-          uncertain ? "outcome_unknown" : "unavailable", "ReflectLog connection unavailable", { cause });
+        if (request.mutation || attempt === 1) raise("unavailable", "ReflectLog connection unavailable");
       }
     }
     throw new ReflectLogError("unavailable", "ReflectLog connection unavailable");

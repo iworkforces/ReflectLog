@@ -276,6 +276,17 @@ class TestLightweightCliMetadata:
         assert completed.returncode == 0
         assert "transport" in completed.stdout.lower()
 
+    def test_help_lists_the_salvage_subcommand(self) -> None:
+        completed = _run_cli(["--help"])
+        assert completed.returncode == 0
+        assert "salvage" in completed.stdout
+
+    def test_salvage_help_exits_zero(self) -> None:
+        completed = _run_cli(["salvage", "--help"])
+        assert completed.returncode == 0
+        for option in ("--archive", "--workspace-id", "--output"):
+            assert option in completed.stdout
+
     def test_version_does_not_import_heavy_modules(self) -> None:
         from pathlib import Path
         import subprocess

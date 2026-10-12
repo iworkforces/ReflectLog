@@ -1,7 +1,7 @@
 # ReflectLog Utility
 
-**Generated:** 2026-09-28
-**Commit:** aaebf3c
+**Generated:** 2026-10-11
+**Commit:** 4159261
 **Branch:** develop
 
 ## OVERVIEW
@@ -32,7 +32,7 @@ utility/
 ## CONVENTIONS
 
 - This layer: HTTP / scoring / retry / credentials.
-- Array min-max of equal scores is `0.5`. `normalize_reranker_scores` maps empty, single, and all-equal batches to `1.0`.
+- Array min-max of equal scores is `0.5`. `normalize_reranker_scores` maps single and all-equal batches to `1.0`; an empty batch returns `[]`.
 - Infra imports `utility.security.validate_workspace_id`, not the copy in `application/utils/security.py`.
 - App layer `application/utils/`: `StructuredLogger`, `SecretString`, `validate_memories`.
 - `retry.py` is unused at runtime. `SmartReplacer` retries inline; do not wire `async_retry_with_backoff` without an explicit product change.

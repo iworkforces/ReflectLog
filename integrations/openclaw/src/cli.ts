@@ -6,10 +6,12 @@ import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/memory-core-host-e
 import { z } from "zod";
 import { conversationScope, ownerScope } from "./access.js";
 import { PLUGIN_ID, type ReflectLogPluginConfig } from "./config.js";
-import { archiveImportedFiles, collectMemoryFiles, splitMarkdownMemories } from "./importer.js";
-import { looksLikePromptInjection } from "./policy.js";
+import { ImportArchiveError, type ArchiveFs } from "./import-archive.js";
+import { countBatchStates } from "./import-receipt.js";
+import { runImport, type ImportRunResult } from "./import-run.js";
+import type { CaptureFs } from "./importer.js";
 import { ReflectLogError } from "./reflectlog/types.js";
-import { MAX_STORE_BATCH, MemoryConsistencyError, MemoryInputError, type MemoryService } from "./service.js";
+import { MemoryConsistencyError, MemoryInputError, type MemoryService } from "./service.js";
 
 const guard = { assertCurrent: (): void => {} };
 const integer = z.coerce.number().int().safe();
@@ -35,12 +37,52 @@ function errorHint(error: unknown, config: ReflectLogPluginConfig): string {
       case "aborted": return "ReflectLog operation aborted.";
     }
   }
-  if (error instanceof MemoryConsistencyError) return "Import/export verification failed; originals were not archived. Re-run list/export to check.";
+  if (error instanceof MemoryConsistencyError) return "Import/export verification failed; live files were not modified. Check the receipt and re-run list/export before retrying.";
+  if (error instanceof ImportArchiveError) return "Import archive could not be completed; live files were not modified and batches already sent are not rolled back. Inspect the incomplete archive and its receipt before retrying.";
   if (error instanceof MemoryInputError || error instanceof z.ZodError) return "Invalid command input; check arguments and numeric options.";
   return "ReflectLog command failed; check configuration, references, and file permissions.";
 }
 
-export function registerReflectLogCli(api: Pick<OpenClawPluginApi, "registerCli">, deps: { readonly config: ReflectLogPluginConfig; readonly getService: () => MemoryService }): void {
+const IMPORT_NOTES = [
+  "stored and skipped are aggregate server counts for acknowledged batches; they do not establish which entry was stored.",
+  "accepted entries were accepted for submission; a batch in state outcome_unknown may have been applied.",
+  "verification reads the workspace page by page and is not a global snapshot.",
+] as const;
+
+function importSummary(result: ImportRunResult, error: string | undefined) {
+  return {
+    ok: result.ok,
+    files: result.sources.map((source) => ({
+      source: source.relativePath, entries: source.entries.total, sha256: source.sha256, parse: source.parse,
+      ...(source.unparsedReason === undefined ? {} : { unparsedReason: source.unparsedReason }),
+    })),
+    accepted: result.accepted.length,
+    stored: result.totals.stored,
+    skipped: result.totals.rejected + result.totals.skipped,
+    totals: result.totals,
+    rejected: result.rejected.map((entry) => `${entry.source}:${entry.line}`),
+    dryRun: result.dryRun,
+    archivedTo: result.archive.status === "complete" ? result.archive.path ?? undefined : undefined,
+    archive: {
+      path: result.archive.path, status: result.archive.status, receipt: result.archive.receipt,
+      ...(result.archive.errorCode === undefined ? {} : { error: result.archive.errorCode }),
+    },
+    batches: { counts: countBatchStates(result.batches), items: result.batches },
+    verification: result.verification,
+    ...(result.failure === undefined ? {} : { failure: result.failure }),
+    ...(error === undefined ? {} : { error }),
+    notes: IMPORT_NOTES,
+  };
+}
+
+export type ReflectLogCliDeps = {
+  readonly config: ReflectLogPluginConfig;
+  readonly getService: () => MemoryService;
+  /** Import seams; defaults are the wall clock and the real filesystem. */
+  readonly import?: { readonly now?: () => Date; readonly fs?: { readonly capture?: CaptureFs; readonly archive?: ArchiveFs } };
+};
+
+export function registerReflectLogCli(api: Pick<OpenClawPluginApi, "registerCli">, deps: ReflectLogCliDeps): void {
   api.registerCli(({ program, config: hostConfig }) => {
     const root = program.command("reflectlog").description("Operate ReflectLog memory");
     const command = (name: string): Command => root.command(name)
@@ -100,26 +142,12 @@ export function registerReflectLogCli(api: Pick<OpenClawPluginApi, "registerCli"
     run(command("import").option("--workspace-dir <dir>").option("--dry-run").option("--archive"), async (_args, options) => {
       if (options.archive && options.dryRun) { console.error("--archive cannot be combined with --dry-run."); process.exitCode = 1; return; }
       const workspaceDir = options.workspaceDir ?? resolveAgentWorkspaceDir(hostConfig, options.agent);
-      const files = await collectMemoryFiles(workspaceDir);
-      const perFile = files.map((file) => ({ source: file.relativePath, entries: splitMarkdownMemories(file.relativePath, file.content) }));
-      const entries = perFile.flatMap((file) => file.entries);
-      const rejected = entries.filter((entry) => entry.text.length > 30720 || looksLikePromptInjection(entry.text));
-      const accepted = entries.filter((entry) => !rejected.includes(entry));
-      let stored = 0;
-      let skipped = rejected.length;
-      const service = deps.getService();
-      const selected = scope(options);
-      for (let offset = 0; offset < accepted.length; offset += MAX_STORE_BATCH) {
-        const result = await service.store(selected, accepted.slice(offset, offset + MAX_STORE_BATCH).map((entry) => entry.text), { dryRun: options.dryRun, allowReplace: false }, guard);
-        stored += result.storedCount; skipped += result.skippedCount;
-      }
-      let archivedTo: string | undefined;
-      if (!options.dryRun) {
-        const texts = new Set((await service.exportAll(selected, guard)).map((entry) => entry.text));
-        if (accepted.some((entry) => !texts.has(entry.text))) throw new MemoryConsistencyError("Import verification failed");
-        if (options.archive && files.length) archivedTo = await archiveImportedFiles(workspaceDir, files.map((file) => file.relativePath), new Date());
-      }
-      output({ files: perFile.map((file) => ({ source: file.source, entries: file.entries.length })), stored, skipped, rejected: rejected.map((entry) => `${entry.source}:${entry.line}`), dryRun: options.dryRun, archivedTo }, options.json);
+      const result = await runImport({
+        service: deps.getService(), scope: scope(options), workspaceDir, dryRun: options.dryRun, archive: options.archive,
+        now: deps.import?.now ?? (() => new Date()), guard, ...(deps.import?.fs ? { fs: deps.import.fs } : {}),
+      });
+      output(importSummary(result, result.failure === undefined ? undefined : errorHint(result.cause, deps.config)), options.json);
+      if (!result.ok) process.exitCode = 1;
     });
   }, { descriptors: [{ name: "reflectlog", description: "Operate ReflectLog memory", hasSubcommands: true }] });
 }

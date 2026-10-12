@@ -138,6 +138,9 @@ Examples:
   # Run as HTTP server
   reflectlog --transport http --port 9103
 
+  # Export readable content from an archived, stopped workspace (no server)
+  reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
+
 Workspace selection is required as workspace_id on every MCP tool call.
 WORKSPACE_ID is ignored by the server.
 
@@ -181,6 +184,38 @@ Environment Variables:
         help="Server path (default: /mcp)",
     )
 
+    subcommands = parser.add_subparsers(
+        dest="command",
+        title="commands",
+        metavar="{salvage}",
+        description="Without a command, run the MCP server.",
+    )
+    salvage = subcommands.add_parser(
+        "salvage",
+        help="Export readable memory content from an archived workspace",
+        description=(
+            "Export a workspace's active memory content from an archived "
+            "workspace directory (a copy of indexes/<workspace>/ taken after "
+            "all ReflectLog processes stopped, including SQLite WAL files). "
+            "Only a disposable copy is inspected; no engine or model is loaded."
+        ),
+    )
+    _ = salvage.add_argument(
+        "--archive",
+        required=True,
+        help="Archived workspace directory (never modified)",
+    )
+    _ = salvage.add_argument(
+        "--workspace-id",
+        required=True,
+        help="Workspace whose active records are exported (never inferred)",
+    )
+    _ = salvage.add_argument(
+        "--output",
+        required=True,
+        help="New directory for memories.jsonl and manifest.json (must not exist)",
+    )
+
     return parser.parse_args()
 
 
@@ -194,6 +229,12 @@ def main() -> None:
     ensuring all data from TantivyEngine and USearchEngine is persisted before exit.
     """
     args = parse_args()
+    if args.command == "salvage":
+        # Lazy import keeps --version/--help light and never touches server
+        # startup, environment variables, or warmup.
+        from reflectlog.application.salvage.cli import run
+
+        sys.exit(run(args))
     transport_mode = _apply_cli_env_vars(args)
     output_stream = sys.stdout
 
