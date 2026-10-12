@@ -52,3 +52,27 @@ def plugin_import() -> Callable[[str], ModuleType]:
 @pytest.fixture(scope="session")
 def models(plugin_import: Callable[[str], ModuleType]) -> ModuleType:
     return plugin_import("core.models")
+
+
+@pytest.fixture
+def hermes_provider(plugin_import, tmp_path, monkeypatch):
+    """Use the real Hermes boundary and the existing wire-level fake."""
+    import httpx
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("REFLECTLOG_MCP_TOKEN", " qa-token \n")
+    fake = plugin_import("tests.support.fake_server").FakeReflectLogServer()
+    providers = []
+
+    def create(settings=None, **context):
+        plugin_import("core.config").save_settings(settings or {}, tmp_path)
+        provider = plugin_import("provider").ReflectLogMemoryProvider(
+            transport=httpx.MockTransport(fake)
+        )
+        provider.initialize("session", hermes_home=str(tmp_path), **context)
+        providers.append(provider)
+        return provider, fake
+
+    yield create
+    for provider in providers:
+        provider.shutdown()
