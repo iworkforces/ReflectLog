@@ -52,15 +52,20 @@ runtime default:
 ```
 
 - `transport`: only `"http"`, meaning streamable HTTP. No stdio or SSE.
-- `url`: an HTTP or HTTPS URL; default `"http://127.0.0.1:9103/mcp"`.
+- `url`: an HTTP or HTTPS URL; default `"http://127.0.0.1:9103/mcp"`. The host
+  config schema enforces the http/https scheme prefix; full URL parsing happens
+  at runtime.
 - `authTokenEnv`: an environment-variable name matching
   `^[A-Za-z_][A-Za-z0-9_]*$`; default `"REFLECTLOG_MCP_AUTH_TOKEN"`.
 - `namespace`: deployment namespace matching `^[a-z0-9][a-z0-9_.-]{0,31}$`;
   default `"openclaw"`.
 - `workspaceOverrides`: agent-id to owner-private workspace-id map; default
   `{}`. Agent ids match `^[a-z0-9][a-z0-9_-]{0,63}$`; workspace ids match
-  `^[a-z0-9_.-]{1,64}$`. Values must be unique, cannot be `.` or `..`, and
-  cannot match the reserved derived-id shape `^[pc]-[a-z0-9_-]{1,32}-[0-9a-f]{24}$`.
+  `^[a-z0-9_.-]{1,64}$`. The host config schema rejects `.`, `..`, and the
+  reserved derived-id shape `^[pc]-[a-z0-9_-]{1,32}-[0-9a-f]{24}$`. Value
+  uniqueness is checked only at runtime: a duplicate makes the plugin log
+  `ReflectLog configuration rejected` and register only a disabled memory
+  capability.
 - `defaultMaxResults`: integer from 1 to 50; default `6`.
 - `connectTimeoutMs`: integer from 1000 to 600000 milliseconds; default `120000`.
 - `requestTimeoutMs`: integer from 1000 to 600000 milliseconds; default `60000`.
@@ -329,11 +334,15 @@ Host version or registry-seam differences fail closed.
 
 The smoke checks the memory capability, six `memory_*` tools, recall names,
 plugin service, and `reflectlog` CLI registration through real Commander. It
-also checks disabled registration for invalid config, missing-token failure
-before connection, and fresh service reuse after provider close or service stop
-retires a lazily allocated service. It needs no token, network, or gateway;
-credentials in its environment, network attempts, unhandled rejections,
-warnings, and lingering handles fail the run.
+validates each config case against both the entry schema and the manifest copy
+that the real loader uses, and requires the two verdicts to agree. Direct
+registration with any rejected config, including runtime-only rejections the
+host schema accepts such as duplicate override values, must fall back to a
+disabled memory capability; a host-accepted custom config must register fully.
+It also checks missing-token failure before connection and fresh service reuse
+after provider close or service stop retires a lazily allocated service. It
+needs no token, network, or gateway; credentials in its environment, network
+attempts, unhandled rejections, warnings, and lingering handles fail the run.
 
 Root scripts and Python workflows do not run these checks. The scoped
 `openclaw-quality` workflow runs on Ubuntu with Node 24 and 26 and pnpm 12.9.1,

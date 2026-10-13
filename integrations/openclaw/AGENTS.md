@@ -60,14 +60,14 @@ openclaw/
 - Call `guard.assertCurrent()` before a backend call and after each await in service paths. After an awaited mutation, use `#assertMutationCurrent`: a revoked caller gets `outcome_unknown`, never the result or a pre-dispatch code.
 - Never put the token in config, logs, or CLI output. Never log memory text. Text matching `looksLikePromptInjection` is rejected before any remote mutation; an explicitly requested `--archive` still keeps captured raw bytes (including rejected text) under `sources/`.
 - Flush goes through `MemoryService.flush` (always add-only); import passes `allowReplace: false` in `import-run.ts`. Never enable replacement for either.
-- Workspace overrides: not `.` or `..`, not the derived-id shape, unique. Refs never resolve outside the scope that issued them.
+- Workspace overrides: not `.` or `..`, not the derived-id shape (both also enforced by the host JSON Schema), unique (runtime-only). Refs never resolve outside the scope that issued them.
 - Never rename/delete live import sources or overwrite an archive.
 - Never treat paginated export verification as a snapshot or infer per-entry success from aggregate counts.
 - A mutation failure is retryable only with proof it failed before dispatch.
 
 ## SYNC HAZARDS
 
-- Config schema exists three times: Zod `configSchema`, `configJsonSchema` (`config.ts`), and `openclaw.plugin.json`. Only manifest == `configJsonSchema` is tested; Zod `superRefine` rules are absent from the JSON Schema.
+- Config schema exists three times: Zod `configSchema`, `configJsonSchema` (`config.ts`), and `openclaw.plugin.json`. Manifest == `configJsonSchema` is tested, and `tests/unit/config.test.ts` differentially tests both against the pinned host validator. The JSON Schema mirrors the http(s) scheme prefix (`HTTP_URL_PREFIX_PATTERN`) and the reserved/derived override bans (`RESERVED_WORKSPACE_IDS`, `DERIVED_WORKSPACE_ID_RE`); duplicate override values and full URL parsing stay runtime-only (Zod). The JSON Schema must never narrow Zod acceptance.
 - `plugin.ts` pairs tool factories with `MEMORY_TOOL_NAMES` by index. Reorder both or neither.
 - The version literal `"0.1.0"` in `mcp-client.ts` must match `package.json`. Host pins live in `devDependencies.openclaw`, `peerDependencies`, `openclaw.build`, `openclaw.compat`, and `minimumReleaseAgeExclude`.
 - Host pin changes also require reviewing `tests/compiled/support/openclaw-host.mjs`: bump `SUPPORTED_HOST_VERSION` and re-check its header seam notes. Adapter locates the internal registry chunk by content; version/seam mismatch fails closed.
