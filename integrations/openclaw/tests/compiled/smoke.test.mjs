@@ -23,7 +23,12 @@ const EXPECTED_CHECKS = [
   "entry-by-package-name", "registration-valid-config", "access-policy-before-allocation", "cli-commander-tree",
   "lifecycle-retire:service.stop", "lifecycle-fresh-reuse:service.stop",
   "lifecycle-retire:provider.closeAllMemorySearchManagers", "lifecycle-fresh-reuse:provider.closeAllMemorySearchManagers",
-  "cli-status-unauthorized", "registration-invalid-config:bad-url", "registration-invalid-config:unknown-key", "slot-warnings",
+  "cli-status-unauthorized",
+  "registration-invalid-config:bad-url-scheme", "registration-invalid-config:reserved-dot",
+  "registration-invalid-config:reserved-dotdot", "registration-invalid-config:derived-owner",
+  "registration-invalid-config:derived-conversation", "registration-invalid-config:duplicate-overrides",
+  "registration-invalid-config:malformed-url", "registration-invalid-config:unknown-key",
+  "registration-valid-custom-overrides", "slot-warnings",
 ];
 
 const assertBuilt = () => assert.ok(existsSync(join(packageDir, "dist", "index.js")), "dist/index.js is missing: run pnpm build first");

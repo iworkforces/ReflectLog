@@ -57,8 +57,16 @@ async function main() {
   const pluginConfig = { url: "http://reflectlog.invalid:9103/mcp", namespace: "smoke" };
   const record = (memorySlotSelected = true) => createLoaderRecord({
     manifest, packageJson, rootDir: packageDir, source: dist, memorySlotSelected });
-  const hostSchema = (config) => entry.configSchema.safeParse(config).success;
-  assert.equal(hostSchema(pluginConfig), true);
+  // Host verdict from BOTH the entry schema and the manifest copy (what the real loader validates); they must agree.
+  const { buildJsonPluginConfigSchema } = await import("openclaw/plugin-sdk/plugin-entry");
+  const manifestSchema = buildJsonPluginConfigSchema(manifest.configSchema);
+  const hostVerdict = (config) => {
+    const entryVerdict = entry.configSchema.safeParse(config);
+    const manifestVerdict = manifestSchema.safeParse(config);
+    assert.equal(entryVerdict.success, manifestVerdict.success, "entry and manifest schema verdicts agree");
+    return manifestVerdict;
+  };
+  assert.equal(hostVerdict(pluginConfig).success, true);
 
   // 2. Valid registration against a real registry, read back from the registry.
   const { host, logs } = await newHost();
@@ -204,13 +212,26 @@ async function main() {
   await service.stop();
   check("cli-status-unauthorized");
 
-  // 4. Invalid configuration: a fresh real registry per case.
+  // 4. Invalid configuration: a fresh real registry per case. hostAccepts=true cases are runtime-only
+  // rules (duplicate override values, full URL parse); direct registration must still fail closed.
   const invalidCases = [
-    { name: "bad-url", config: { url: "ftp://reflectlog.invalid/mcp" }, hostAccepts: true },
+    { name: "bad-url-scheme", config: { url: "ftp://reflectlog.invalid/mcp" }, hostAccepts: false, issuePath: ["url"] },
+    { name: "reserved-dot", config: { workspaceOverrides: { main: "." } }, hostAccepts: false, issuePath: ["workspaceOverrides", "main"] },
+    { name: "reserved-dotdot", config: { workspaceOverrides: { main: ".." } }, hostAccepts: false, issuePath: ["workspaceOverrides", "main"] },
+    { name: "derived-owner", config: { workspaceOverrides: { main: "p-main-0123456789abcdef01234567" } }, hostAccepts: false, issuePath: ["workspaceOverrides", "main"] },
+    { name: "derived-conversation", config: { workspaceOverrides: { main: "c-main-0123456789abcdef01234567" } }, hostAccepts: false, issuePath: ["workspaceOverrides", "main"] },
+    { name: "duplicate-overrides", config: { workspaceOverrides: { main: "shared", ops: "shared" } }, hostAccepts: true },
+    { name: "malformed-url", config: { url: "http://" }, hostAccepts: true },
     { name: "unknown-key", config: { bogus: true }, hostAccepts: false },
   ];
   for (const invalid of invalidCases) {
-    assert.equal(hostSchema(invalid.config), invalid.hostAccepts, `${invalid.name}: host schema verdict`);
+    const verdict = hostVerdict(invalid.config);
+    assert.equal(verdict.success, invalid.hostAccepts, `${invalid.name}: host schema verdict`);
+    if (invalid.issuePath !== undefined) {
+      const paths = (verdict.error?.issues ?? []).map((issue) => issue.path.join("/"));
+      assert.ok(paths.includes(invalid.issuePath.join("/")),
+        `${invalid.name}: issue path ${invalid.issuePath.join("/")} among [${paths}]`);
+    }
     const { host: bad, logs: badLogs } = await newHost();
     const badRecord = record();
     registerLikeLoader({ host: bad, entry, record: badRecord, config: hostConfig, pluginConfig: invalid.config });
@@ -235,6 +256,24 @@ async function main() {
     check(`registration-invalid-config:${invalid.name}`);
   }
   assert.equal(hygiene.tokenReads.count > 0, true);
+
+  // Valid custom overrides plus an uppercase-scheme URL: host-accepted and fully registered.
+  const customConfig = {
+    url: "HTTP://reflectlog.invalid:9103/mcp", namespace: "smoke",
+    workspaceOverrides: { main: "team.notes", ops: "ops_ws" },
+  };
+  assert.equal(hostVerdict(customConfig).success, true, "custom overrides and uppercase scheme are host-accepted");
+  const { host: custom, logs: customLogs } = await newHost();
+  const customRecord = record();
+  registerLikeLoader({ host: custom, entry, record: customRecord, config: hostConfig, pluginConfig: customConfig });
+  assert.deepEqual(custom.registry.diagnostics, [], "custom config: no registration diagnostics");
+  assert.deepEqual(customLogs.filter(({ level }) => level === "warn" || level === "error"), []);
+  assert.equal(custom.registry.tools.length, TOOLS.length);
+  assert.deepEqual(customRecord.toolNames, TOOLS);
+  assert.equal(custom.registry.services.length, 1);
+  assert.equal(custom.registry.cliRegistrars.length, 1);
+  await custom.registry.services[0].service.stop();
+  check("registration-valid-custom-overrides");
 
   // Slot warnings: the plugin registers fully but tells the operator how to take the slot.
   const { host: loose, logs: looseLogs } = await newHost();
