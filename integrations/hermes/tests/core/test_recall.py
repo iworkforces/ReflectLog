@@ -11,6 +11,7 @@ def test_recall_one_line_and_ids(plugin_import, models):
     )
     assert count == 1 and text.splitlines()[1] == "- [7] a b c"
     assert len(text.splitlines()) == 2
+    assert "attempt=2" in text.splitlines()[0]
 
 
 def test_recall_neutralizes_fence_tags(plugin_import, models):
@@ -45,3 +46,53 @@ def test_recall_never_exceeds_budget(plugin_import, models, budget):
 def test_empty_recall(plugin_import):
     # Given no hits, when formatting, then no unused header is injected.
     assert plugin_import("core.recall").format_recall([], max_chars=1000) == ("", 0)
+
+
+@pytest.mark.parametrize(
+    "boundary,expected",
+    [("below", 0), ("header", 0), ("short", 0), ("first", 1), ("multiple", 2)],
+)
+def test_recall_header_boundaries(plugin_import, models, boundary, expected):
+    # Given budgets derived from the current single-line header and complete items.
+    recall = plugin_import("core.recall")
+    header_length = len(recall._HEADER)
+    line_length = len("- [1] xxxxxxxxxx")
+    budgets = {
+        "below": header_length - 1,
+        "header": header_length,
+        "short": header_length + line_length,
+        "first": header_length + 1 + line_length,
+        "multiple": header_length + 2 * (1 + line_length),
+    }
+    # When formatting two memories at each exact boundary.
+    text, count = recall.format_recall(
+        [models.SearchHit(i, "x" * 10, 1, None) for i in [1, 2]],
+        max_chars=budgets[boundary],
+    )
+    # Then a header is emitted only with complete fitting memories.
+    assert count == expected
+    assert len(text) <= budgets[boundary]
+    if expected:
+        assert len(text.splitlines()) == expected + 1
+        assert text.splitlines()[1] == "- [1] xxxxxxxxxx"
+    else:
+        assert text == ""
+
+
+@pytest.mark.parametrize("attempt", [1, 4, 5])
+@pytest.mark.parametrize("hit_count", [0, 2])
+def test_search_guidance_branches(plugin_import, attempt, hit_count):
+    # Given a search attempt and its returned hit count.
+    recall = plugin_import("core.recall")
+    # When deriving guidance for the caller's tool.
+    guidance = recall.search_guidance("example_search", attempt, hit_count)
+    # Then the next attempt is arithmetic, and exhaustion prevents a sixth search.
+    assert f"Search attempt {attempt} of 5." in guidance
+    assert ("Verify each memory is relevant" in guidance) == bool(hit_count)
+    if attempt < 5:
+        assert f"call example_search with attempt={attempt + 1}" in guidance
+        assert "rewrite the query" in guidance.lower()
+    else:
+        assert "Search limit reached" in guidance
+        assert "attempt=6" not in guidance
+        assert "rewrite the query" not in guidance.lower()
