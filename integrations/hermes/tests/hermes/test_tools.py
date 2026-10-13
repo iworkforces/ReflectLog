@@ -26,6 +26,9 @@ def test_tool_happy_paths(hermes_provider):
     # Then their structured results preserve the server contract.
     assert stored["stored_count"] == 1
     assert searched["count"] == 1
+    assert searched["attempt"] == 1
+    assert searched["max_attempts"] == 5
+    assert "attempt=2" in searched["next_step"]
     assert listed["total"] == 1
     assert record["record"]["memory"] == "cobalt widgets"
     assert deleted["removed"] == [1]
@@ -37,6 +40,10 @@ def test_tool_happy_paths(hermes_provider):
         ("reflectlog_search", {"query": "ok", "limit": True}),
         ("reflectlog_search", {"query": 1}),
         ("reflectlog_search", {"query": "x", "workspace_id": "other"}),
+        *[
+            ("reflectlog_search", {"query": "ok", "attempt": attempt})
+            for attempt in [0, 6, -1, 1.5, "2", True, False, None]
+        ],
         ("reflectlog_store", {"memories": "bad"}),
         ("reflectlog_store", {"memories": ["ok"], "dry_run": 1}),
         ("reflectlog_list", {"offset": -1}),
@@ -52,6 +59,86 @@ def test_argument_validation(hermes_provider, name, args):
     # Then it is rejected locally.
     assert result["code"] == "invalid_input"
     assert not fake.requests
+
+
+@pytest.mark.parametrize("attempt", [1, 4, 5])
+@pytest.mark.parametrize("has_hits", [False, True])
+def test_search_guides_rewritten_retry(hermes_provider, attempt, has_hits):
+    # Given a lookup with either matching or empty server results.
+    provider, fake = hermes_provider()
+    if has_hits:
+        provider.handle_tool_call("reflectlog_store", {"memories": ["cobalt widgets"]})
+    # When the caller supplies its search attempt.
+    result = json.loads(
+        provider.handle_tool_call(
+            "reflectlog_search", {"query": "cobalt", "attempt": attempt}
+        )
+    )
+    # Then relevance checking and the remaining search budget guide the caller.
+    assert result["count"] == int(has_hits)
+    assert result["attempt"] == attempt and result["max_attempts"] == 5
+    guidance = result["next_step"]
+    assert ("Verify each memory is relevant" in guidance) == has_hits
+    if attempt < 5:
+        assert "rewrite the query" in guidance.lower()
+        assert f"attempt={attempt + 1}" in guidance
+    else:
+        assert "Search limit reached" in guidance
+        assert "attempt=6" not in guidance
+        assert "rewrite the query" not in guidance.lower()
+    calls = [json.loads(r.content) for r in fake.requests if r.method == "POST"]
+    searches = [
+        r["params"]["arguments"]
+        for r in calls
+        if r.get("params", {}).get("name") == "search_memories"
+    ]
+    assert len(searches) == 1 and "attempt" not in searches[0]
+
+
+def test_search_attempt_schema(hermes_provider):
+    # Given the provider's public tool schema.
+    provider, fake = hermes_provider()
+    # When inspecting the search boundary.
+    parameters = next(
+        s["parameters"]
+        for s in provider.get_tool_schemas()
+        if s["name"] == "reflectlog_search"
+    )
+    # Then the bounded optional integer is advertised without extra arguments.
+    assert parameters["properties"]["attempt"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "default": 1,
+    }
+    assert "attempt" not in parameters["required"]
+    assert parameters["additionalProperties"] is False
+    assert not fake.requests
+
+
+def test_five_rewritten_searches_reject_sixth(hermes_provider):
+    # Given a caller following one bounded lookup without automatic recall.
+    provider, fake = hermes_provider()
+    # When five rewritten searches are followed by an out-of-budget attempt.
+    results = [
+        json.loads(
+            provider.handle_tool_call(
+                "reflectlog_search", {"query": query, "attempt": attempt}
+            )
+        )
+        for attempt, query in enumerate(
+            ["cobalt", "widgets", "project", "settings", "entities"], start=1
+        )
+    ]
+    rejected = json.loads(
+        provider.handle_tool_call(
+            "reflectlog_search", {"query": "synonyms", "attempt": 6}
+        )
+    )
+    # Then only the five valid searches reach the backend.
+    assert [r["attempt"] for r in results] == [1, 2, 3, 4, 5]
+    assert rejected["code"] == "invalid_input"
+    assert fake.dispatches["search_memories"] == 5
 
 
 @pytest.mark.parametrize(
