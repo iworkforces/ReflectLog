@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.14.4"
+# requires-python = ">=3.14.8"
 # dependencies = []
 # ///
 """Focused frozen release gates for coordinated storage and CLI contracts."""
