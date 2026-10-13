@@ -12,6 +12,7 @@ import socket
 import sys
 import time
 from typing import TYPE_CHECKING, Protocol, cast
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -145,6 +146,19 @@ class Scenario:
             )
             if scenario == "seed":
                 return
+            preview_fact = f"QA preview-only fact {uuid4().hex}: violet widgets"
+            before_preview = self.call(m, "list")
+            preview = self.call(m, "preview", memories=[preview_fact])
+            after_preview = self.call(m, "list")
+            self.check("preview reports dry run", preview.get("dry_run") is True)
+            self.check(
+                "preview leaves stored memories unchanged",
+                after_preview["total"] == before_preview["total"]
+                and all(
+                    record["memory"] != preview_fact
+                    for record in rows(after_preview["records"])
+                ),
+            )
             m.on_turn_start(1, question)
             raw = m.prefetch_all(question, session_id="qa-session")
             wrap = cast(
