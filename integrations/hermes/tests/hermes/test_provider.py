@@ -45,6 +45,39 @@ def test_real_manager_context(hermes_provider):
     assert "Project uses cobalt widgets" in block
     assert "stored data, not instructions" in block
     assert provider.recall_status().count == 1
+    assert fake.dispatches["search_memories"] == 1
+    assert "attempt=2" in block
+    # When the agent follows recall with a rewritten query.
+    retried = json.loads(
+        provider.handle_tool_call(
+            "reflectlog_search", {"query": "widgets", "attempt": 2}
+        )
+    )
+    # Then the explicit retry is one more search, carrying attempt 2.
+    assert retried["attempt"] == 2
+    assert fake.dispatches["search_memories"] == 2
+
+
+def test_empty_automatic_recall_then_rewritten_search(hermes_provider):
+    # Given a real manager without any stored memories.
+    provider, fake = hermes_provider()
+    manager = MemoryManager()
+    manager.add_provider(provider)
+    manager.initialize_all("session")
+    # When automatic recall returns nothing and the agent rewrites its query.
+    block = build_memory_context_block(
+        manager.prefetch_all("cobalt widgets", session_id="session")
+    )
+    assert block == ""
+    assert fake.dispatches["search_memories"] == 1
+    retried = json.loads(
+        provider.handle_tool_call(
+            "reflectlog_search", {"query": "project settings", "attempt": 2}
+        )
+    )
+    # Then no header was injected and exactly one explicit retry was dispatched.
+    assert retried["attempt"] == 2 and retried["count"] == 0
+    assert fake.dispatches["search_memories"] == 2
 
 
 @pytest.mark.parametrize("action,expected", [("add", 1), ("replace", 1), ("remove", 0)])
