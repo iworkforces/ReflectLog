@@ -1,10 +1,13 @@
 """Unit tests for SmartReplacer and replacement providers."""
 
+import asyncio
+from collections.abc import AsyncGenerator
 import json
 import traceback
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import claude_agent_sdk as claude
 from openai import AsyncOpenAI
 import pytest
 
@@ -494,6 +497,20 @@ class TestSmartReplacerConfig:
 class TestCreateReplacementProvider:
     """Test create_replacement_provider factory function."""
 
+    def test_forwards_anthropic_timeout(self) -> None:
+        config = SmartReplacerConfig(
+            "key", "url", "model", timeout=0.125, provider="anthropic"
+        )
+        with (
+            patch("reflectlog.utility.utility.init_credentials"),
+            patch(
+                "reflectlog.infrastructure.smart_replacer.AnthropicReplacementProvider",
+                autospec=True,
+            ) as constructor,
+        ):
+            create_replacement_provider(config)
+        constructor.assert_called_once_with(model="model", timeout=0.125, logger=None)
+
     def test_create_openai_provider(self) -> None:
         """Test creating OpenAI provider."""
         config = SmartReplacerConfig(
@@ -709,6 +726,115 @@ class TestOpenAIReplacementProvider:
 
 class TestAnthropicReplacementProvider:
     """Test AnthropicReplacementProvider."""
+
+    @pytest.mark.parametrize("max_retries", [2, 3])
+    async def test_stalled_stream_times_out_every_attempt(
+        self, monkeypatch: pytest.MonkeyPatch, max_retries: int
+    ) -> None:
+        attempts = 0
+        closed = 0
+        delays: list[float] = []
+
+        async def query(
+            *, prompt: str, options: claude.ClaudeAgentOptions
+        ) -> AsyncGenerator[claude.Message]:
+            nonlocal attempts, closed
+            attempts += 1
+            try:
+                yield claude.SystemMessage("init", {})
+                await asyncio.Event().wait()
+            finally:
+                closed += 1
+
+        async def sleep(delay: float) -> None:
+            delays.append(delay)
+
+        monkeypatch.setattr("reflectlog.utility.utility._claude.query", query)
+        monkeypatch.setattr(
+            "reflectlog.infrastructure.smart_replacer.asyncio.sleep", sleep
+        )
+        with patch("reflectlog.utility.utility.init_credentials"):
+            provider = AnthropicReplacementProvider(timeout=0.05)
+        result = await asyncio.wait_for(
+            provider.detect_replacement("Test", max_retries, 1.0), timeout=2.0
+        )
+        assert result == (
+            False,
+            0.0,
+            "Error: replacement detection failed (TimeoutError)",
+        )
+        assert attempts == closed == max_retries
+        assert delays == [float(2**i) for i in range(max_retries - 1)]
+
+    async def test_timeout_then_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        attempts = 0
+        closed = 0
+
+        async def query(
+            *, prompt: str, options: claude.ClaudeAgentOptions
+        ) -> AsyncGenerator[claude.Message]:
+            nonlocal attempts, closed
+            attempts += 1
+            try:
+                yield claude.SystemMessage("init", {})
+                if attempts == 1:
+                    await asyncio.Event().wait()
+                yield claude.AssistantMessage(
+                    [
+                        claude.TextBlock(
+                            '{"should_replace": true, "confidence": 0.9, "reason": "Updated"}'
+                        )
+                    ],
+                    "test-model",
+                )
+            finally:
+                closed += 1
+
+        monkeypatch.setattr("reflectlog.utility.utility._claude.query", query)
+        with patch("reflectlog.utility.utility.init_credentials"):
+            provider = AnthropicReplacementProvider(timeout=0.05)
+        result = await asyncio.wait_for(
+            provider.detect_replacement("Test", 2, 0.0), timeout=2.0
+        )
+        assert result == (True, 0.9, "Updated")
+        assert attempts == closed == 2
+
+    async def test_external_cancellation_is_not_retried(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        entered = asyncio.Event()
+        attempts = 0
+        closed = 0
+        delays: list[float] = []
+
+        async def query(
+            *, prompt: str, options: claude.ClaudeAgentOptions
+        ) -> AsyncGenerator[claude.Message]:
+            nonlocal attempts, closed
+            attempts += 1
+            try:
+                yield claude.SystemMessage("init", {})
+                entered.set()
+                await asyncio.Event().wait()
+            finally:
+                closed += 1
+
+        async def sleep(delay: float) -> None:
+            delays.append(delay)
+
+        monkeypatch.setattr("reflectlog.utility.utility._claude.query", query)
+        monkeypatch.setattr(
+            "reflectlog.infrastructure.smart_replacer.asyncio.sleep", sleep
+        )
+        with patch("reflectlog.utility.utility.init_credentials"):
+            provider = AnthropicReplacementProvider(timeout=30.0)
+        task = asyncio.create_task(provider.detect_replacement("Test", 3, 1.0))
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert attempts == closed == 1
+        assert delays == []
 
     def test_extract_json_pure_json(self) -> None:
         """Test extracting pure JSON from response."""
