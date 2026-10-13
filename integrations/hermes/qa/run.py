@@ -15,7 +15,7 @@ import tempfile
 import time
 from typing import cast
 
-COMMIT = "818c13be1dc4fd28987e1e881a9408224afd4535"
+COMMIT = "71d34bad1045610252eda02ee79549436896e784"
 
 
 def object_json(text: str) -> dict[str, object]:
@@ -134,7 +134,7 @@ class Run:
             self.required(
                 ["git", "-C", str(self.source), "checkout", "--detach", "FETCH_HEAD"]
             )
-        self.required(["uv", "venv", "--python", "3.14", str(self.root / "venv")])
+        self.required(["uv", "venv", "--python", "3.14.8", str(self.root / "venv")])
         self.required(
             [
                 "uv",

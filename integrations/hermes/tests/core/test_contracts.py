@@ -1,5 +1,5 @@
 # pyright: basic
-"""The shared contracts work without Hermes on Python 3.11 and later."""
+"""The shared contracts work without Hermes on Python 3.14.8 and later."""
 
 from __future__ import annotations
 
