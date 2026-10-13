@@ -78,7 +78,11 @@
     "additionalProperties": false,
     "properties": {
       "transport": { "type": "string", "enum": ["http"], "default": "http" },
-      "url": { "type": "string", "default": "http://127.0.0.1:9103/mcp" },
+      "url": {
+        "type": "string",
+        "pattern": "^\\s*[Hh][Tt][Tt][Pp][Ss]?://",
+        "default": "http://127.0.0.1:9103/mcp"
+      },
       "authTokenEnv": {
         "type": "string",
         "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
@@ -88,7 +92,16 @@
       "workspaceOverrides": {
         "type": "object",
         "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
-        "additionalProperties": { "type": "string", "pattern": "^[a-z0-9_.-]{1,64}$" }
+        "additionalProperties": {
+          "type": "string",
+          "pattern": "^[a-z0-9_.-]{1,64}$",
+          "not": {
+            "anyOf": [
+              { "enum": [".", ".."] },
+              { "pattern": "^[pc]-[a-z0-9_-]{1,32}-[0-9a-f]{24}$" }
+            ]
+          }
+        }
       },
       "defaultMaxResults": { "type": "integer", "minimum": 1, "maximum": 50, "default": 6 },
       "connectTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000, "default": 120000 },
