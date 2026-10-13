@@ -1,0 +1,55 @@
+name: hermes-quality
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - integrations/hermes/**
+      - .github/workflows/hermes-quality.yml
+  pull_request:
+    paths:
+      - integrations/hermes/**
+      - .github/workflows/hermes-quality.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dev:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.14.8"
+      - name: Locked install
+        run: uv sync --project integrations/hermes/dev --locked --python 3.14.8
+      - name: Tests with the pinned Hermes host
+        run: uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/pyproject.toml integrations/hermes/tests
+      - name: Lint
+        run: uv run --project integrations/hermes/dev --locked ruff check --config integrations/hermes/pyproject.toml integrations/hermes
+      - name: Format check
+        run: uv run --project integrations/hermes/dev --locked ruff format --check --config integrations/hermes/pyproject.toml integrations/hermes
+      - name: Type checking
+        run: uv run --project integrations/hermes/dev --locked pyright --project integrations/hermes
+
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.14.8"
+      - name: Hermes-free core tests
+        run: uv run --no-project --python 3.14.8 --with pytest --with "httpx>=0.27,<1" python -m pytest -c integrations/hermes/pyproject.toml integrations/hermes/tests/core
