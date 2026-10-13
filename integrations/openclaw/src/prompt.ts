@@ -4,7 +4,7 @@ import { MEMORY_TOOL_NAMES } from "./tools.js";
 export const buildMemoryPromptSection: MemoryPromptSectionBuilder = ({ availableTools }) => {
   if (!MEMORY_TOOL_NAMES.some(name => availableTools.has(name))) return [];
   const lines = ["## Memory", "Memory lives in ReflectLog, not MEMORY.md or memory/*.md files. Do not create or edit those files for memory."];
-  if (availableTools.has("memory_search")) lines.push("Before answering about prior work, decisions, preferences, people or open tasks, use memory_search. Report warnings or unavailable recall honestly.");
+  if (availableTools.has("memory_search")) lines.push("Before answering about prior work, decisions, preferences, people or open tasks, use memory_search with attempt=1. Allow at most five searches per lookup. Verify each returned memory is relevant before using it. If no memories are returned or none is relevant, rewrite the query using different keywords, synonyms, broader or narrower terms, or key entities, then search with attempt increased by 1. After attempt 5, stop searching; if none is relevant, say no relevant memory was found. Report warnings or unavailable recall honestly.");
   if (availableTools.has("memory_get")) lines.push("Use memory_get with refs returned by search to retrieve only the needed lines.");
   if (availableTools.has("memory_store")) lines.push("Use memory_store for durable knowledge: one self-contained fact per item.");
   if (availableTools.has("memory_preview")) lines.push("Use memory_preview to inspect a proposed write without storing it.");

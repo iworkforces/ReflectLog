@@ -12,6 +12,7 @@ import socket
 import sys
 import time
 from typing import TYPE_CHECKING, Protocol, cast
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -104,7 +105,7 @@ class Scenario:
         return provider.binding.workspace_id
 
     def call(self, manager: Manager, name: str, **args: object) -> dict[str, object]:
-        return obj(json.loads(manager.handle_tool_call("reflectlog_" + name, args)))
+        return obj(json.loads(manager.handle_tool_call("memory_" + name, args)))
 
     def drain(self, provider: ReflectLogMemoryProvider) -> None:
         assert provider.writer is not None
@@ -145,6 +146,19 @@ class Scenario:
             )
             if scenario == "seed":
                 return
+            preview_fact = f"QA preview-only fact {uuid4().hex}: violet widgets"
+            before_preview = self.call(m, "list")
+            preview = self.call(m, "preview", memories=[preview_fact])
+            after_preview = self.call(m, "list")
+            self.check("preview reports dry run", preview.get("dry_run") is True)
+            self.check(
+                "preview leaves stored memories unchanged",
+                after_preview["total"] == before_preview["total"]
+                and all(
+                    record["memory"] != preview_fact
+                    for record in rows(after_preview["records"])
+                ),
+            )
             m.on_turn_start(1, question)
             raw = m.prefetch_all(question, session_id="qa-session")
             wrap = cast(
@@ -159,11 +173,42 @@ class Scenario:
                 and "stored data, not instructions" in block,
             )
             status = p.recall_status()
+            headers = [
+                line
+                for line in block.splitlines()
+                if line.startswith("ReflectLog recalled memories")
+            ]
+            self.check(
+                "single-line recall retry header",
+                len(headers) == 1
+                and headers[0].endswith("):")
+                and "attempt=2" in headers[0],
+            )
             self.check("recall count", status is not None and status.count >= 1)
             listed = rows(self.call(m, "list")["records"])
             record = listed[0]
             memory_id = record["id"]
-            found = rows(self.call(m, "search", query=question)["results"])
+            searched = self.call(m, "search", query=question)
+            next_step = searched.get("next_step")
+            self.check(
+                "default search attempt and guidance",
+                searched.get("attempt") == 1
+                and isinstance(next_step, str)
+                and bool(next_step),
+            )
+            found = rows(searched["results"])
+            final_step = self.call(m, "search", query=question, attempt=5).get(
+                "next_step"
+            )
+            self.check(
+                "search limit reached",
+                isinstance(final_step, str) and "Search limit reached" in final_step,
+            )
+            self.check(
+                "sixth search rejected",
+                self.call(m, "search", query=question, attempt=6).get("code")
+                == "invalid_input",
+            )
             got = obj(self.call(m, "get", id=memory_id)["record"])
             self.check(
                 "search/list/get agree",
