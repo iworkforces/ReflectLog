@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-Standalone Python Hermes memory-provider plugin (`reflectlog`) for Hermes Agent `v0.21.6`, pinned to `818c13be1dc4fd28987e1e881a9408224afd4535`. Stateful streamable HTTP MCP, automatic recall, add-only native mirroring, opt-in turn capture, five tools. One external `memory.provider`; native memory stays active. Own uv project and checks; root scripts and CI do not cover it.
+Standalone Python Hermes memory-provider plugin (`reflectlog`) for Hermes Agent `v0.21.7`, pinned to `71d34bad1045610252eda02ee79549436896e784`. Python >=3.14.8; dev and QA use exactly 3.14.8. Stateful streamable HTTP MCP, automatic recall, add-only native mirroring, opt-in turn capture, five tools. One external `memory.provider`; native memory stays active. Own uv project and checks; root scripts and CI do not cover it.
 
 ## STRUCTURE
 
@@ -17,7 +17,7 @@ hermes/
 |-- __init__.py           # Lazy provider registration
 |-- provider.py           # Hermes lifecycle, config wizard, recall, write gates
 |-- tool_handlers.py      # Five tool schemas and argument validation
-|-- core/                 # Python 3.11; no Hermes imports
+|-- core/                 # Python >=3.14.8; no Hermes imports
 |   |-- client.py          # MCP handshake, framing, deadlines, retry policy
 |   |-- config.py          # Frozen settings, validation, private atomic save
 |   |-- workspace.py       # Derived ids, context and participant binding
@@ -57,10 +57,10 @@ hermes/
 
 ## CONVENTIONS
 
-- `core/` is Hermes-free Python 3.11, standard library plus `httpx`. Hermes-bound code belongs only in `provider.py`, `tool_handlers.py`, and `__init__.py`. Root server Python 3.14-only rules do not apply to the core.
+- `core/` is Hermes-free Python >=3.14.8, standard library plus `httpx`. Hermes-bound code belongs only in `provider.py`, `tool_handlers.py`, and `__init__.py`.
 - Never name a plugin module after Hermes top-level packages: `agent`, `tools`, `plugins`, `providers`, `cron`, `gateway`, `pm`, `hermes_cli`. Do not add plugin directories to `sys.path`.
-- Tests use real installed Hermes and `tests/support/fake_server.py`; no fake Hermes modules. Run both Python 3.14 integration checks and the Python 3.11 core check.
-- Pyright strict paths: `core`, `provider.py`, `tool_handlers.py`, `__init__.py`, `qa`. The remaining project uses basic mode. Ruff targets `py311`, line length `88`, double quotes.
+- Tests use real installed Hermes and `tests/support/fake_server.py`; no fake Hermes modules. Run both integration checks and the Hermes-free core check on Python 3.14.8.
+- Pyright strict paths: `core`, `provider.py`, `tool_handlers.py`, `__init__.py`, `qa`. The remaining project uses basic mode. Ruff targets `py314`, line length `88`, double quotes; Pyright uses `3.14`.
 - Automatic writes require primary context and policy checks. Explicit store/forget mutations and capture require `memory.write_approval` off; approved native mirroring still runs. Preserve per-turn author and generation checks.
 - Unknown config keys and tool arguments fail validation. Keep typed result parsing and error codes in `core/models.py`; absence is a nullable record.
 
@@ -75,6 +75,7 @@ hermes/
 - No lazy workspace on an uninitialized provider. Require the initialized, active binding; do not infer authority from a workspace id.
 - Do not promise queue durability or exactly-once writes. Breaker state and queued jobs are process-local; full queues drop work.
 - Do not wrap recall in a second `<memory-context>` fence or treat recalled text as instructions.
+- Hermes v0.21.7 defaults `memory.prefetch_spill_enabled` to `false`; it is an upstream opt-in. Recall is already bounded by `recall_max_chars` and needs no spill opt-in.
 
 ## SYNC HAZARDS
 
@@ -88,12 +89,12 @@ hermes/
 
 ```bash
 # run from the repository root
-uv sync --project integrations/hermes/dev --locked
+uv sync --project integrations/hermes/dev --locked --python 3.14.8
 uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/pyproject.toml integrations/hermes/tests
 uv run --project integrations/hermes/dev --locked ruff check --config integrations/hermes/pyproject.toml integrations/hermes
 uv run --project integrations/hermes/dev --locked ruff format --check --config integrations/hermes/pyproject.toml integrations/hermes
 uv run --project integrations/hermes/dev --locked pyright --project integrations/hermes
-uv run --no-project --python 3.11 --with pytest --with "httpx>=0.27,<1" python -m pytest -c integrations/hermes/pyproject.toml integrations/hermes/tests/core
+uv run --no-project --python 3.14.8 --with pytest --with "httpx>=0.27,<1" python -m pytest -c integrations/hermes/pyproject.toml integrations/hermes/tests/core
 ```
 
 ```text
