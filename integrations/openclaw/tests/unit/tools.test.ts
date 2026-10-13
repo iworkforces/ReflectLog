@@ -67,13 +67,87 @@ describe("memory tools", () => {
     const { text, details } = await run(tool(createMemorySearchTool), { query: "green tea", max_results: 1, min_score: 0.5 });
     expect(text).toContain(UNTRUSTED_MEMORY_NOTICE);
     expect(text).toContain(`1. ref=${owner.tag}:1 score=1 Prefers green tea`);
-    expect(text).toMatch(/^<relevant-memories>[\s\S]*<\/relevant-memories>$/);
+    expect(text).toMatch(/^<relevant-memories>\n/);
+    const [fenced, guidance] = text.split("</relevant-memories>");
+    expect(fenced).toContain("Prefers green tea");
+    expect(guidance).toContain("Search attempt 1 of 5.");
     expect(details).toMatchObject({ count: 1, scoreKind: "reranker" });
     expect(client.callsTo("searchMemories")[0]?.params).toMatchObject({ query: "green tea", limit: 1 });
   });
 
   it("says so when nothing matches", async () => {
     expect((await run(setup().tool(createMemorySearchTool), { query: "tea" })).text).toContain("No matching memories.");
+  });
+
+  it("starts at attempt 1 when omitted and keeps attempt out of backend parameters", async () => {
+    const { client, tool } = setup();
+    const { text, details } = await run(tool(createMemorySearchTool), { query: "tea" });
+    expect(details).toMatchObject({ attempt: 1, maxAttempts: 5 });
+    expect(text).toContain("Search attempt 1 of 5.");
+    expect(text).toContain("call memory_search with attempt=2.");
+    expect(client.callsTo("searchMemories")[0]?.params).not.toHaveProperty("attempt");
+  });
+
+  it.each([
+    [1, false], [4, false], [1, true], [4, true],
+  ] as const)("guides a rewrite at attempt %i with hits=%s", async (attempt, hasHits) => {
+    const { client, tool } = setup();
+    if (hasHits) client.seed(owner.workspaceId, ["Prefers tea"]);
+    const { text, details } = await run(tool(createMemorySearchTool), { query: "tea", attempt });
+    const guidance = text.split("</relevant-memories>\n")[1] ?? "";
+    expect(guidance).toMatch(new RegExp(`^Search attempt ${attempt} of 5\\.`));
+    expect(guidance.includes("Verify each memory is relevant")).toBe(hasHits);
+    expect(guidance.toLowerCase()).toContain("rewrite the query");
+    expect(guidance).toContain(`call memory_search with attempt=${attempt + 1}.`);
+    expect(guidance).not.toContain("Search limit reached");
+    expect(details).toMatchObject({ attempt, maxAttempts: 5, count: hasHits ? 1 : 0 });
+    expect(client.callsTo("searchMemories")).toHaveLength(1);
+    expect(client.callsTo("searchMemories")[0]?.params).not.toHaveProperty("attempt");
+  });
+
+  it.each([false, true])("stops at attempt 5 with hits=%s", async (hasHits) => {
+    const { client, tool } = setup();
+    if (hasHits) client.seed(owner.workspaceId, ["Prefers tea"]);
+    const { text, details } = await run(tool(createMemorySearchTool), { query: "tea", attempt: 5 });
+    const guidance = text.split("</relevant-memories>\n")[1] ?? "";
+    expect(guidance).toMatch(/^Search attempt 5 of 5\. Search limit reached\./);
+    expect(guidance.includes("Verify each memory is relevant")).toBe(hasHits);
+    expect(guidance).toMatch(/Stop searching/);
+    expect(text).not.toContain("attempt=6");
+    expect(text.toLowerCase()).not.toContain("rewrite the query");
+    expect(details).toMatchObject({ attempt: 5, maxAttempts: 5 });
+  });
+
+  it.each([0, 6, -1, 1.5, "2", true, false, null])("rejects invalid attempt %s before backend dispatch", async (attempt) => {
+    const { client, tool } = setup();
+    await expect(run(tool(createMemorySearchTool), { query: "tea", attempt })).rejects.toThrow(MemoryInputError);
+    expect(client.callsTo("searchMemories")).toEqual([]);
+  });
+
+  it("keeps score warnings between the untrusted fence and search guidance", async () => {
+    const { client, tool } = setup();
+    client.seed(owner.workspaceId, ["Prefers tea"]);
+    client.scoreKind = "rrf";
+    const { text, details } = await run(tool(createMemorySearchTool), { query: "tea", minScore: 0.5 });
+    expect(details).toHaveProperty("warning", expect.any(String));
+    expect(text).toMatch(/<\/relevant-memories>\n[^\n]+\nSearch attempt 1 of 5\./);
+    expect(text).toContain("minScore");
+  });
+
+  it("allows five caller-scripted rewritten searches and rejects a sixth", async () => {
+    const { client, tool } = setup();
+    const search = tool(createMemorySearchTool);
+    const queries = ["tea", "drink preferences", "beverages", "green tea", "favorite drink"];
+    for (const [index, query] of queries.entries()) {
+      const { details } = await run(search, { query, attempt: index + 1 });
+      expect(details).toMatchObject({ attempt: index + 1, maxAttempts: 5 });
+    }
+    expect(client.callsTo("searchMemories")).toHaveLength(5);
+    expect(client.callsTo("searchMemories").map(call => call.params)).toEqual(
+      queries.map(query => ({ workspaceId: owner.workspaceId, query, limit: smart.defaultMaxResults })),
+    );
+    await expect(run(search, { query: "another drink", attempt: 6 })).rejects.toThrow(MemoryInputError);
+    expect(client.callsTo("searchMemories")).toHaveLength(5);
   });
 
   it("reads a memory by reference and reports missing ones", async () => {
