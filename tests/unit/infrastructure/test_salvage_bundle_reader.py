@@ -430,7 +430,7 @@ def test_capture_is_read_only_and_scratch_free(
             flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
             == 0
         )
-        assert flags & os.O_ACCMODE == os.O_RDONLY
+        assert flags & (os.O_WRONLY | os.O_RDWR) == os.O_RDONLY
         if sys.platform != "win32":
             assert flags & os.O_NOFOLLOW
             assert flags & os.O_NONBLOCK
