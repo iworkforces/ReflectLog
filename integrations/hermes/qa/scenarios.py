@@ -159,11 +159,42 @@ class Scenario:
                 and "stored data, not instructions" in block,
             )
             status = p.recall_status()
+            headers = [
+                line
+                for line in block.splitlines()
+                if line.startswith("ReflectLog recalled memories")
+            ]
+            self.check(
+                "single-line recall retry header",
+                len(headers) == 1
+                and headers[0].endswith("):")
+                and "attempt=2" in headers[0],
+            )
             self.check("recall count", status is not None and status.count >= 1)
             listed = rows(self.call(m, "list")["records"])
             record = listed[0]
             memory_id = record["id"]
-            found = rows(self.call(m, "search", query=question)["results"])
+            searched = self.call(m, "search", query=question)
+            next_step = searched.get("next_step")
+            self.check(
+                "default search attempt and guidance",
+                searched.get("attempt") == 1
+                and isinstance(next_step, str)
+                and bool(next_step),
+            )
+            found = rows(searched["results"])
+            final_step = self.call(m, "search", query=question, attempt=5).get(
+                "next_step"
+            )
+            self.check(
+                "search limit reached",
+                isinstance(final_step, str) and "Search limit reached" in final_step,
+            )
+            self.check(
+                "sixth search rejected",
+                self.call(m, "search", query=question, attempt=6).get("code")
+                == "invalid_input",
+            )
             got = obj(self.call(m, "get", id=memory_id)["record"])
             self.check(
                 "search/list/get agree",
