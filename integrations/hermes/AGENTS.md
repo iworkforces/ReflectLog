@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-Standalone Python Hermes memory-provider plugin (`reflectlog`) for Hermes Agent `v0.21.7`, pinned to `71d34bad1045610252eda02ee79549436896e784`. Python >=3.14.8; dev and QA use exactly 3.14.8. Stateful streamable HTTP MCP, automatic recall, add-only native mirroring, opt-in turn capture, five tools. One external `memory.provider`; native memory stays active. Own uv project and checks; root scripts and CI do not cover it.
+Standalone Python Hermes memory-provider plugin (`reflectlog`) for Hermes Agent `v0.21.7`, pinned to `71d34bad1045610252eda02ee79549436896e784`. Python >=3.14.8; dev and QA use exactly 3.14.8. Stateful streamable HTTP MCP, automatic recall, add-only native mirroring, opt-in turn capture, five tools. One external `memory.provider`; native memory stays active. Own uv project and checks; root scripts do not cover it. The scoped `hermes-quality` workflow runs them in CI.
 
 ## STRUCTURE
 
@@ -101,4 +101,4 @@ uv run --no-project --python 3.14.8 --with pytest --with "httpx>=0.27,<1" python
 uv run --project integrations/hermes/dev --locked python integrations/hermes/qa/run.py [--scenario S1 ...] [--repo PATH] [--env-file PATH] [--hermes-checkout PATH] [--report PATH] [--keep]
 ```
 
-Repeat `--scenario` for a subset; default is `S1` through `S6`. `S6` may skip without usable LLM credentials. Exit `0` requires no `FAIL`. No root script or workflow runs these checks.
+Repeat `--scenario` for a subset; default is `S1` through `S6`. `S6` may skip without usable LLM credentials. Exit `0` requires no `FAIL`. The scoped `.github/workflows/hermes-quality.yml` runs exactly the six commands above as the `dev` job (first five) and a separate Hermes-free `core` job (last), on Python 3.14.8 with no secrets, server, or model downloads. No root script runs them. `qa/run.py` stays manual: it needs a real server and may `SKIP`.

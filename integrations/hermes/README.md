@@ -196,7 +196,10 @@ or never arrives; a read reconnects once, and a write becomes
 
 ## Development
 
-Run from the repository root. Root scripts and CI do not cover this directory.
+Run from the repository root. Root scripts do not cover this directory. The
+scoped `hermes-quality` workflow runs the six commands below in CI (the first
+five as one job, the Hermes-free core tests as another), and you can reproduce
+it locally with them; none needs credentials, a server, or model downloads.
 The core remains Hermes-free, using the standard library and `httpx`.
 The plugin and core require Python 3.14.8 or later; development uses exactly 3.14.8.
 

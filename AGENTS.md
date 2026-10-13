@@ -21,10 +21,10 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 │   └── utility/         # HTTP pool, Numba scoring, OS credentials
 ├── tests/               # unit/ mirrors package; integration uses real engines
 ├── integrations/openclaw/  # TypeScript plugin: pnpm + vitest + compiled smoke; scoped CI, no root script
-|-- integrations/hermes/    # Python memory provider: uv + pytest; no root script or CI
+|-- integrations/hermes/    # Python memory provider: uv + pytest; scoped CI, no root script
 ├── stubs/               # ty extra-paths + pyright stubPath
 ├── scripts/             # Copied git hooks + platform gates + ad-hoc
-├── .github/workflows/   # pr-quality, platform-storage, cd (release)
+├── .github/workflows/   # pr-quality, platform-storage, openclaw-quality, hermes-quality, cd (release)
 └── start-*.sh           # Local lint / typecheck / pytest wrappers
 ```
 
@@ -130,7 +130,7 @@ uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/
 - CLI version: `reflectlog/version.py` reads `importlib.metadata.version("reflectlog")`, falling back to `"0.0.0"` when not installed. The number itself comes from `pyproject.toml`.
 - Python: root and PEP 723 scripts require `>=3.14.8`; `.python-version`, `pr-quality.yml`, and `platform-storage.yml` use 3.14.8. Type/lint targets remain `3.14`/`py314`.
 - `integrations/openclaw` is not run by root scripts or Python workflows; its scoped `openclaw-quality` workflow runs `pnpm check` on Ubuntu with Node 24/26.
-- `integrations/hermes` is not run by any root script or workflow; run its `uv` checks by hand.
+- `integrations/hermes` is not run by root scripts or the Python workflows; its scoped `hermes-quality` workflow runs on Ubuntu with Python 3.14.8 in two jobs: the locked `dev` checks (pytest, ruff, pyright) against the pinned Hermes host, and a Hermes-free `core` test job. It triggers on pushes to `develop`/`main` and PRs touching `integrations/hermes/**` or the workflow file, plus manual dispatch. It is not a release gate (`cd.yml` does not wait for it). `qa/run.py` stays manual.
 - Lease, generation, and embedding-identity rules: `docs/storage-coordination.md`.
 
 ## GUIDANCE HIERARCHY
