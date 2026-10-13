@@ -104,7 +104,7 @@ class Scenario:
         return provider.binding.workspace_id
 
     def call(self, manager: Manager, name: str, **args: object) -> dict[str, object]:
-        return obj(json.loads(manager.handle_tool_call("reflectlog_" + name, args)))
+        return obj(json.loads(manager.handle_tool_call("memory_" + name, args)))
 
     def drain(self, provider: ReflectLogMemoryProvider) -> None:
         assert provider.writer is not None

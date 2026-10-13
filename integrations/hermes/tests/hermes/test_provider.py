@@ -20,8 +20,7 @@ def test_uninitialized(plugin_import):
     provider.sync_turn("project settings", "use defaults")
     # Then tools fail closed and shutdown is idempotent.
     assert (
-        json.loads(provider.handle_tool_call("reflectlog_list", {}))["code"]
-        == "disabled"
+        json.loads(provider.handle_tool_call("memory_list", {}))["code"] == "disabled"
     )
     provider.shutdown()
     provider.shutdown()
@@ -34,7 +33,7 @@ def test_real_manager_context(hermes_provider):
     manager.add_provider(provider)
     manager.initialize_all("session")
     provider.handle_tool_call(
-        "reflectlog_store", {"memories": ["Project uses cobalt widgets"]}
+        "memory_store", {"memories": ["Project uses cobalt widgets"]}
     )
     # When Hermes prefetches and wraps provider data.
     block = build_memory_context_block(
@@ -49,9 +48,7 @@ def test_real_manager_context(hermes_provider):
     assert "attempt=2" in block
     # When the agent follows recall with a rewritten query.
     retried = json.loads(
-        provider.handle_tool_call(
-            "reflectlog_search", {"query": "widgets", "attempt": 2}
-        )
+        provider.handle_tool_call("memory_search", {"query": "widgets", "attempt": 2})
     )
     # Then the explicit retry is one more search, carrying attempt 2.
     assert retried["attempt"] == 2
@@ -72,7 +69,7 @@ def test_empty_automatic_recall_then_rewritten_search(hermes_provider):
     assert fake.dispatches["search_memories"] == 1
     retried = json.loads(
         provider.handle_tool_call(
-            "reflectlog_search", {"query": "project settings", "attempt": 2}
+            "memory_search", {"query": "project settings", "attempt": 2}
         )
     )
     # Then no header was injected and exactly one explicit retry was dispatched.
@@ -123,9 +120,9 @@ def test_nonprimary_reads_only(hermes_provider, context):
     provider.on_memory_write("add", "MEMORY.md", "A useful fact")
     provider.sync_turn("A useful question", "A useful answer")
     # Then reads work but mutation is disabled.
-    assert "error" not in json.loads(provider.handle_tool_call("reflectlog_list", {}))
+    assert "error" not in json.loads(provider.handle_tool_call("memory_list", {}))
     assert (
-        json.loads(provider.handle_tool_call("reflectlog_forget", {"ids": [1]}))["code"]
+        json.loads(provider.handle_tool_call("memory_forget", {"ids": [1]}))["code"]
         == "disabled"
     )
     assert fake.dispatches["add_memories"] == 0
@@ -141,8 +138,7 @@ def test_author_gate_and_session_binding(hermes_provider):
     provider.on_turn_start(1, "cobalt widgets", author_id="intruder")
     assert provider.prefetch("cobalt widgets") == ""
     assert (
-        json.loads(provider.handle_tool_call("reflectlog_list", {}))["code"]
-        == "disabled"
+        json.loads(provider.handle_tool_call("memory_list", {}))["code"] == "disabled"
     )
     provider.on_session_switch("next")
     # Then no workspace is re-derived.
@@ -154,7 +150,7 @@ def test_author_block_survives_compression(hermes_provider):
     provider, fake = hermes_provider(
         platform="telegram", user_id="owner", chat_type="dm"
     )
-    provider.handle_tool_call("reflectlog_store", {"memories": ["cobalt widgets"]})
+    provider.handle_tool_call("memory_store", {"memories": ["cobalt widgets"]})
     provider.on_turn_start(1, "cobalt widgets", author_id="intruder")
     # When compression switches the session in the middle of that turn.
     provider.on_session_switch(
@@ -165,8 +161,7 @@ def test_author_block_survives_compression(hermes_provider):
     # Then recall, tools, and mirroring stay blocked until the next author check.
     assert provider.prefetch("cobalt widgets", session_id="compressed") == ""
     assert (
-        json.loads(provider.handle_tool_call("reflectlog_list", {}))["code"]
-        == "disabled"
+        json.loads(provider.handle_tool_call("memory_list", {}))["code"] == "disabled"
     )
     assert fake.dispatches["add_memories"] == 1
     provider.on_turn_start(2, "cobalt widgets", author_id="owner")
@@ -207,10 +202,8 @@ def test_invalid_unicode_never_reaches_the_wire(hermes_provider):
     text = "cobalt \ud800 widgets"
     # When it reaches recall, explicit tools, and automatic mirroring.
     recalled = provider.prefetch(text)
-    search = json.loads(provider.handle_tool_call("reflectlog_search", {"query": text}))
-    store = json.loads(
-        provider.handle_tool_call("reflectlog_store", {"memories": [text]})
-    )
+    search = json.loads(provider.handle_tool_call("memory_search", {"query": text}))
+    store = json.loads(provider.handle_tool_call("memory_store", {"memories": [text]}))
     provider.on_memory_write("add", "MEMORY.md", text)
     # Then recall fails soft, tools return a coded error, and nothing is sent.
     assert recalled == ""
@@ -225,8 +218,30 @@ def test_shared_chat_disabled(hermes_provider):
         platform="telegram", user_id="owner", chat_type="group"
     )
     # When an explicit read is attempted.
-    result = json.loads(provider.handle_tool_call("reflectlog_list", {}))
+    result = json.loads(provider.handle_tool_call("memory_list", {}))
     # Then it fails before network dispatch.
+    assert result["code"] == "disabled"
+    assert not fake.requests
+
+
+@pytest.mark.parametrize("gate", ["participant", "shared_chat", "author", "closing"])
+def test_preview_preserves_provider_authority(hermes_provider, gate):
+    # Given an inactive binding or a blocked provider lifecycle or participant.
+    context = {
+        "platform": "telegram",
+        "user_id": "owner" if gate != "participant" else None,
+        "chat_type": "group" if gate == "shared_chat" else "dm",
+    }
+    provider, fake = hermes_provider(**context)
+    if gate == "author":
+        provider.on_turn_start(1, "cobalt widgets", author_id="intruder")
+    if gate == "closing":
+        provider.shutdown()
+    # When a non-mutating preview is requested.
+    result = json.loads(
+        provider.handle_tool_call("memory_preview", {"memories": ["cobalt fact"]})
+    )
+    # Then preview cannot bypass the provider's access checks.
     assert result["code"] == "disabled"
     assert not fake.requests
 
@@ -234,7 +249,7 @@ def test_shared_chat_disabled(hermes_provider):
 def test_stale_recall_discarded(hermes_provider):
     # Given an in-flight recall across a session boundary.
     provider, fake = hermes_provider()
-    provider.handle_tool_call("reflectlog_store", {"memories": ["cobalt widgets"]})
+    provider.handle_tool_call("memory_store", {"memories": ["cobalt widgets"]})
     fake.entered, fake.release = threading.Event(), threading.Event()
     results = []
     worker = threading.Thread(
@@ -282,7 +297,7 @@ def test_breaker_skips_automatic_not_explicit(hermes_provider, plugin_import):
         provider.writer.record_failure(error)
     # When both recall and an explicit read are requested.
     assert provider.prefetch("cobalt widgets") == ""
-    result = json.loads(provider.handle_tool_call("reflectlog_list", {}))
+    result = json.loads(provider.handle_tool_call("memory_list", {}))
     # Then only the explicit read bypasses the breaker.
     assert result["total"] == 0
     assert fake.dispatches["get_all_memories"] == 1
@@ -316,7 +331,7 @@ def test_approval_blocks_capture_but_not_mirror(
     provider.on_memory_write("add", "MEMORY.md", "Approved cobalt preference")
     provider.sync_turn("I prefer cobalt", "Use cobalt")
     result = json.loads(
-        provider.handle_tool_call("reflectlog_store", {"memories": ["unapproved fact"]})
+        provider.handle_tool_call("memory_store", {"memories": ["unapproved fact"]})
     )
     assert provider.writer.drain(2)
     # Then only the native committed write is mirrored.
@@ -338,7 +353,7 @@ def test_shutdown_bounded_with_inflight_job(hermes_provider):
         assert elapsed < 2.2
         assert provider.prefetch("cobalt widgets") == ""
         assert (
-            json.loads(provider.handle_tool_call("reflectlog_list", {}))["code"]
+            json.loads(provider.handle_tool_call("memory_list", {}))["code"]
             == "disabled"
         )
     finally:
@@ -379,8 +394,7 @@ def test_invalid_configuration_stays_inactive(
     assert provider.identity_signature() == {}
     assert "config_error" in provider.get_status_config({})
     assert (
-        json.loads(provider.handle_tool_call("reflectlog_list", {}))["code"]
-        == "disabled"
+        json.loads(provider.handle_tool_call("memory_list", {}))["code"] == "disabled"
     )
     assert "private-token" not in caplog.text
     provider.shutdown()

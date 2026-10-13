@@ -13,18 +13,22 @@ def test_tool_happy_paths(hermes_provider):
     assert not {s["name"] for s in provider.get_tool_schemas()} & set(
         toolsets._HERMES_CORE_TOOLS
     )
-    # When the five tools operate on one record.
+    # When the six tools operate on one record.
     stored = json.loads(
-        provider.handle_tool_call("reflectlog_store", {"memories": ["cobalt widgets"]})
+        provider.handle_tool_call("memory_store", {"memories": ["cobalt widgets"]})
     )
     searched = json.loads(
-        provider.handle_tool_call("reflectlog_search", {"query": "cobalt"})
+        provider.handle_tool_call("memory_search", {"query": "cobalt"})
     )
-    listed = json.loads(provider.handle_tool_call("reflectlog_list", {}))
-    record = json.loads(provider.handle_tool_call("reflectlog_get", {"id": 1}))
-    deleted = json.loads(provider.handle_tool_call("reflectlog_forget", {"ids": [1]}))
+    preview = json.loads(
+        provider.handle_tool_call("memory_preview", {"memories": ["teal dashboards"]})
+    )
+    listed = json.loads(provider.handle_tool_call("memory_list", {}))
+    record = json.loads(provider.handle_tool_call("memory_get", {"id": 1}))
+    deleted = json.loads(provider.handle_tool_call("memory_forget", {"ids": [1]}))
     # Then their structured results preserve the server contract.
     assert stored["stored_count"] == 1
+    assert preview["dry_run"] is True
     assert searched["count"] == 1
     assert searched["attempt"] == 1
     assert searched["max_attempts"] == 5
@@ -37,18 +41,21 @@ def test_tool_happy_paths(hermes_provider):
 @pytest.mark.parametrize(
     "name,args",
     [
-        ("reflectlog_search", {"query": "ok", "limit": True}),
-        ("reflectlog_search", {"query": 1}),
-        ("reflectlog_search", {"query": "x", "workspace_id": "other"}),
+        ("memory_search", {"query": "ok", "limit": True}),
+        ("memory_search", {"query": 1}),
+        ("memory_search", {"query": "x", "workspace_id": "other"}),
         *[
-            ("reflectlog_search", {"query": "ok", "attempt": attempt})
+            ("memory_search", {"query": "ok", "attempt": attempt})
             for attempt in [0, 6, -1, 1.5, "2", True, False, None]
         ],
-        ("reflectlog_store", {"memories": "bad"}),
-        ("reflectlog_store", {"memories": ["ok"], "dry_run": 1}),
-        ("reflectlog_list", {"offset": -1}),
-        ("reflectlog_get", {"id": True}),
-        ("reflectlog_forget", {"ids": [False]}),
+        ("memory_store", {"memories": "bad"}),
+        ("memory_store", {"memories": ["ok"], "dry_run": True}),
+        ("memory_store", {"memories": ["ok"], "dry_run": False}),
+        ("memory_preview", {"memories": "bad"}),
+        ("memory_preview", {"memories": ["ok"], "replace": 1}),
+        ("memory_list", {"offset": -1}),
+        ("memory_get", {"id": True}),
+        ("memory_forget", {"ids": [False]}),
     ],
 )
 def test_argument_validation(hermes_provider, name, args):
@@ -67,11 +74,11 @@ def test_search_guides_rewritten_retry(hermes_provider, attempt, has_hits):
     # Given a lookup with either matching or empty server results.
     provider, fake = hermes_provider()
     if has_hits:
-        provider.handle_tool_call("reflectlog_store", {"memories": ["cobalt widgets"]})
+        provider.handle_tool_call("memory_store", {"memories": ["cobalt widgets"]})
     # When the caller supplies its search attempt.
     result = json.loads(
         provider.handle_tool_call(
-            "reflectlog_search", {"query": "cobalt", "attempt": attempt}
+            "memory_search", {"query": "cobalt", "attempt": attempt}
         )
     )
     # Then relevance checking and the remaining search budget guide the caller.
@@ -102,7 +109,7 @@ def test_search_attempt_schema(hermes_provider):
     parameters = next(
         s["parameters"]
         for s in provider.get_tool_schemas()
-        if s["name"] == "reflectlog_search"
+        if s["name"] == "memory_search"
     )
     # Then the bounded optional integer is advertised without extra arguments.
     assert parameters["properties"]["attempt"] == {
@@ -123,7 +130,7 @@ def test_five_rewritten_searches_reject_sixth(hermes_provider):
     results = [
         json.loads(
             provider.handle_tool_call(
-                "reflectlog_search", {"query": query, "attempt": attempt}
+                "memory_search", {"query": query, "attempt": attempt}
             )
         )
         for attempt, query in enumerate(
@@ -131,9 +138,7 @@ def test_five_rewritten_searches_reject_sixth(hermes_provider):
         )
     ]
     rejected = json.loads(
-        provider.handle_tool_call(
-            "reflectlog_search", {"query": "synonyms", "attempt": 6}
-        )
+        provider.handle_tool_call("memory_search", {"query": "synonyms", "attempt": 6})
     )
     # Then only the five valid searches reach the backend.
     assert [r["attempt"] for r in results] == [1, 2, 3, 4, 5]
@@ -155,15 +160,13 @@ def test_error_mapping(hermes_provider, fault, code, caplog):
     fake.faults["add_memories"].append(fault)
     # When storing a sensitive entry.
     result = json.loads(
-        provider.handle_tool_call(
-            "reflectlog_store", {"memories": ["private cobalt fact"]}
-        )
+        provider.handle_tool_call("memory_store", {"memories": ["private cobalt fact"]})
     )
     # Then the typed code is exposed, without logs or mutation retries.
     assert result["code"] == code
     if code == "outcome_unknown":
         assert (
-            "Check with reflectlog_search or reflectlog_list before retrying."
+            "Check with memory_search or memory_list before retrying."
             in result["error"]
         )
         assert fake.dispatches["add_memories"] == 1
@@ -177,22 +180,20 @@ def test_unauthorized(hermes_provider):
     fake.auth_status = 401
     fake.token = "a different server token"
     # When a read is attempted.
-    result = json.loads(provider.handle_tool_call("reflectlog_list", {}))
+    result = json.loads(provider.handle_tool_call("memory_list", {}))
     # Then authentication failure is classified.
     assert result["code"] == "unauthorized"
 
 
 @pytest.mark.parametrize("context", ["subagent", "cron"])
-def test_dry_run_allowed_on_nonprimary(hermes_provider, context):
+def test_preview_allowed_on_nonprimary(hermes_provider, context):
     # Given a non-primary provider on a profile workspace.
     provider, fake = hermes_provider(
         {"workspace_scope": "profile"}, platform=context, agent_context=context
     )
     # When a non-mutating preview is requested.
     result = json.loads(
-        provider.handle_tool_call(
-            "reflectlog_store", {"memories": ["cobalt fact"], "dry_run": True}
-        )
+        provider.handle_tool_call("memory_preview", {"memories": ["cobalt fact"]})
     )
     # Then it succeeds without storing content.
     assert result["dry_run"] is True
@@ -206,7 +207,7 @@ def test_smart_replace_opt_in(hermes_provider, enabled, expected):
     # When replacement is requested through the explicit tool.
     result = json.loads(
         provider.handle_tool_call(
-            "reflectlog_store", {"memories": ["cobalt fact"], "replace": True}
+            "memory_store", {"memories": ["cobalt fact"], "replace": True}
         )
     )
     # Then only opt-in permits dispatch.
@@ -230,7 +231,125 @@ def test_tool_errors_never_return_server_detail(hermes_provider, plugin_import, 
     tools = plugin_import("tool_handlers")
     context = tools.ToolContext(FailingClient(), provider.settings, "test", True)
     # When it crosses the real Hermes JSON error helper.
-    result = json.loads(tools.handle_tool_call(context, "reflectlog_list", {}))
+    result = json.loads(tools.handle_tool_call(context, "memory_list", {}))
     # Then only the client's own message is returned, and nothing is logged.
     assert result == {"error": "ReflectLog tool failed", "code": "tool_error"}
     assert "qa-token" not in caplog.text
+
+
+def test_six_shared_tool_names(hermes_provider):
+    # Given an initialized provider in the real Hermes namespace.
+    provider, fake = hermes_provider()
+    expected = (
+        "memory_search",
+        "memory_get",
+        "memory_store",
+        "memory_preview",
+        "memory_forget",
+        "memory_list",
+    )
+    # When Hermes discovers the available tools.
+    names = [schema["name"] for schema in provider.get_tool_schemas()]
+    # Then exactly the six shared names are unique and do not shadow core tools.
+    assert len(names) == len(set(names)) == 6
+    assert set(names) == set(expected)
+    assert set(names).isdisjoint(toolsets._HERMES_CORE_TOOLS)
+    assert not fake.requests
+
+
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("reflectlog_search", {"query": "cobalt"}),
+        ("reflectlog_store", {"memories": ["cobalt fact"]}),
+        ("reflectlog_list", {}),
+        ("reflectlog_get", {"id": 1}),
+        ("reflectlog_forget", {"ids": [1]}),
+        ("reflectlog_preview", {"memories": ["cobalt fact"]}),
+    ],
+)
+def test_legacy_names_are_unknown(hermes_provider, name, args):
+    # Given an active provider and an obsolete tool name.
+    provider, fake = hermes_provider()
+    # When the obsolete tool is invoked.
+    result = json.loads(provider.handle_tool_call(name, args))
+    # Then the unknown name fails locally without a server request.
+    assert result["code"] == "invalid_input"
+    assert not fake.requests
+
+
+@pytest.mark.parametrize("context", ["primary", "subagent", "cron"])
+@pytest.mark.parametrize("approval", [False, True])
+def test_preview_skips_only_explicit_write_gate(
+    hermes_provider, plugin_import, monkeypatch, context, approval
+):
+    # Given an active workspace with explicit mutation approval or context gates.
+    provider, fake = hermes_provider(
+        {"workspace_scope": "profile"}, platform="cli", agent_context=context
+    )
+    monkeypatch.setattr(
+        plugin_import("tool_handlers"),
+        "write_approval_enabled",
+        lambda subsystem: approval and subsystem == "memory",
+    )
+    # When the same fact is previewed and then offered for storage.
+    preview = json.loads(
+        provider.handle_tool_call("memory_preview", {"memories": ["cobalt fact"]})
+    )
+    stored = json.loads(
+        provider.handle_tool_call("memory_store", {"memories": ["cobalt fact"]})
+    )
+    # Then preview always dispatches, while storage obeys the mutation gate.
+    blocked = approval or context != "primary"
+    assert preview["dry_run"] is True
+    assert stored.get("code") == ("disabled" if blocked else None)
+    assert fake.dispatches["add_memories"] == (1 if blocked else 2)
+    assert bool(any(fake.store.values())) == (not blocked)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_preview_replacement_opt_in(hermes_provider, enabled):
+    # Given explicit smart replacement configuration.
+    provider, fake = hermes_provider({"smart_replace": enabled})
+    # When replacement is requested through preview.
+    result = json.loads(
+        provider.handle_tool_call(
+            "memory_preview", {"memories": ["cobalt fact"], "replace": True}
+        )
+    )
+    # Then opt-in is required even though preview cannot mutate storage.
+    assert result.get("code") == (None if enabled else "disabled")
+    assert fake.dispatches["add_memories"] == int(enabled)
+    assert not any(fake.store.values())
+    if enabled:
+        calls = [json.loads(r.content) for r in fake.requests if r.method == "POST"]
+        adds = [
+            r["params"]["arguments"]
+            for r in calls
+            if r.get("params", {}).get("name") == "add_memories"
+        ]
+        assert len(adds) == 1
+        assert adds[0]["dry_run"] is True
+        assert adds[0]["allow_replace"] is True
+    else:
+        assert not fake.requests
+
+
+def test_store_forwards_mutating_add(hermes_provider):
+    # Given an active primary provider.
+    provider, fake = hermes_provider()
+    # When storing a fact without preview arguments.
+    result = json.loads(
+        provider.handle_tool_call("memory_store", {"memories": ["cobalt fact"]})
+    )
+    # Then the MCP add explicitly selects mutation.
+    calls = [json.loads(r.content) for r in fake.requests if r.method == "POST"]
+    adds = [
+        r["params"]["arguments"]
+        for r in calls
+        if r.get("params", {}).get("name") == "add_memories"
+    ]
+    assert len(adds) == 1
+    assert adds[0]["dry_run"] is False
+    assert result["dry_run"] is False
+    assert result["stored_count"] == 1
