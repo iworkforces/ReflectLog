@@ -118,8 +118,8 @@ class ReflectLogMemoryProvider(MemoryProvider):
         except ConfigError as error:
             return str(error)
         return (
-            "Set REFLECTLOG_MCP_AUTH_TOKEN equal to the server REFLECTLOG_MCP_AUTH_TOKEN, "
-            "then run hermes memory setup reflectlog"
+            "Set REFLECTLOG_MCP_AUTH_TOKEN equal to the server "
+            "REFLECTLOG_MCP_AUTH_TOKEN, then run hermes memory setup reflectlog"
         )
 
     def get_config_schema(self) -> list[dict[str, Any]]:
