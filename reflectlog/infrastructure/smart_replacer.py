@@ -69,7 +69,9 @@ class SmartReplacerConfig:
         model: LLM model identifier (e.g., 'x-ai/grok-4.1-fast').
         threshold: Minimum confidence score to trigger replacement (0.0-1.0).
         enabled: Whether smart replacement is enabled.
-        timeout: HTTP request timeout in seconds.
+        timeout: Per-attempt timeout in seconds for replacement detection:
+            OpenAI request timeout; Anthropic full SDK exchange including
+            stream consumption.
         max_retries: Maximum number of retry attempts for LLM calls.
         retry_delay: Base delay in seconds for exponential backoff.
         provider: LLM provider ('openai' or 'anthropic').
@@ -221,6 +223,7 @@ class AnthropicReplacementProvider:
     def __init__(
         self,
         model: str | None = None,
+        timeout: float = 30.0,
         logger: IStructuredLogger | None = None,
     ) -> None:
         """Initialize Anthropic replacement provider.
@@ -229,6 +232,7 @@ class AnthropicReplacementProvider:
 
         Args:
             model: LLM model identifier (passed to generate_content).
+            timeout: Per-attempt timeout for the full SDK exchange and parsing.
             logger: Optional structured logger.
         """
         super().__init__()
@@ -238,6 +242,7 @@ class AnthropicReplacementProvider:
 
         _ = init_credentials(verbose=False)
         self._model = model
+        self._timeout = timeout
         self._logger = logger
 
     def _extract_json_from_response(
@@ -310,16 +315,14 @@ class AnthropicReplacementProvider:
 
         for attempt in range(1, max_retries + 1):
             try:
-                # Call generate_content with model parameter
-                response_text = await generate_content(
-                    prompt=prompt,
-                    model=self._model,
-                    allowed_tools=[],
-                )
-
-                # Parse JSON from response
-                result = self._extract_json_from_response(response_text)
-                return parse_replacement_decision(result)
+                async with asyncio.timeout(self._timeout):
+                    response_text = await generate_content(
+                        prompt=prompt,
+                        model=self._model,
+                        allowed_tools=[],
+                    )
+                    result = self._extract_json_from_response(response_text)
+                    return parse_replacement_decision(result)
 
             except Exception as e:
                 last_exception = e
@@ -379,6 +382,7 @@ def create_replacement_provider(
     elif config.provider == "anthropic":
         return AnthropicReplacementProvider(
             model=config.model,
+            timeout=config.timeout,
             logger=logger,
         )
     else:

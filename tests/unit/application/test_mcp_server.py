@@ -45,6 +45,193 @@ OLD_NAMES = {
     "remove_records",
 }
 
+CAPACITY_MESSAGE = (
+    "Resident workspace limit reached; no idle workspace could be released"
+)
+TOOL_ARGUMENTS: dict[str, dict[str, object]] = {
+    "add_memories": {"memories": ["memory"]},
+    "search_memories": {"query": "memory"},
+    "get_all_memories": {},
+    "get_memory_by_id": {"id": 1},
+    "delete_memories": {"ids": [1]},
+}
+
+
+def capacity_manager(config: Config, _logger: object) -> MagicMock:
+    manager = MagicMock(spec=MemoryManager)
+    manager.config = config
+    manager.add_memories_async = AsyncMock(return_value=AddResult(1, 0, 0, []))
+    manager.search_records = AsyncMock(return_value=search_result(["memory"]))
+    manager.get_page_records_with_total.return_value = (rows(["memory"]), 1)
+    manager.get_records.return_value = (rows(["memory"]), [])
+    manager.delete_records.return_value = ([1], [])
+    return manager
+
+
+@pytest.mark.parametrize("tool_name", NAMES)
+async def test_default_resident_capacity_is_unlimited(
+    set_env_vars, tool_name: str
+) -> None:
+    entered = anyio.Event()
+    release = anyio.Event()
+    active: set[str] = set()
+
+    def create_manager(config: Config, logger: object) -> MagicMock:
+        manager = capacity_manager(config, logger)
+
+        async def search(query: str, *, limit: int) -> RecordSearchResult:
+            if query == "hold":
+                active.add(config.workspace_id)
+                if len(active) == 12:
+                    entered.set()
+                await release.wait()
+            return search_result(["memory"])
+
+        manager.search_records = AsyncMock(side_effect=search)
+        return manager
+
+    with patch(
+        "reflectlog.application.mcp_server.MemoryManager", side_effect=create_manager
+    ) as factory:
+        server = FastMCPServer(replace(Config.from_environment(), workspace_id=""))
+        assert server.config.workspace_max_resident is None
+        client_factory = cast("Callable[[object], Client]", Client)
+        async with client_factory(server.mcp) as client:
+            invocations = [
+                asyncio.create_task(
+                    client.call_tool(
+                        "search_memories",
+                        {"workspace_id": f"workspace-{index}", "query": "hold"},
+                    )
+                )
+                for index in range(12)
+            ]
+            try:
+                with anyio.fail_after(5):
+                    await entered.wait()
+                for index in range(12):
+                    result = await client.call_tool(
+                        tool_name,
+                        {
+                            "workspace_id": f"workspace-{index}",
+                            **TOOL_ARGUMENTS[tool_name],
+                        },
+                    )
+                    assert not result.is_error
+                assert factory.call_count == 12
+            finally:
+                release.set()
+                with anyio.fail_after(5):
+                    await asyncio.gather(*invocations)
+
+
+@pytest.mark.parametrize("tool_name", NAMES)
+async def test_resident_capacity_rejects_active_then_evicts_idle(
+    set_env_vars, tool_name: str
+) -> None:
+    entered = anyio.Event()
+    release = anyio.Event()
+    ordering: list[str] = []
+    managers: dict[str, MagicMock] = {}
+
+    def create_manager(config: Config, logger: object) -> MagicMock:
+        ordering.append(f"create:{config.workspace_id}")
+        manager = capacity_manager(config, logger)
+        manager.close.side_effect = lambda: ordering.append(
+            f"close:{config.workspace_id}"
+        )
+        if config.workspace_id == "private-alpha":
+
+            async def search(_query: str, *, limit: int) -> RecordSearchResult:
+                entered.set()
+                await release.wait()
+                return search_result(["memory"])
+
+            manager.search_records = AsyncMock(side_effect=search)
+        managers[config.workspace_id] = manager
+        return manager
+
+    with patch(
+        "reflectlog.application.mcp_server.MemoryManager", side_effect=create_manager
+    ) as factory:
+        server = FastMCPServer(
+            replace(
+                Config.from_environment(), workspace_id="", workspace_max_resident=1
+            )
+        )
+        client_factory = cast("Callable[[object], Client]", Client)
+        async with client_factory(server.mcp) as client:
+            invocation = asyncio.create_task(
+                client.call_tool(
+                    "search_memories",
+                    {"workspace_id": "private-alpha", "query": "memory"},
+                )
+            )
+            try:
+                with anyio.fail_after(5):
+                    await entered.wait()
+                with pytest.raises(ToolError, match=CAPACITY_MESSAGE) as raised:
+                    await client.call_tool(
+                        tool_name,
+                        {"workspace_id": "private-beta", **TOOL_ARGUMENTS[tool_name]},
+                    )
+                assert "private-alpha" not in str(raised.value)
+                assert "private-beta" not in str(raised.value)
+                assert factory.call_count == 1
+                managers["private-alpha"].close.assert_not_called()
+            finally:
+                release.set()
+                with anyio.fail_after(5):
+                    await invocation
+            result = await client.call_tool(
+                tool_name,
+                {"workspace_id": "private-beta", **TOOL_ARGUMENTS[tool_name]},
+            )
+            assert not result.is_error
+            assert ordering == [
+                "create:private-alpha",
+                "close:private-alpha",
+                "create:private-beta",
+            ]
+            assert factory.call_count == 2
+
+
+async def test_resident_capacity_reuses_canonical_workspace(set_env_vars) -> None:
+    with patch(
+        "reflectlog.application.mcp_server.MemoryManager", side_effect=capacity_manager
+    ) as factory:
+        server = FastMCPServer(
+            replace(
+                Config.from_environment(), workspace_id="", workspace_max_resident=1
+            )
+        )
+        client_factory = cast("Callable[[object], Client]", Client)
+        async with client_factory(server.mcp) as client:
+            for workspace in ("ReflectLog", "  REFLECTLOG \t", "reflectlog"):
+                for name in NAMES:
+                    result = await client.call_tool(
+                        name, {"workspace_id": workspace, **TOOL_ARGUMENTS[name]}
+                    )
+                    assert not result.is_error
+            assert factory.call_count == 1
+            assert factory.call_args.args[0].workspace_id == "reflectlog"
+
+
+async def test_resident_capacity_does_not_change_tool_schemas(set_env_vars) -> None:
+    config = replace(Config.from_environment(), workspace_id="")
+    schemas: list[dict[str, dict[str, object]]] = []
+    client_factory = cast("Callable[[object], Client]", Client)
+    for maximum in (None, 1):
+        server = FastMCPServer(replace(config, workspace_max_resident=maximum))
+        async with client_factory(server.mcp) as client:
+            tools = cast("list[MCPTool]", await client.list_tools())
+            assert [tool.name for tool in tools] == NAMES
+            schemas.append({tool.name: tool.input_schema for tool in tools})
+    assert schemas[0] == schemas[1]
+    for schema in schemas[1].values():
+        assert "capacity" not in json.dumps(schema).lower()
+        assert "max_resident" not in json.dumps(schema)
+
 
 class _TestServer(FastMCPServer):
     memory_manager: MagicMock

@@ -10,6 +10,7 @@ from reflectlog.application.config.validation import canonical_workspace_id
 from reflectlog.application.memory.manager import MemoryManager, wemm_config
 from reflectlog.application.utils.logging import create_logger
 from reflectlog.core.enums import EmbedderProvider
+from reflectlog.core.exceptions import ConfigurationError
 from reflectlog.infrastructure.embeddings.wemm_service import (
     WeMMBorrow,
     acquire_wemm,
@@ -28,6 +29,10 @@ def _create_manager(config: Config) -> MemoryManager:
     return MemoryManager(
         config, create_logger(__name__, workspace_id, config.log_level)
     )
+
+
+class WorkspaceCapacityError(RuntimeError):
+    """The resident workspace limit is reached and no idle workspace can be closed."""
 
 
 @dataclass
@@ -64,17 +69,24 @@ class WorkspaceRegistry:
         clock: Callable[[], float] = monotonic,
         idle_ttl: float = 900,
         max_idle: int = 8,
+        max_resident: int | None = None,
     ) -> None:
+        if max_resident is not None and (
+            type(max_resident) is not int or max_resident < 1
+        ):
+            raise ConfigurationError("max_resident must be None or an integer >= 1")
         self._config = config
         self._factory = manager_factory
         self._clock = clock
         self._idle_ttl = idle_ttl
         self._max_idle = max_idle
+        self._max_resident = max_resident
         self._entries: dict[str, _Entry] = {}
         self._building: dict[str, anyio.Event] = {}
         self._evicting: dict[str, asyncio.Task[Exception | None]] = {}
         self._quarantined: dict[str, MemoryManager] = {}
         self._lock = anyio.Lock()
+        self._admission_changed = anyio.Event()
         self._drained = anyio.Event()
         self._drained.set()
         self._closed = anyio.Event()
@@ -127,6 +139,10 @@ class WorkspaceRegistry:
         ):
             self._drained.set()
 
+    def _notify_admission_locked(self) -> None:
+        self._admission_changed.set()
+        self._admission_changed = anyio.Event()
+
     async def _acquire_entry(self, key: str) -> _Entry:
         with anyio.CancelScope(shield=True):
             while True:
@@ -141,18 +157,24 @@ class WorkspaceRegistry:
                     pending_close = self._evicting.get(key)
                     pending_build = self._building.get(key)
                     entry = self._entries.get(key)
+                    capacity_wait: set[asyncio.Task[Exception | None]] = set()
+                    admission_changed = self._admission_changed
                     if pending_close is None and pending_build is None:
                         if entry is not None:
                             if self._drained.is_set():
                                 self._drained = anyio.Event()
                             entry.active += 1
                             return entry
-                        pending_build = anyio.Event()
-                        self._building[key] = pending_build
-                        if self._drained.is_set():
-                            self._drained = anyio.Event()
-                        break
-                if pending_close is not None:
+                        capacity_wait = self._make_room_locked()
+                        if not capacity_wait:
+                            pending_build = anyio.Event()
+                            self._building[key] = pending_build
+                            if self._drained.is_set():
+                                self._drained = anyio.Event()
+                            break
+                if capacity_wait:
+                    await admission_changed.wait()
+                elif pending_close is not None:
                     _ = await asyncio.wait({pending_close})
                 elif pending_build is not None:
                     await pending_build.wait()
@@ -163,25 +185,63 @@ class WorkspaceRegistry:
                 async with self._lock:
                     _ = self._building.pop(key)
                     pending_build.set()
+                    self._notify_admission_locked()
                     self._notify_drained_locked()
                 raise
+            pin_error: Exception | None = None
+            cleanup_task: asyncio.Task[Exception | None] | None = None
             async with self._lock:
-                if (
-                    type(manager) is MemoryManager
-                    and manager.config.embedder_provider is EmbedderProvider.WEMM
-                    and self._wemm_pin is None
-                ):
-                    self._wemm_pin = acquire_wemm(wemm_config(manager.config))
-                entry = _Entry(manager, 0, self._clock())
-                self._entries[key] = entry
+                try:
+                    if (
+                        type(manager) is MemoryManager
+                        and manager.config.embedder_provider is EmbedderProvider.WEMM
+                        and self._wemm_pin is None
+                    ):
+                        self._wemm_pin = acquire_wemm(wemm_config(manager.config))
+                except Exception as error:
+                    pin_error = error
+                    cleanup_task = self._schedule_eviction_locked(key, manager)
                 _ = self._building.pop(key)
                 pending_build.set()
-                if self._closing:
-                    self._notify_drained_locked()
-                    raise RuntimeError("WorkspaceRegistry is closed")
-                entry.active += 1
-                return entry
+                self._notify_admission_locked()
+                if pin_error is None:
+                    entry = _Entry(manager, 0, self._clock())
+                    self._entries[key] = entry
+                    if self._closing:
+                        self._notify_drained_locked()
+                        raise RuntimeError("WorkspaceRegistry is closed")
+                    entry.active += 1
+                    return entry
+            if cleanup_task is not None:
+                _ = await cleanup_task
+            raise pin_error
         raise RuntimeError("Workspace acquisition was cancelled")
+
+    def _make_room_locked(self) -> set[asyncio.Task[Exception | None]]:
+        """Return evictions to await before re-checking; empty admits the new key."""
+        if self._max_resident is None:
+            return set()
+        resident = (
+            self._entries.keys()
+            | self._building.keys()
+            | self._evicting.keys()
+            | self._quarantined.keys()
+        )
+        if len(resident) < self._max_resident:
+            return set()
+        oldest = min(
+            (item for item in self._entries.items() if item[1].active == 0),
+            key=lambda item: item[1].idle_since,
+            default=None,
+        )
+        if oldest is not None:
+            key, entry = oldest
+            return {self._schedule_eviction_locked(key, entry.manager)}
+        if self._evicting:
+            return set(self._evicting.values())
+        raise WorkspaceCapacityError(
+            "Resident workspace limit reached; no idle workspace could be released"
+        )
 
     def _prune_locked(self) -> list[asyncio.Task[Exception | None]]:
         now = self._clock()
@@ -213,11 +273,13 @@ class WorkspaceRegistry:
             async with self._lock:
                 self._quarantined[key] = manager
                 _ = self._evicting.pop(key)
+                self._notify_admission_locked()
                 self._notify_drained_locked()
             return error
         async with self._lock:
             _ = self._quarantined.pop(key, None)
             _ = self._evicting.pop(key)
+            self._notify_admission_locked()
             self._notify_drained_locked()
         return None
 
@@ -262,6 +324,7 @@ class WorkspaceRegistry:
             async with self._lock:
                 if not self._closing:
                     self._closing = True
+                    self._notify_admission_locked()
                     other_closer = False
                 elif not self._closed.is_set():
                     other_closer = True

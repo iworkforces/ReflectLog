@@ -220,6 +220,7 @@ class TestConfigDefaults:
     def test_init_defaults(self):
         cfg = self._make_config()
         assert cfg.add_max_concurrency == 4
+        assert cfg.workspace_max_resident is None
         assert cfg.eager_initialization is True
         assert cfg.eager_initialize_search_engines is None
         assert cfg.eager_initialize_reranker is None
@@ -703,6 +704,47 @@ class TestFromEnvironmentOverrides:
     def test_add_max_concurrency_clamped(self, monkeypatch: pytest.MonkeyPatch):
         with pytest.raises(ConfigurationError, match="ADD_MAX_CONCURRENCY"):
             _ = self._with_env(monkeypatch, ADD_MAX_CONCURRENCY="0")
+
+    def test_workspace_max_resident_unset_is_unlimited(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("WORKSPACE_MAX_RESIDENT", raising=False)
+
+        cfg = self._with_env(monkeypatch)
+
+        assert cfg.workspace_max_resident is None
+
+    @pytest.mark.parametrize(("raw", "expected"), [("1", 1), ("8", 8)])
+    def test_workspace_max_resident_override(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: int
+    ) -> None:
+        cfg = self._with_env(monkeypatch, WORKSPACE_MAX_RESIDENT=raw)
+
+        assert cfg.workspace_max_resident == expected
+
+    @pytest.mark.parametrize(
+        ("raw", "reason"),
+        [
+            ("", "value is empty"),
+            ("   ", "value is empty"),
+            ("0", "below the allowed range"),
+            ("-3", "below the allowed range"),
+            ("2.5", "expected an integer"),
+            ("abc", "expected an integer"),
+            ("True", "expected an integer"),
+        ],
+    )
+    def test_workspace_max_resident_rejects_invalid_env(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, reason: str
+    ) -> None:
+        with pytest.raises(
+            ConfigurationError, match=f"Invalid WORKSPACE_MAX_RESIDENT: {reason}"
+        ) as exc_info:
+            _ = self._with_env(monkeypatch, WORKSPACE_MAX_RESIDENT=raw)
+
+        message = str(exc_info.value)
+        assert raw not in message or raw == ""
+        assert "sk-test-key-12345" not in message
 
     def test_eager_initialization_false(self, monkeypatch: pytest.MonkeyPatch):
         cfg = self._with_env(monkeypatch, EAGER_INITIALIZATION="false")

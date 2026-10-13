@@ -242,7 +242,7 @@ class Scenario:
             self.check("shutdown within 2.5s", elapsed < 2.5, elapsed)
         elif scenario == "recovery":
             self.check("restart explicit list", "error" not in self.call(m, "list"))
-            os.environ["REFLECTLOG_MCP_TOKEN"] = "qa-wrong-token"
+            os.environ["REFLECTLOG_MCP_AUTH_TOKEN"] = "qa-wrong-token"
             _, wrong = self.provider()
             self.check(
                 "wrong token unauthorized",

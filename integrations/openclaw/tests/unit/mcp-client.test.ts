@@ -66,7 +66,7 @@ type Opening = McpConnection | Error | Promise<McpConnection>;
 function setup(
   openings: readonly Opening[],
   raw: unknown = {},
-  env: Readonly<Record<string, string | undefined>> = { REFLECTLOG_MCP_TOKEN: "token" },
+  env: Readonly<Record<string, string | undefined>> = { REFLECTLOG_MCP_AUTH_TOKEN: "token" },
 ) {
   const queue = [...openings];
   const connect = vi.fn<ConnectFn>(async () => {
@@ -122,7 +122,7 @@ describe("ReflectLog MCP client", () => {
   });
 
   it("refuses HTTP without a token before connecting", async () => {
-    const { client, connect } = setup([new FakeConnection()], {}, { REFLECTLOG_MCP_TOKEN: " " });
+    const { client, connect } = setup([new FakeConnection()], {}, { REFLECTLOG_MCP_AUTH_TOKEN: " " });
     await expect(health(client)).rejects.toMatchObject({ code: "unauthorized" });
     expect(connect).not.toHaveBeenCalled();
   });
@@ -348,7 +348,7 @@ describe("ReflectLog MCP client", () => {
       });
 
       it("stays unauthorized, not outcome_unknown, when no token exists before dispatch", async () => {
-        const { client, connect } = setup([new FakeConnection()], {}, { REFLECTLOG_MCP_TOKEN: "" });
+        const { client, connect } = setup([new FakeConnection()], {}, { REFLECTLOG_MCP_AUTH_TOKEN: "" });
         await expect(call(client)).rejects.toMatchObject({ code: "unauthorized" });
         expect(connect).not.toHaveBeenCalled();
       });

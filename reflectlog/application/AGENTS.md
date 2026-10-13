@@ -33,8 +33,9 @@ application/
 | Offline salvage CLI | `salvage/__init__.py`, `salvage/cli.py` | `run(args)` returns exit code; JSON summary or `reflectlog salvage: <message>` |
 | Salvage orchestration | `salvage/service.py` | Application-owned `ContentSalvageService`; core protocols, `from_defaults()` wires infrastructure |
 | Salvage payloads | `salvage/manifest.py` | Deterministic `memories.jsonl` + `manifest.json`; stable `unresolved_reasons` codes |
+| Bundle verification | `salvage/verification.py`, `salvage/verify_cli.py` | `ContentSalvageVerifier`; content-free JSON, exits ready=0, not_ready/invalid=1, usage=2 |
 | Facade | `memory/manager.py` | Portalocker → `_write_lock` → `_lock` |
-| Workspace pin | `memory/workspace_registry.py` | Idle TTL 900s, max 8 idle; reaper in lifespan |
+| Workspace pin | `memory/workspace_registry.py` | Idle TTL 900s, max 8 idle; optional `WORKSPACE_MAX_RESIDENT`; reaper in lifespan |
 | Add | `memory/add_phases.py` | Embed outside exclusive; leftover ADD after generation |
 | Search | `memory/search_strategies.py` | 4-step; skip CE if ≤1 hit |
 | Config reload | `config/settings.py` `setup_config_reload` | SIGHUP helper; not called at startup |
@@ -43,7 +44,7 @@ application/
 ## CONVENTIONS
 
 - `FastMCPServer(server_config: Config | None = None)`; defaults to `get_config()`.
-- Salvage CLI is `application/salvage/cli.py`, lazily dispatched before server env/config loading. Service loads no config and constructs no manager, registry, engine, or model; infrastructure owns archive/snapshot/publication I/O.
+- Export/verify CLIs are `salvage/cli.py` / `salvage/verify_cli.py`, lazily dispatched before env/config loading. No config, manager, registry, engines, or models; infrastructure owns I/O. Verification opens no SQLite and creates no files.
 - Salvage exports observed active rows only. Raw journal evidence stays separate; pending `new_content` never becomes active content. `rebuild_ready=false` requires manual review before rebuilding.
 - Engines: manager calls `USearchConfig.from_config(ConfigAdapter(config))` (CE/replacer same). Do not route startup through `EngineFactory`.
 - Tools: `AddMemoriesTool` / `SearchMemoriesTool` / `GetAllMemoriesTool` / `GetMemoryByIdTool` / `DeleteMemoriesTool` only. Each MCP call passes `workspace_id`; all five handlers return `Awaitable[dict[str, object]]`. Never import engines or fusion.
@@ -55,6 +56,7 @@ application/
 ## ANTI-PATTERNS
 
 - Tools must not import engines or fusion.
+- Capacity admission stays in `WorkspaceRegistry`; tools keep their schemas.
 - Do not call `setup_config_reload()` from `server.py` / `FastMCPServer`.
 - Do not treat leftover `utils/*.pyc` (`http_client`, `metrics`, `circuit_breaker`) as APIs.
 - Do not construct engines via `EngineFactory` at runtime.

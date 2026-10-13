@@ -45,6 +45,7 @@ infrastructure/
 | Salvage archive | `salvage_archive.py` | `ArchiveInspector`; fingerprints SQLite files + sidecars, copies database/WAL to scratch |
 | Salvage snapshot | `salvage_snapshot.py` | `SqliteSalvageSnapshotReader`; active rows and raw journal evidence in one read-only transaction |
 | Salvage publication | `salvage_publication.py` | `FileSystemBundlePublisher`; exclusive mkdir/files, `INCOMPLETE` first, manifest last |
+| Bundle capture | `salvage_bundle_reader.py` | `FileSystemBundleReader`; lstat + O_NOFOLLOW where supported, one captured read; observed-change detection only; never writes |
 | Salvage path checks | `salvage_paths.py` | `is_directory_within`: realpath + `samefile` ancestor walk |
 | CE Step 4 | `cross_encoder_reranker.py` | `rerank`: `[]` for empty input, pass-through when disabled, else score → normalize → CE threshold → recency |
 | Remote rerank | `openrouter_reranker.py` | `RERANKER_ENGINE=openrouter`; reuses `RerankerPostProcessor` |

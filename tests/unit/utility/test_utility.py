@@ -1,10 +1,12 @@
 """Unit tests for reflectlog/utility/utility.py module."""
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncGenerator, AsyncIterator
 import os
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import claude_agent_sdk as claude
 import pytest
 
 from reflectlog.utility.types import OAUTH_TOKEN_PREFIX
@@ -350,6 +352,99 @@ class TestInitCredentials:
 class TestGenerateContent:
     """Tests for generate_content() async function."""
 
+    async def test_tolerates_all_frame_variants(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from reflectlog.utility.utility import generate_content
+
+        frames: list[claude.Message] = [
+            claude.SystemMessage("init", {}),
+            claude.UserMessage("User input"),
+            claude.StreamEvent("event", "session", {}),
+            claude.RateLimitEvent(claude.RateLimitInfo("allowed"), "rate", "session"),
+            claude.ConversationResetMessage("conversation", "reset", "session"),
+            claude.AssistantMessage(
+                [
+                    claude.ThinkingBlock("Thinking", "signature"),
+                    claude.TextBlock(" Hello"),
+                    claude.ToolUseBlock("tool", "Read", {}),
+                    claude.TextBlock(" world! "),
+                ],
+                "test-model",
+            ),
+            claude.ResultMessage("success", 0, 0, False, 1, "session"),
+        ]
+
+        async def query(
+            *, prompt: str, options: claude.ClaudeAgentOptions
+        ) -> AsyncGenerator[claude.Message]:
+            for frame in frames:
+                yield frame
+
+        monkeypatch.setattr("reflectlog.utility.utility._claude.query", query)
+        assert await generate_content("Test") == "Hello world!"
+
+    @pytest.mark.parametrize("error", [False, True])
+    async def test_closes_owned_stream(
+        self, monkeypatch: pytest.MonkeyPatch, error: bool
+    ) -> None:
+        from reflectlog.utility.utility import generate_content
+
+        closed = False
+
+        async def query(
+            *, prompt: str, options: claude.ClaudeAgentOptions
+        ) -> AsyncGenerator[claude.Message]:
+            nonlocal closed
+            try:
+                if error:
+                    yield claude.AssistantMessage([], "test-model", error="rate_limit")
+                else:
+                    yield claude.AssistantMessage(
+                        [claude.TextBlock("Text")], "test-model"
+                    )
+                # An error must close the generator before this suspension.
+                if error:
+                    await asyncio.Event().wait()
+            finally:
+                closed = True
+
+        monkeypatch.setattr("reflectlog.utility.utility._claude.query", query)
+        if error:
+            with pytest.raises(RuntimeError, match="^Query failed: rate_limit$"):
+                await asyncio.wait_for(generate_content("Test"), timeout=1.0)
+        else:
+            # No ResultMessage is required for success.
+            assert await generate_content("Test") == "Text"
+        assert closed
+
+    async def test_closes_stream_on_external_cancellation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from reflectlog.utility.utility import generate_content
+
+        entered = asyncio.Event()
+        closed = False
+
+        async def query(
+            *, prompt: str, options: claude.ClaudeAgentOptions
+        ) -> AsyncGenerator[claude.Message]:
+            nonlocal closed
+            try:
+                yield claude.AssistantMessage([], "test-model")
+                entered.set()
+                await asyncio.Event().wait()
+            finally:
+                closed = True
+
+        monkeypatch.setattr("reflectlog.utility.utility._claude.query", query)
+        task = asyncio.create_task(generate_content("Test"))
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert closed
+
     @patch("reflectlog.utility.utility._claude.query")
     @patch("reflectlog.utility.utility._claude.ClaudeAgentOptions")
     async def test_returns_text_from_assistant_message(
@@ -360,13 +455,8 @@ class TestGenerateContent:
 
         from reflectlog.utility.utility import generate_content
 
-        # Create mock TextBlock
-        mock_block = MagicMock(spec=TextBlock)
-        mock_block.text = "Hello, world!"
-
-        # Create mock AssistantMessage
-        mock_message = MagicMock(spec=AssistantMessage)
-        mock_message.content = [mock_block]
+        mock_block = TextBlock(text="Hello, world!")
+        mock_message = AssistantMessage(content=[mock_block], model="test-model")
 
         # Make query return an async iterator
         async def mock_query_iter(**kwargs: Any) -> Any:
@@ -388,13 +478,11 @@ class TestGenerateContent:
 
         from reflectlog.utility.utility import generate_content
 
-        mock_block1 = MagicMock(spec=TextBlock)
-        mock_block1.text = "Hello, "
-        mock_block2 = MagicMock(spec=TextBlock)
-        mock_block2.text = "world!"
-
-        mock_message = MagicMock(spec=AssistantMessage)
-        mock_message.content = [mock_block1, mock_block2]
+        mock_block1 = TextBlock(text="Hello, ")
+        mock_block2 = TextBlock(text="world!")
+        mock_message = AssistantMessage(
+            content=[mock_block1, mock_block2], model="test-model"
+        )
 
         async def mock_query_iter(**kwargs: Any) -> Any:
             yield mock_message
@@ -415,9 +503,7 @@ class TestGenerateContent:
 
         from reflectlog.utility.utility import generate_content
 
-        mock_error = MagicMock(spec=ResultMessage)
-        mock_error.is_error = True
-        mock_error.subtype = "api_error"
+        mock_error = ResultMessage("api_error", 0, 0, True, 1, "session")
 
         async def mock_query_iter(**kwargs: Any) -> Any:
             yield mock_error
@@ -437,14 +523,9 @@ class TestGenerateContent:
 
         from reflectlog.utility.utility import generate_content
 
-        mock_block = MagicMock(spec=TextBlock)
-        mock_block.text = "Content"
-
-        mock_assistant = MagicMock(spec=AssistantMessage)
-        mock_assistant.content = [mock_block]
-
-        mock_result = MagicMock(spec=ResultMessage)
-        mock_result.is_error = False
+        mock_block = TextBlock(text="Content")
+        mock_assistant = AssistantMessage(content=[mock_block], model="test-model")
+        mock_result = ResultMessage("success", 0, 0, False, 1, "session")
 
         async def mock_query_iter(**kwargs: Any) -> Any:
             yield mock_assistant
@@ -462,18 +543,15 @@ class TestGenerateContent:
         self, mock_options_cls: MagicMock, mock_query: MagicMock
     ) -> None:
         """Should skip content blocks that are not TextBlock instances."""
-        from claude_agent_sdk import AssistantMessage, TextBlock
+        from claude_agent_sdk import AssistantMessage, TextBlock, ThinkingBlock
 
         from reflectlog.utility.utility import generate_content
 
-        mock_text_block = MagicMock(spec=TextBlock)
-        mock_text_block.text = "Valid text"
-
-        # A non-TextBlock content item
-        mock_other_block = MagicMock()
-
-        mock_message = MagicMock(spec=AssistantMessage)
-        mock_message.content = [mock_other_block, mock_text_block]
+        mock_text_block = TextBlock(text="Valid text")
+        mock_other_block = ThinkingBlock(thinking="Thinking", signature="signature")
+        mock_message = AssistantMessage(
+            content=[mock_other_block, mock_text_block], model="test-model"
+        )
 
         async def mock_query_iter(**kwargs: Any) -> Any:
             yield mock_message
@@ -494,11 +572,8 @@ class TestGenerateContent:
 
         from reflectlog.utility.utility import generate_content
 
-        mock_block = MagicMock(spec=TextBlock)
-        mock_block.text = "  Padded content  "
-
-        mock_message = MagicMock(spec=AssistantMessage)
-        mock_message.content = [mock_block]
+        mock_block = TextBlock(text="  Padded content  ")
+        mock_message = AssistantMessage(content=[mock_block], model="test-model")
 
         async def mock_query_iter(**kwargs: Any) -> Any:
             yield mock_message
@@ -578,8 +653,7 @@ class TestGenerateContent:
         from reflectlog.utility.utility import generate_content
 
         captured_options: list[ClaudeAgentOptions] = []
-        mock_message = MagicMock(spec=AssistantMessage)
-        mock_message.content = []
+        mock_message = AssistantMessage(content=[], model="test-model")
 
         async def mock_query_iter(*, prompt: str, options: ClaudeAgentOptions) -> Any:
             captured_options.append(options)
@@ -603,8 +677,7 @@ class TestGenerateContent:
         from reflectlog.utility.utility import generate_content
 
         captured_options: list[ClaudeAgentOptions] = []
-        mock_message = MagicMock(spec=AssistantMessage)
-        mock_message.content = []
+        mock_message = AssistantMessage(content=[], model="test-model")
 
         async def mock_query_iter(*, prompt: str, options: ClaudeAgentOptions) -> Any:
             captured_options.append(options)
@@ -628,17 +701,10 @@ class TestGenerateContent:
 
         from reflectlog.utility.utility import generate_content
 
-        mock_block1 = MagicMock(spec=TextBlock)
-        mock_block1.text = "Part 1. "
-
-        mock_msg1 = MagicMock(spec=AssistantMessage)
-        mock_msg1.content = [mock_block1]
-
-        mock_block2 = MagicMock(spec=TextBlock)
-        mock_block2.text = "Part 2."
-
-        mock_msg2 = MagicMock(spec=AssistantMessage)
-        mock_msg2.content = [mock_block2]
+        mock_block1 = TextBlock(text="Part 1. ")
+        mock_msg1 = AssistantMessage(content=[mock_block1], model="test-model")
+        mock_block2 = TextBlock(text="Part 2.")
+        mock_msg2 = AssistantMessage(content=[mock_block2], model="test-model")
 
         async def mock_query_iter(**kwargs: Any) -> Any:
             yield mock_msg1

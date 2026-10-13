@@ -208,4 +208,24 @@ describe("plugin registration", () => {
     expect(() => registered.getService()).toThrow(MemoryInputError);
     expect(createClient).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: "unsupported url scheme", pluginConfig: { url: "ftp://reflectlog.invalid/mcp" }, rejectedField: "url" },
+    { name: "reserved workspace override", pluginConfig: { workspaceOverrides: { main: "." } }, rejectedField: "workspaceOverrides" },
+  ])("stays disabled when registered directly with a host-rejected config: $name", async ({ pluginConfig, rejectedField }) => {
+    const { registered, capabilities, registerTool, services, logger, createClient } = setup(pluginConfig);
+    expect(registered.config).toBeNull();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("ReflectLog configuration rejected"));
+    expect(registerTool).not.toHaveBeenCalled();
+    expect(services).toEqual([]);
+    expect(capabilities[0]?.promptBuilder?.({ availableTools: new Set(MEMORY_TOOL_NAMES) })).toEqual([]);
+    expect(capabilities[0]).not.toHaveProperty("recallToolNames");
+    const opened = await capabilities[0]?.providerRuntime?.open({
+      cfg: replacing, agentId: "main",
+      context: { authority: { kind: "operator", scopes: [] }, assertCurrent() {} },
+    });
+    expect(opened).toMatchObject({ provider: null, error: expect.stringContaining(rejectedField) });
+    expect(() => registered.getService()).toThrow(MemoryInputError);
+    expect(createClient).not.toHaveBeenCalled();
+  });
 });

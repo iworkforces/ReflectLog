@@ -219,7 +219,7 @@ async def test_installed_http_signal_persists(
     if sys.platform == "win32":
         pytest.skip("POSIX SIGTERM path")
     monkeypatch.setenv("NUMBA_WARMUP", "false")
-    monkeypatch.setenv("MCP_AUTH_TOKEN", "shutdown-test-token")
+    monkeypatch.setenv("REFLECTLOG_MCP_AUTH_TOKEN", "shutdown-test-token")
     monkeypatch.setenv("MCP_HOST", "127.0.0.1")
     monkeypatch.setenv("PYTHONUNBUFFERED", "1")
     with socket.socket() as listener:

@@ -2,7 +2,7 @@
 
 > An Agentic Memory Layer For Coding Agents
 
-[![Python](https://img.shields.io/badge/python-%E2%89%A53.14.4-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-%E2%89%A53.14.8-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ReflectLog is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that provides persistent, Workspace-based memory storage for Claude Code and other AI agents. It combines semantic vector search with full-text search for intelligent memory retrieval.
@@ -23,7 +23,7 @@ ReflectLog is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io)
 
 ```bash
 # Clone the repository
-git clone https://github.com/iWorkforces/ReflectLog.git
+git clone https://github.com/iworkforces/ReflectLog.git
 cd ReflectLog
 
 # Install dependencies using uv
@@ -41,11 +41,11 @@ OPENROUTER_API_KEY=sk-or-your-key-here
 ### Running the Server
 
 ```bash
-# Start with the default HTTP transport (requires MCP_AUTH_TOKEN; bind-all needs ALLOW_PUBLIC_BIND=true)
-MCP_AUTH_TOKEN=change-me uv run reflectlog --port 9103
+# Start with the default HTTP transport (requires REFLECTLOG_MCP_AUTH_TOKEN; bind-all needs ALLOW_PUBLIC_BIND=true)
+REFLECTLOG_MCP_AUTH_TOKEN=change-me uv run reflectlog --port 9103
 
 # Or use the launcher
-MCP_AUTH_TOKEN=change-me ./start-reflectlog-mcp-server.sh
+REFLECTLOG_MCP_AUTH_TOKEN=change-me ./start-reflectlog-mcp-server.sh
 ```
 
 The server accepts only the `http` (default) and `streamable-http` transports.
@@ -53,13 +53,13 @@ The server accepts only the `http` (default) and `streamable-http` transports.
 
 ### Connect HTTP MCP clients
 
-Choose a secret token and use the same value for the server's `MCP_AUTH_TOKEN`
-and each client's `REFLECTLOG_MCP_TOKEN`. For example, replace `change-me` in
+Choose a secret token and use the same value for the server's `REFLECTLOG_MCP_AUTH_TOKEN`
+and each client's `REFLECTLOG_MCP_AUTH_TOKEN`. For example, replace `change-me` in
 the command above and export the matching value in the environment that starts
 each client:
 
 ```bash
-export REFLECTLOG_MCP_TOKEN='change-me'
+export REFLECTLOG_MCP_AUTH_TOKEN='change-me'
 ```
 
 The local endpoint is `http://127.0.0.1:9103/mcp`. Each client sends
@@ -80,7 +80,7 @@ Pick the configuration for your client:
       "reflectlog": {
         "type": "http",
         "url": "http://127.0.0.1:9103/mcp",
-        "headers": { "Authorization": "Bearer ${REFLECTLOG_MCP_TOKEN}" }
+        "headers": { "Authorization": "Bearer ${REFLECTLOG_MCP_AUTH_TOKEN}" }
       }
     }
   }
@@ -94,7 +94,7 @@ Pick the configuration for your client:
   ```toml
   [mcp_servers.reflectlog]
   url = "http://127.0.0.1:9103/mcp"
-  bearer_token_env_var = "REFLECTLOG_MCP_TOKEN"
+  bearer_token_env_var = "REFLECTLOG_MCP_AUTH_TOKEN"
   ```
 
   Check with `codex mcp list` or `/mcp` inside Codex.
@@ -105,7 +105,7 @@ Pick the configuration for your client:
   ```toml
   [mcp_servers.reflectlog]
   url = "http://127.0.0.1:9103/mcp"
-  headers = { Authorization = "Bearer ${REFLECTLOG_MCP_TOKEN}" }
+  headers = { Authorization = "Bearer ${REFLECTLOG_MCP_AUTH_TOKEN}" }
   ```
 
   Check with `grok mcp doctor reflectlog` or `/mcps` inside Grok Build.
@@ -120,7 +120,7 @@ Pick the configuration for your client:
         "type": "remote",
         "url": "http://127.0.0.1:9103/mcp",
         "oauth": false,
-        "headers": { "Authorization": "Bearer {env:REFLECTLOG_MCP_TOKEN}" }
+        "headers": { "Authorization": "Bearer {env:REFLECTLOG_MCP_AUTH_TOKEN}" }
       }
     }
   }
@@ -146,7 +146,20 @@ Every tool call requires an explicit `workspace_id: str`.
 `WORKSPACE_ID` in the environment or `.env` is not used as a default. Active
 workspace managers are cached per workspace. Idle managers expire after 15
 minutes without a call; a sweep runs every 60 seconds, with at most 8 idle
-managers retained. There is no MCP health-check tool. Search-failure counters
+managers retained. `WORKSPACE_MAX_RESIDENT` optionally caps resident workspaces;
+unset means unlimited. Only positive integers are accepted; blank, zero,
+negative, fractional, and non-numeric values fail at startup. Canonical workspace
+ids count once across loaded, building, closing, and failed-close managers.
+Reusing a resident workspace takes no extra slot. At capacity, a new workspace
+first closes the longest-idle manager, even before the idle timeout, and waits
+for close to persist its pending writes before loading the new manager. An
+in-progress close is awaited. If none is idle or closing, the call fails before
+loading with `Resident workspace limit reached; no idle workspace could be released`;
+retry later. Existing sessions keep working. Failed closes remain counted until
+a close succeeds; shutdown retries them without a timeout. This applies to all
+five tools without changing their schemas.
+
+There is no MCP health-check tool. Search-failure counters
 remain internal to each workspace manager and are not exposed over MCP.
 
 `ALLOWED_TOOLS` optionally filters the five names with a comma-separated list.
@@ -208,6 +221,7 @@ SMART_REPLACE_THRESHOLD=0.7       # Confidence threshold
 MCP_TRANSPORT=http                # http (default) or streamable-http
 MCP_PORT=9103                     # Port for HTTP transport
 LOG_LEVEL=INFO                    # Logging level
+# WORKSPACE_MAX_RESIDENT=         # Unset: unlimited; set to a positive integer
 ```
 
 See `.env.example` for all available options.
@@ -365,6 +379,36 @@ unchanged; there is no import tool. See
 [offline content salvage](docs/storage-coordination.md#offline-content-salvage)
 for the manifest, publication, and failure contract.
 
+##### Verifying a bundle
+
+```bash
+uv run reflectlog salvage-verify --bundle NEW_DIR --workspace-id ID
+```
+
+Verification is offline and read-only. It loads no server configuration,
+credentials, models, SQLite database, or engines, creates no files, and never
+repairs, replays a journal, or imports content. It checks publication, the
+manifest and workspace id, record format, SHA-256, count, and readiness against
+the manifest's journal evidence. Empty bundles are valid.
+
+Stdout contains one content-free JSON line, for example for an empty ready
+bundle with workspace id `my-project`:
+
+```json
+{"authenticity": "not_verified", "errors": [], "rebuild_ready": true, "record_count": 0, "status": "ready", "unresolved_reasons": [], "workspace_id": "my-project"}
+```
+
+Exit 0 means `ready`; exit 1 means `not_ready` (consistent but unresolved journal
+evidence) or `invalid`. Exit 2 means a usage error, with stderr only and no
+stdout. Missing arguments print usage; an invalid workspace id prints
+`reflectlog salvage-verify: --workspace-id is not a valid workspace id`.
+Errors use `{code, entry, line}` objects, never memory content.
+
+A matching hash only shows that the files agree, not who wrote them;
+`authenticity` is always `not_verified`. Verification does not apply
+`add_memories` validation, so valid bundle content can still be rejected on
+re-add. See the storage guide for the exact checks.
+
 ## Architecture
 
 ```
@@ -407,6 +451,7 @@ ReflectLog/
 
 # Export content from an archived, stopped workspace
 uv run reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
+uv run reflectlog salvage-verify --bundle NEW_DIR --workspace-id ID
 ```
 
 ### Testing

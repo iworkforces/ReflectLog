@@ -15,7 +15,7 @@ import tempfile
 import time
 from typing import cast
 
-COMMIT = "818c13be1dc4fd28987e1e881a9408224afd4535"
+COMMIT = "71d34bad1045610252eda02ee79549436896e784"
 
 
 def object_json(text: str) -> dict[str, object]:
@@ -55,7 +55,7 @@ class Run:
             "GIT_MASTER": "1",
             "HERMES_HOME": str(self.root / "setup-home"),
         }
-        for key in ("REFLECTLOG_URL", "REFLECTLOG_MCP_TOKEN"):
+        for key in ("REFLECTLOG_URL", "REFLECTLOG_MCP_AUTH_TOKEN"):
             _ = self.base.pop(key, None)
         self.processes: list[subprocess.Popen[bytes]] = []
         self.commands: list[subprocess.Popen[str]] = []
@@ -134,7 +134,7 @@ class Run:
             self.required(
                 ["git", "-C", str(self.source), "checkout", "--detach", "FETCH_HEAD"]
             )
-        self.required(["uv", "venv", "--python", "3.14", str(self.root / "venv")])
+        self.required(["uv", "venv", "--python", "3.14.8", str(self.root / "venv")])
         self.required(
             [
                 "uv",
@@ -197,7 +197,7 @@ class Run:
         server_env = {
             **self.base,
             **self.settings,
-            "MCP_AUTH_TOKEN": self.token,
+            "REFLECTLOG_MCP_AUTH_TOKEN": self.token,
             "MCP_HOST": "127.0.0.1",
             "MCP_PORT": str(port),
             "MCP_TRANSPORT": "http",
@@ -253,7 +253,7 @@ class Run:
             **self.base,
             "HERMES_HOME": str(home),
             "QA_TOKEN": self.token,
-            "REFLECTLOG_MCP_TOKEN": self.token,
+            "REFLECTLOG_MCP_AUTH_TOKEN": self.token,
         }
         process: subprocess.Popen[bytes] | None = None
         try:
@@ -290,9 +290,9 @@ class Run:
                 assert installed, "installed plugin manifest"
                 config = self.helper("config", env)
                 assertions.extend(cast("list[object]", config["assertions"]))
-                _ = env.pop("REFLECTLOG_MCP_TOKEN")
+                _ = env.pop("REFLECTLOG_MCP_AUTH_TOKEN")
                 _ = (home / ".env").write_text(
-                    "REFLECTLOG_MCP_TOKEN=" + self.token + "\n"
+                    "REFLECTLOG_MCP_AUTH_TOKEN=" + self.token + "\n"
                 )
                 with_token = self.command([str(self.cli), "memory", "status"], env)
                 (home / ".env").unlink()
@@ -303,7 +303,7 @@ class Run:
                     and re.search(r"Status:\s+available", with_token.stdout) is not None
                     and re.search(r"Status:\s+not available", without.stdout)
                     is not None
-                    and "REFLECTLOG_MCP_TOKEN" in without.stdout
+                    and "REFLECTLOG_MCP_AUTH_TOKEN" in without.stdout
                 )
                 assertions.append(
                     {
@@ -355,7 +355,7 @@ class Run:
                         _ = (home / ".env").write_text(
                             "OPENROUTER_API_KEY="
                             + key
-                            + "\nREFLECTLOG_MCP_TOKEN="
+                            + "\nREFLECTLOG_MCP_AUTH_TOKEN="
                             + self.token
                             + "\n"
                         )

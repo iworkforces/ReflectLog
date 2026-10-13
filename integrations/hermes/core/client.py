@@ -14,7 +14,6 @@ import threading
 import time
 from typing import (
     TYPE_CHECKING,
-    Generic,
     Protocol,
     TypeGuard,
     TypeVar,
@@ -82,7 +81,7 @@ def _session_rejection(body: bytes) -> bool:
     """Match the MCP SDK's pre-dispatch session error: -32600 with a null id."""
     try:
         value: object = json.loads(body)
-    except (ValueError, UnicodeError, RecursionError):
+    except ValueError, UnicodeError, RecursionError:
         return False
     if (
         not _mapping(value)
@@ -122,7 +121,7 @@ def _shutdown(response: httpx.Response) -> None:
 _T = TypeVar("_T")
 
 
-class _Exchange(Generic[_T]):
+class _Exchange[T]:
     """One HTTP exchange on a daemon thread, so the caller stops at its deadline.
 
     httpx timeouts apply per I/O operation; only the waiting caller can enforce
@@ -131,7 +130,7 @@ class _Exchange(Generic[_T]):
 
     def __init__(self) -> None:
         self.done = threading.Event()
-        self.value: _T | None = None
+        self.value: T | None = None
         self.error: Exception | None = None
         self._lock = threading.Lock()
         self._response: httpx.Response | None = None
@@ -225,7 +224,7 @@ class ReflectLogClient:
     def _message(self, data: bytes, identity: int) -> dict[str, object] | None:
         try:
             value: object = json.loads(data)
-        except (ValueError, UnicodeError, RecursionError):
+        except ValueError, UnicodeError, RecursionError:
             raise ReflectLogError("malformed", "Invalid MCP JSON response") from None
         message = _object(value)
         if message.get("id") != identity:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.14.4"
+# requires-python = ">=3.14.8"
 # dependencies = []
 # ///
 """Lock remediation performance contracts and record a bounded measurement."""

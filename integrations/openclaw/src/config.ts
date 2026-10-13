@@ -3,7 +3,7 @@ import { z } from "zod";
 export const PLUGIN_ID = "memory-reflectlog";
 
 export const DEFAULT_URL = "http://127.0.0.1:9103/mcp";
-export const DEFAULT_AUTH_TOKEN_ENV = "REFLECTLOG_MCP_TOKEN";
+export const DEFAULT_AUTH_TOKEN_ENV = "REFLECTLOG_MCP_AUTH_TOKEN";
 export const MAX_SEARCH_RESULTS = 50;
 
 const AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -12,6 +12,14 @@ const WORKSPACE_ID_RE = /^[a-z0-9_.-]{1,64}$/;
 /** Shape of derived workspace ids; overrides must never collide with it. */
 export const DERIVED_WORKSPACE_ID_RE = /^[pc]-[a-z0-9_-]{1,32}-[0-9a-f]{24}$/;
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** Workspace-override values the runtime always rejects; mirrored in the JSON Schema `not.enum`. */
+export const RESERVED_WORKSPACE_IDS = [".", ".."] as const;
+/**
+ * Host-side http(s) scheme gate for `url`. Only a prefix check: Zod trims JS whitespace (which the
+ * leading `\s*` mirrors) before requiring the scheme, and the runtime URL parse stays authoritative
+ * for everything past the prefix.
+ */
+export const HTTP_URL_PREFIX_PATTERN = "^\\s*[Hh][Tt][Tt][Pp][Ss]?://";
 
 export function isValidAgentId(value: string): boolean {
   return AGENT_ID_RE.test(value);
@@ -36,7 +44,7 @@ const configSchema = z
   .superRefine((value, ctx) => {
     const seen = new Map<string, string>();
     for (const [agentId, workspaceId] of Object.entries(value.workspaceOverrides)) {
-      if (workspaceId === "." || workspaceId === "..") {
+      if (RESERVED_WORKSPACE_IDS.some((reserved) => reserved === workspaceId)) {
         ctx.addIssue({
           code: "custom",
           path: ["workspaceOverrides", agentId],
@@ -82,13 +90,17 @@ export const configJsonSchema = {
   additionalProperties: false,
   properties: {
     transport: { type: "string", enum: ["http"], default: "http" },
-    url: { type: "string", default: DEFAULT_URL },
+    url: { type: "string", pattern: HTTP_URL_PREFIX_PATTERN, default: DEFAULT_URL },
     authTokenEnv: { type: "string", pattern: ENV_NAME_RE.source, default: DEFAULT_AUTH_TOKEN_ENV },
     namespace: { type: "string", pattern: NAMESPACE_RE.source, default: "openclaw" },
     workspaceOverrides: {
       type: "object",
       propertyNames: { pattern: AGENT_ID_RE.source },
-      additionalProperties: { type: "string", pattern: WORKSPACE_ID_RE.source },
+      additionalProperties: {
+        type: "string",
+        pattern: WORKSPACE_ID_RE.source,
+        not: { anyOf: [{ enum: [...RESERVED_WORKSPACE_IDS] }, { pattern: DERIVED_WORKSPACE_ID_RE.source }] },
+      },
     },
     defaultMaxResults: { type: "integer", minimum: 1, maximum: MAX_SEARCH_RESULTS, default: 6 },
     connectTimeoutMs: { type: "integer", minimum: 1000, maximum: 600000, default: 120000 },

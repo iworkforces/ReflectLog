@@ -20,11 +20,11 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 │   ├── plugins/         # Present; not wired at startup
 │   └── utility/         # HTTP pool, Numba scoring, OS credentials
 ├── tests/               # unit/ mirrors package; integration uses real engines
-├── integrations/openclaw/  # TypeScript plugin: pnpm + vitest; no root script or CI
-|-- integrations/hermes/    # Python memory provider: uv + pytest; no root script or CI
+├── integrations/openclaw/  # TypeScript plugin: pnpm + vitest + compiled smoke; scoped CI, no root script
+|-- integrations/hermes/    # Python memory provider: uv + pytest; scoped CI, no root script
 ├── stubs/               # ty extra-paths + pyright stubPath
 ├── scripts/             # Copied git hooks + platform gates + ad-hoc
-├── .github/workflows/   # pr-quality, platform-storage, cd (release)
+├── .github/workflows/   # pr-quality, platform-storage, openclaw-quality, hermes-quality, cd (release)
 └── start-*.sh           # Local lint / typecheck / pytest wrappers
 ```
 
@@ -36,11 +36,11 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 | MCP + auth | `application/mcp_server.py` | Tools via `MemoryManager` only |
 | MCP surface | `application/tools/` | `add_memories`, `search_memories`, `get_all_memories`, `get_memory_by_id`, `delete_memories`; explicit `workspace_id` |
 | Memory facade | `application/memory/manager.py` | Locks, journal, public API |
-| Workspace pin | `application/memory/workspace_registry.py` | `acquire()` per tool call; idle TTL 900s |
+| Workspace pin | `application/memory/workspace_registry.py` | `acquire()` per tool call; idle TTL 900s; optional `WORKSPACE_MAX_RESIDENT` |
 | Embedding identity | `infrastructure/embedding_identity.py` | Sidecar before HNSW open |
 | Add / search | `application/memory/` | 3-phase add; 4-step hybrid search |
 | Journal replay | `application/memory/replacement_recovery.py` | Restart converge |
-| Offline content salvage | `application/salvage/` + `infrastructure/salvage_*.py` | Archived SQLite copy to JSONL + manifest; contracts in `core/salvage.py` |
+| Offline content salvage | `application/salvage/` + `infrastructure/salvage_*.py` | Archive export and read-only bundle verification; contracts in `core/salvage.py` |
 | Workspace lease | `infrastructure/storage_coordinator.py` | Portalocker + generation sidecar |
 | Config | `application/config/settings.py` | Frozen env `Config` |
 | Protocols | `core/` | `ISemanticSearchEngine`, `IStorageCoordinator` |
@@ -86,6 +86,7 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 - No `getattr`, `optional_attr()`, `invoke_if_callable()`, or `type(obj).__dict__`.
 - No MagicMock auto-attrs as APIs; put the method on a protocol.
 - Tools never touch engines; go through `MemoryManager`.
+- Resident capacity admission belongs in `WorkspaceRegistry`, never in tools.
 - No compact-on-delete. No embed-batch pad with `[]`. No single-list fusion min-max.
 - No recency before CE normalize/threshold. Skip CE if ≤1 hit (pipeline owns skip).
 - No HNSW load when SQLite is missing/empty/unreadable.
@@ -110,14 +111,15 @@ uv sync
 ./start-unittest.sh --coverage
 uv run reflectlog --transport http --port 9103
 uv run reflectlog salvage --archive ARCHIVED_WORKSPACE_DIR --workspace-id ID --output NEW_DIR
-(cd integrations/openclaw && pnpm check)   # TypeScript plugin: typecheck + vitest + build
+uv run reflectlog salvage-verify --bundle BUNDLE_DIR --workspace-id ID
+(cd integrations/openclaw && pnpm check)   # TypeScript plugin: typecheck + vitest + build + compiled smoke
 uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/pyproject.toml integrations/hermes/tests  # Python plugin; see child guide for all checks
 ```
 
 ## NOTES
 
 - Installed script: `reflectlog = reflectlog.server:main`. `mcp_server.main` is a thinner second entry.
-- `salvage` dispatches before server env/config loading; never constructs `MemoryManager` or opens engines. Application service owns orchestration; only disposable SQLite copies are opened. No journal replay, embeddings, or credentials.
+- `salvage` and `salvage-verify` dispatch lazily before server env/config loading; no manager, engines, journal replay, models, or credentials. Export uses disposable SQLite copies; verification reads bundle bytes only and creates no files.
 - `ty` + pyright include `tests`; tests execution env relaxes mock noise.
 - Default pytest paths (`tests/unit`, `tests/integration`, `tests/security`) omit `tests/load/` and root `tests/test_*.py`. `start-unittest.sh --parallel` and `-k` run `pytest tests` instead, which bypasses that list.
 - Hooks: edit `scripts/git-hooks/`, install via `scripts/setup-git-hooks.sh`. Pre-push = typecheck + lint `--all` (writes). No pytest in hooks. `--all` never fails the push on leftover lint; CI `--check` is the gate.
@@ -126,9 +128,9 @@ uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/
 - `platform-storage.yml`: macOS/Ubuntu/Windows storage gates. Push to `develop` does not run `pr-quality`.
 - `cd.yml`: after both workflows pass on a `main` push, tags and releases `v<pyproject version>`.
 - CLI version: `reflectlog/version.py` reads `importlib.metadata.version("reflectlog")`, falling back to `"0.0.0"` when not installed. The number itself comes from `pyproject.toml`.
-- Python: `requires-python >=3.14.7`, `.python-version` is 3.14.8, CI uses 3.14.7.
-- `integrations/openclaw` is not run by any root script or workflow; run its `pnpm` scripts by hand.
-- `integrations/hermes` is not run by any root script or workflow; run its `uv` checks by hand.
+- Python: root and PEP 723 scripts require `>=3.14.8`; `.python-version`, `pr-quality.yml`, and `platform-storage.yml` use 3.14.8. Type/lint targets remain `3.14`/`py314`.
+- `integrations/openclaw` is not run by root scripts or Python workflows; its scoped `openclaw-quality` workflow runs `pnpm check` on Ubuntu with Node 24/26.
+- `integrations/hermes` is not run by root scripts or the Python workflows; its scoped `hermes-quality` workflow runs on Ubuntu with Python 3.14.8 in two jobs: the locked `dev` checks (pytest, ruff, pyright) against the pinned Hermes host, and a Hermes-free `core` test job. It triggers on pushes to `develop`/`main` and PRs touching `integrations/hermes/**` or the workflow file, plus manual dispatch. It is not a release gate (`cd.yml` does not wait for it). `qa/run.py` stays manual.
 - Lease, generation, and embedding-identity rules: `docs/storage-coordination.md`.
 
 ## GUIDANCE HIERARCHY

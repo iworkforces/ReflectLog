@@ -398,7 +398,7 @@ class TestRunMethodCoverage:
 
     @patch.dict(
         os.environ,
-        {"MCP_TRANSPORT": "http", "MCP_AUTH_TOKEN": "test-token"},
+        {"MCP_TRANSPORT": "http", "REFLECTLOG_MCP_AUTH_TOKEN": "test-token"},
         clear=False,
     )
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
@@ -435,7 +435,7 @@ class TestRunMethodCoverage:
 
     @patch.dict(
         os.environ,
-        {"MCP_TRANSPORT": "streamable-http", "MCP_AUTH_TOKEN": "test-token"},
+        {"MCP_TRANSPORT": "streamable-http", "REFLECTLOG_MCP_AUTH_TOKEN": "test-token"},
         clear=False,
     )
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
@@ -480,7 +480,7 @@ class TestRunMethodCoverage:
             "MCP_PORT": "8080",
             "MCP_HOST": "localhost",
             "MCP_PATH": "/custom",
-            "MCP_AUTH_TOKEN": "test-token",
+            "REFLECTLOG_MCP_AUTH_TOKEN": "test-token",
         },
         clear=False,
     )
@@ -529,7 +529,7 @@ class TestHttpAuthAndBind:
         )
         from reflectlog.application.utils.security import SecretString
 
-        monkeypatch.setenv("MCP_AUTH_TOKEN", token)
+        monkeypatch.setenv("REFLECTLOG_MCP_AUTH_TOKEN", token)
         with patch.object(FastMCP, "add_middleware", autospec=True) as add_middleware:
             server = FastMCPServer(
                 Config(workspace_id="test", openrouter_api_key=SecretString("k"))
@@ -595,8 +595,8 @@ class TestHttpAuthAndBind:
                 host="127.0.0.1",
             )
         )
-        with patch.dict(os.environ, {"MCP_AUTH_TOKEN": ""}, clear=False):
-            with pytest.raises(ConfigurationError, match="MCP_AUTH_TOKEN"):
+        with patch.dict(os.environ, {"REFLECTLOG_MCP_AUTH_TOKEN": ""}, clear=False):
+            with pytest.raises(ConfigurationError, match="REFLECTLOG_MCP_AUTH_TOKEN"):
                 server.run()
 
     @patch("reflectlog.application.memory.manager.LangchainQwenEmbeddings")
@@ -624,7 +624,7 @@ class TestHttpAuthAndBind:
         )
         with patch.dict(
             os.environ,
-            {"MCP_AUTH_TOKEN": "token", "ALLOW_PUBLIC_BIND": "false"},
+            {"REFLECTLOG_MCP_AUTH_TOKEN": "token", "ALLOW_PUBLIC_BIND": "false"},
             clear=False,
         ):
             with pytest.raises(ConfigurationError, match="ALLOW_PUBLIC_BIND"):
@@ -655,7 +655,7 @@ class TestHttpAuthAndBind:
         )
         with patch.dict(
             os.environ,
-            {"MCP_AUTH_TOKEN": "token", "ALLOW_PUBLIC_BIND": "false"},
+            {"REFLECTLOG_MCP_AUTH_TOKEN": "token", "ALLOW_PUBLIC_BIND": "false"},
             clear=False,
         ):
             with pytest.raises(ConfigurationError, match="ALLOW_PUBLIC_BIND"):

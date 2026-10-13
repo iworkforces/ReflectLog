@@ -1,8 +1,8 @@
 # Configure ReflectLog
 
-Set `REFLECTLOG_MCP_TOKEN` in your Hermes profile environment (for example
+Set `REFLECTLOG_MCP_AUTH_TOKEN` in your Hermes profile environment (for example
 `$HERMES_HOME/.env`) to the same value as the ReflectLog server's
-`MCP_AUTH_TOKEN`. The server URL defaults to `http://127.0.0.1:9103/mcp`; set
+`REFLECTLOG_MCP_AUTH_TOKEN`. The server URL defaults to `http://127.0.0.1:9103/mcp`; set
 `REFLECTLOG_URL` to override it.
 
 ```sh

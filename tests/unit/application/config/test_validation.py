@@ -1077,6 +1077,22 @@ class TestValidateConfig:
         errors = validate_config(cfg)
         assert any(e.field == "SEARCH_LIMIT" for e in errors)
 
+    @pytest.mark.parametrize("capacity", [True, False, 0, -3, 2.0, "2"])
+    def test_invalid_workspace_max_resident(self, capacity: int | float | str) -> None:
+        cfg = self._make_config(workspace_max_resident=capacity)
+
+        errors = validate_config(cfg)
+
+        assert any(e.field == "WORKSPACE_MAX_RESIDENT" for e in errors)
+
+    @pytest.mark.parametrize("capacity", [None, 2])
+    def test_valid_workspace_max_resident(self, capacity: int | None) -> None:
+        cfg = self._make_config(workspace_max_resident=capacity)
+
+        errors = validate_config(cfg)
+
+        assert errors == []
+
     def test_invalid_memory_lengths(self):
         """min >= max memory lengths produces error."""
         cfg = self._make_config(min_memory_length=500, max_memory_length=100)

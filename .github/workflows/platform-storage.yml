@@ -15,9 +15,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          python-version: "3.14.7"
+          python-version: "3.14.8"
       - name: Frozen install
         run: uv sync --frozen
       - name: Focused gates
@@ -37,6 +37,10 @@ jobs:
         env:
           NUMBA_CACHE_DIR: ${{ runner.temp }}/numba-cache
         run: uv run --frozen --no-sync pytest --tb=short --maxfail=3 --junitxml=server.xml tests/unit/test_server.py
+      - name: Salvage verification tests
+        env:
+          NUMBA_CACHE_DIR: ${{ runner.temp }}/numba-cache
+        run: uv run --frozen --no-sync pytest --tb=short --maxfail=3 --junitxml=salvage-verify.xml tests/unit/infrastructure/test_salvage_bundle_reader.py tests/unit/application/salvage/test_verification.py tests/unit/application/salvage/test_verification_boundaries.py tests/unit/test_salvage_verify_cli.py
       - name: Process coordination tests
         env:
           RUN_USEARCH_CONCURRENCY_TESTS: "1"
@@ -44,7 +48,7 @@ jobs:
         run: uv run --frozen --no-sync pytest --tb=short --maxfail=3 --junitxml=process.xml tests/integration/test_storage_coordinator_processes.py tests/integration/test_multiprocess_writers.py tests/integration/test_usearch_atomic_recovery.py
       - name: Upload evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: platform-gates-${{ matrix.os }}
           path: |
@@ -52,5 +56,6 @@ jobs:
             coordinator-usearch.xml
             tantivy.xml
             server.xml
+            salvage-verify.xml
             process.xml
           if-no-files-found: ignore
