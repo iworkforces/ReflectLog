@@ -2,7 +2,7 @@
 
 > An Agentic Memory Layer For Coding Agents
 
-[![Python](https://img.shields.io/badge/python-%E2%89%A53.14.4-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-%E2%89%A53.14.8-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ReflectLog is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that provides persistent, Workspace-based memory storage for Claude Code and other AI agents. It combines semantic vector search with full-text search for intelligent memory retrieval.

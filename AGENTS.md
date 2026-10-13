@@ -128,7 +128,7 @@ uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/
 - `platform-storage.yml`: macOS/Ubuntu/Windows storage gates. Push to `develop` does not run `pr-quality`.
 - `cd.yml`: after both workflows pass on a `main` push, tags and releases `v<pyproject version>`.
 - CLI version: `reflectlog/version.py` reads `importlib.metadata.version("reflectlog")`, falling back to `"0.0.0"` when not installed. The number itself comes from `pyproject.toml`.
-- Python: `requires-python >=3.14.7`, `.python-version` is 3.14.8; `pr-quality.yml` uses 3.14.8, `platform-storage.yml` uses 3.14.7.
+- Python: root and PEP 723 scripts require `>=3.14.8`; `.python-version`, `pr-quality.yml`, and `platform-storage.yml` use 3.14.8. Type/lint targets remain `3.14`/`py314`.
 - `integrations/openclaw` is not run by root scripts or Python workflows; its scoped `openclaw-quality` workflow runs `pnpm check` on Ubuntu with Node 24/26.
 - `integrations/hermes` is not run by any root script or workflow; run its `uv` checks by hand.
 - Lease, generation, and embedding-identity rules: `docs/storage-coordination.md`.
