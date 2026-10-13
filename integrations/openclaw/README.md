@@ -84,7 +84,12 @@ an authorization boundary.
 The six tools operate in the caller's authorized audience:
 
 - `memory_search`: search by `query`, with optional `maxResults` and `minScore`
-  (also accepts `max_results` and `min_score`).
+  (also accepts `max_results` and `min_score`). Optional `attempt` is an integer
+  from 1 to 5, default 1. Allow five searches total per lookup: check each memory
+  for relevance, and if results are empty or none is relevant, rewrite the query
+  and retry with `attempt` increased by 1. Stop at attempt 5 and report when no
+  relevant memory was found. Plugin-authored guidance follows the untrusted
+  `<relevant-memories>` fence; result details include `attempt` and `maxAttempts`.
 - `memory_get`: read by `ref`, optionally bounded by `from` and `lines`.
 - `memory_store`: store a `memories` batch of 1 to 20 items, with optional
   `replace` opt-in.
