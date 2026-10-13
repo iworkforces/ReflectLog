@@ -82,6 +82,7 @@ hermes/
 - `plugin.yaml` version == `pyproject.toml` version == `client_version` in `core/client.py`: `"0.1.0"`.
 - `get_config_schema` in `provider.py` exposes wizard fields; keep their names, coercion, and defaults consistent with `core/config.py`. Advanced settings remain in the JSON file; secrets go to `.env`.
 - Tool schemas and handler argument sets both live in `tool_handlers.py`. Update both together; unknown arguments are rejected.
+- Automatic recall is attempt 1; keep the `attempt` schema bounds and allowlist in `tool_handlers.py` in sync with `MAX_SEARCH_ATTEMPTS` in `core/recall.py`.
 - Hermes copies the plugin `pyproject.toml` into a uv workspace rooted at `hermes-agent`. Keep `[tool.uv]` and `[dependency-groups]` out of it; a `hermes-agent` source there makes `hermes plugins install` fail to activate the provider. `dev/pyproject.toml` dependencies must equal the plugin's `[project].dependencies`. `tests/hermes/test_loading.py` checks both.
 - Hermes pin in `dev/pyproject.toml` and resolved commit in `dev/uv.lock` must agree. QA also pins the release commit. The dev wheel uses `HERMES_NIX_BUILD=1`; real QA installs an editable checkout.
 
