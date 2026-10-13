@@ -105,6 +105,14 @@ async function main() {
   const owner = { agentId: "main", config: hostConfig, memoryAudience: { kind: "owner-private", agentId: "main" } };
   const tools = Object.fromEntries(TOOLS.map((name) => [name, toolFactory(name)(owner)]));
   for (const name of TOOLS) assert.equal(tools[name]?.name, name);
+  const searchParameters = plain(tools.memory_search.parameters);
+  assert.deepEqual(searchParameters.properties.attempt, { type: "integer", minimum: 1, maximum: 5 });
+  assert.ok(!searchParameters.required.includes("attempt"), "search attempt is optional");
+  const tokenReadsBeforeInvalidSearch = hygiene.tokenReads.count;
+  await assert.rejects(tools.memory_search.execute("call-invalid-attempt", { query: "x", attempt: 6 }),
+    { name: "MemoryInputError" });
+  assert.equal(hygiene.tokenReads.count, tokenReadsBeforeInvalidSearch, "invalid search attempt never allocates a backend");
+  check("search-attempt-before-allocation");
   assert.equal(toolFactory("memory_search")({ config: hostConfig }), null, "no agent, no tool");
   assert.equal(toolFactory("memory_search")({ ...owner, config: { plugins: { slots: { memory: "memory-core" } } } }), null,
     "another memory owner, no tool");

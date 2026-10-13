@@ -20,7 +20,7 @@ const ENV_ALLOWLIST = ["PATH", "Path", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"
 const cleanEnv = () => Object.fromEntries(ENV_ALLOWLIST.flatMap((name) => process.env[name] === undefined ? [] : [[name, process.env[name]]]));
 
 const EXPECTED_CHECKS = [
-  "entry-by-package-name", "registration-valid-config", "access-policy-before-allocation", "cli-commander-tree",
+  "entry-by-package-name", "registration-valid-config", "search-attempt-before-allocation", "access-policy-before-allocation", "cli-commander-tree",
   "lifecycle-retire:service.stop", "lifecycle-fresh-reuse:service.stop",
   "lifecycle-retire:provider.closeAllMemorySearchManagers", "lifecycle-fresh-reuse:provider.closeAllMemorySearchManagers",
   "cli-status-unauthorized",
