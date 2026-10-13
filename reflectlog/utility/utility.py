@@ -4,6 +4,7 @@ This module provides functions to retrieve Anthropic API keys from
 environment variables and platform-specific credential stores.
 """
 
+from contextlib import aclosing
 import os
 import platform
 import sys
@@ -175,12 +176,21 @@ async def generate_content(
 
     result_text = ""
 
-    async for message in _claude.query(prompt=prompt, options=options):
-        if isinstance(message, _claude.AssistantMessage):
-            for block in message.content:
-                if isinstance(block, _claude.TextBlock):
-                    result_text += block.text
-        elif message.is_error:
-            raise RuntimeError(f"Query failed: {message.subtype}")
+    async with aclosing(_claude.query(prompt=prompt, options=options)) as stream:
+        async for message in stream:
+            match message:
+                case _claude.AssistantMessage(error=None, content=content):
+                    for block in content:
+                        match block:
+                            case _claude.TextBlock(text=text):
+                                result_text += text
+                            case _:
+                                pass
+                case _claude.AssistantMessage(error=error):
+                    raise RuntimeError(f"Query failed: {error}")
+                case _claude.ResultMessage(is_error=True, subtype=subtype):
+                    raise RuntimeError(f"Query failed: {subtype}")
+                case _:
+                    pass
 
     return result_text.strip()
