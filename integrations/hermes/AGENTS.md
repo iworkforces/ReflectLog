@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-Standalone Python Hermes memory-provider plugin (`reflectlog`) for Hermes Agent `v0.21.7`, pinned to `71d34bad1045610252eda02ee79549436896e784`. Python >=3.14.8; dev and QA use exactly 3.14.8. Stateful streamable HTTP MCP, automatic recall, add-only native mirroring, opt-in turn capture, five tools. One external `memory.provider`; native memory stays active. Own uv project and checks; root scripts do not cover it. The scoped `hermes-quality` workflow runs them in CI.
+Standalone Python Hermes memory-provider plugin (`reflectlog`) for Hermes Agent `v0.21.7`, pinned to `71d34bad1045610252eda02ee79549436896e784`. Python >=3.14.8; dev and QA use exactly 3.14.8. Stateful streamable HTTP MCP, automatic recall, add-only native mirroring, opt-in turn capture, six tools. One external `memory.provider`; native memory stays active. Own uv project and checks; root scripts do not cover it. The scoped `hermes-quality` workflow runs them in CI.
 
 ## STRUCTURE
 
@@ -16,7 +16,7 @@ hermes/
 |-- after-install.md      # Installer instructions
 |-- __init__.py           # Lazy provider registration
 |-- provider.py           # Hermes lifecycle, config wizard, recall, write gates
-|-- tool_handlers.py      # Five tool schemas and argument validation
+|-- tool_handlers.py      # Six tool schemas and argument validation
 |-- core/                 # Python >=3.14.8; no Hermes imports
 |   |-- client.py          # MCP handshake, framing, deadlines, retry policy
 |   |-- config.py          # Frozen settings, validation, private atomic save
@@ -39,7 +39,7 @@ hermes/
 | Provider lifecycle | `provider.py` | `ReflectLogMemoryProvider`; initialize before workspace access |
 | Config | `core/config.py`, `provider.py` | `Settings`, `get_config_schema`; `$HERMES_HOME/reflectlog.json` |
 | Workspace routing | `core/workspace.py` | `resolve_binding`, `derive_workspace_id`; user/profile/override |
-| Agent tools | `tool_handlers.py` | Five `reflectlog_*` tools; no workspace argument |
+| Agent tools | `tool_handlers.py` | Six `memory_*` tools, same names as the OpenClaw plugin; no workspace argument |
 | MCP client | `core/client.py` | Every remote call, stateful handshake, no ambiguous mutation retry |
 | Write policy | `core/policy.py`, `core/writer.py` | 30720-character cap; 64 jobs; breaker after 5 failures for 120 s |
 | Recall | `core/recall.py`, `provider.py` | Synchronous deadline; Hermes owns `<memory-context>` fence |

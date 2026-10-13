@@ -16,4 +16,4 @@ for settings. Settings live in `$HERMES_HOME/reflectlog.json`.
 Turn capture is off by default. Committed built-in memory writes are mirrored
 add-only through a bounded, best-effort background queue, not a durable journal,
 so pending jobs can be lost on process exit. Deleting needs the explicit
-`reflectlog_forget` tool.
+`memory_forget` tool.
