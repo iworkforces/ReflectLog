@@ -19,8 +19,8 @@ classifiers = [
 ]
 dependencies = [
     "fastmcp==4.1.0",
-    "pydantic==2.14.0",
-    "fastapi[standard]>=0.143.0",
+    "pydantic==2.14.1",
+    "fastapi[standard]>=0.143.2",
     "uvicorn[standard]>=0.54.0",
     "asyncer>=0.0.18",
     "anyio>=4.15.1",
@@ -29,8 +29,8 @@ dependencies = [
     "mcp>=2.3.0",
     "uvloop>=0.23.0; sys_platform != 'win32'",
     "httptools>=0.9.0",
-    "starlette>=1.7.0",
-    "openai>=3.28.0",
+    "starlette>=1.8.0",
+    "openai>=3.31.0",
     "tiktoken>=0.14.0",
     "aiohttp>=3.14.5",
     "aiodns>=4.0.4",
@@ -54,13 +54,13 @@ dependencies = [
     "qwen-vl-utils[decord]==0.0.14; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "qwen-vl-utils==0.0.14; sys_platform != 'linux' or platform_machine != 'x86_64'",
     "accelerate>=1.15.0",
-    "claude-agent-sdk>=0.2.165",
-    "pydantic-core==2.50.0",
+    "claude-agent-sdk>=0.2.167",
+    "pydantic-core==2.50.1",
     "torchvision>=0.29.1",
     "flash-linear-attention>=0.5.2",
     "pyjwt>=2.15.1",
     "sse-starlette>=3.5.0",
-    "filelock>=4.1.1",
+    "filelock>=4.2.0",
 ]
 
 [project.urls]
@@ -86,7 +86,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.8.0",
-    "ty>=0.0.86",
+    "ty>=0.0.88",
     "pyright>=1.1.414",
 ]
 
