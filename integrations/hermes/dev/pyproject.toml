@@ -3,7 +3,7 @@
 # so the Hermes pin and the dev tools live here instead.
 [project]
 name = "hermes-plugin-reflectlog-dev"
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.14.8,<3.15"
 # Keep equal to the plugin's [project].dependencies.
 dependencies = ["httpx>=0.28.1"]

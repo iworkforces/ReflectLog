@@ -1,6 +1,6 @@
 [project]
 name = "reflectlog"
-version = "1.2.0"
+version = "1.2.1"
 description = "ReflectLog Is A MCP Server For AI Agent Workspace-based Memories."
 readme = "README.md"
 license = { text = "MIT" }
@@ -50,11 +50,11 @@ dependencies = [
     "hpack>=4.2.0",
     "sentence-transformers==6.1.0",
     "flagembedding>=1.4.2",
-    "transformers==5.19.0",
+    "transformers==5.20.0",
     "qwen-vl-utils[decord]==0.0.14; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "qwen-vl-utils==0.0.14; sys_platform != 'linux' or platform_machine != 'x86_64'",
     "accelerate>=1.15.0",
-    "claude-agent-sdk>=0.2.167",
+    "claude-agent-sdk>=0.2.168",
     "pydantic-core==2.50.1",
     "torchvision>=0.29.1",
     "flash-linear-attention>=0.5.2",
@@ -81,12 +81,12 @@ packages = ["reflectlog"]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.17.0",
+    "ruff>=0.17.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.8.0",
-    "ty>=0.0.88",
+    "ty>=0.0.89",
     "pyright>=1.1.414",
 ]
 

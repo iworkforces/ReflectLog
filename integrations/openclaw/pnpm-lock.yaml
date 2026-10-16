@@ -12,8 +12,8 @@ importers:
         specifier: 2.3.1
         version: 2.3.1
       typebox:
-        specifier: 1.3.37
-        version: 1.3.37
+        specifier: 1.4.0
+        version: 1.4.0
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -25,14 +25,14 @@ importers:
         specifier: 15.0.0
         version: 15.0.0
       openclaw:
-        specifier: 2026.10.3
-        version: 2026.10.3
+        specifier: 2026.10.4
+        version: 2026.10.4
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
       vitest:
-        specifier: ^5.0.4
-        version: 5.0.4(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
 
 packages:
 
@@ -479,8 +479,8 @@ packages:
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
     engines: {node: '>=14.0.0'}
 
-  '@openclaw/ai@2026.10.3':
-    resolution: {integrity: sha512-nPB0z/GMTyQayVu1JSDOml+orERUBzg9zo+2f4UxLLpDLJe0ERHrOPQQ3tGV+fDu/jATN9EAfXJPRMNUs1168g==}
+  '@openclaw/ai@2026.10.4':
+    resolution: {integrity: sha512-MrRkq0PzuK2O7v40k4dxt/GrRnpVD3P3ql5gVysNDu0fAFYD9lQ6LXZJiLQE7jBI44QpDzSxJn9oqJzxuroEuA==}
     engines: {node: '>=22.19.0'}
 
   '@openclaw/fs-safe-darwin-arm64@0.24.2':
@@ -909,8 +909,8 @@ packages:
   '@ubjs/node@0.31.0-3':
     resolution: {integrity: sha512-qNMpi2LICNwxGXZyRF8fSDBSpbezyZbEsydrbiMPJOmtOWr4tmZIEl7jkWGHVGShoBvHfFo4eHp5B4UVP928Cg==}
 
-  '@vitest/mocker@5.0.4':
-    resolution: {integrity: sha512-tqAlrYWce4iUxhr3ncNohejtCTOcHeE8XWrSNZY3OhPoDn01yeGv+gnaBy64ATp7o6pb03eIbBAjzmibpc9vIQ==}
+  '@vitest/mocker@5.0.5':
+    resolution: {integrity: sha512-xLL3lkDegJZw+MGoGaCCsFayDZthGgpAtr3Vziyfc4p7xH89K7KRPcRBBh/kEYm0Aqkt5DtTmkYpBtRV/FrHZg==}
     peerDependencies:
       msw: ^2.4.9 || ^3.0.0
       vite: ^6.0.0 || ^7.0.0 || ^8.0.0
@@ -920,8 +920,8 @@ packages:
       vite:
         optional: true
 
-  '@vitest/spy@5.0.4':
-    resolution: {integrity: sha512-MZKk/gSkm2q+ICobMxCpH1mA+cCAWm8WV7UhxlqGjq/sJ3AGc1BqFOs5CRVXxH78wQtme9q/NAAgBquj4AcyMw==}
+  '@vitest/spy@5.0.5':
+    resolution: {integrity: sha512-lwJRExuH417257Q5wv9QYugN9IMJkoxcrKrYxGPQkBzl7wlNpTUxD/5yNX4ESKVUIShKPgkGchYPFMWOOk0wzw==}
 
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
@@ -1815,8 +1815,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.10.3:
-    resolution: {integrity: sha512-ncl6LntMlf76K39LFhVrDXQTbaGNAG5j52f7PL5P8vIn0knWmCrvfAe9DHMslFq+47HeOWBH2CBYQH8zEb+UAA==}
+  openclaw@2026.10.4:
+    resolution: {integrity: sha512-+FH0StZF1tlTazM7JJGY6JePeJmhFNSRByi2Q3jXPRiLO7o4dJh2xa9Vy4Dk8Cd2ic8B7Zkf5NfEaCCWUkgqnQ==}
     engines: {node: '>=24.16.0 <25 || >=26.1.0'}
     hasBin: true
     bundledDependencies:
@@ -1921,8 +1921,8 @@ packages:
     engines: {node: '>=10.13.0'}
     hasBin: true
 
-  qs@6.16.0:
-    resolution: {integrity: sha512-h6fhOIaRrID2CbEY2fqs+7t+UXZo+MLAnU5gRIq85uFtdiUPCdsApMlHhXogKVM4HM2DVbIjGNTTYH2OcmP1vA==}
+  qs@6.16.1:
+    resolution: {integrity: sha512-5Px6J7rfHBAGUhNQ3es4YzcOdBBw0SDcVtThJml4RdnKw4tKs2epA0kPZ+K8X+WiHktT93RHVcQ/3ym5aTCgtg==}
     engines: {node: '>=0.6'}
 
   range-parser@1.3.0:
@@ -2139,8 +2139,8 @@ packages:
   typebox@1.3.34:
     resolution: {integrity: sha512-wbnzrXXDW8xEFHDZZs2jo1MkhaYlKAY4FRhpBc1+2LF1fZVBGCXGdLEhA/Z/NBbgzJMFfeM8m7elKPa/+KxaUQ==}
 
-  typebox@1.3.37:
-    resolution: {integrity: sha512-k+Qogwk7lztlItGvFf5v4GZPPStFAFehAyOKYeuqIHzi3dfTFqPOTx38JG09hmpcK6TQgctrTD06U/0CTTpM1g==}
+  typebox@1.4.0:
+    resolution: {integrity: sha512-fn+ul/Cox0pYuGHN2WoehRhHUTJ3aj22Cn56c4AmLxELiwSoO6g2Fg6hpkOKIdCdRc16TN5N47Sdq7KDQIQqgA==}
 
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
@@ -2215,20 +2215,20 @@ packages:
       yaml:
         optional: true
 
-  vitest@5.0.4:
-    resolution: {integrity: sha512-z0WxZRV2Sg48wF0FSgMq3TFG8JS38/Qr96vZVZdX6+Em9raQTvnXQvdTFJe2m3rfyJnEHeHQ/snceIdi8D1pVg==}
+  vitest@5.0.5:
+    resolution: {integrity: sha512-cPODOMF8YnkiiYtDdHo6n4wWmBrOBBbOIYH2d33M4l3CdNn72h+qMmO6uXffUN6A5AZFXNND/d+krS9mgkXRfg==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
       '@types/node': ^22.0.0 || >=24.0.0
-      '@vitest/browser-playwright': 5.0.4
-      '@vitest/browser-preview': 5.0.4
+      '@vitest/browser-playwright': 5.0.5
+      '@vitest/browser-preview': 5.0.5
       '@vitest/browser-webdriverio': ^5.0.0-beta.5 || >=5.0.0
-      '@vitest/coverage-istanbul': 5.0.4
-      '@vitest/coverage-v8': 5.0.4
-      '@vitest/ui': 5.0.4
+      '@vitest/coverage-istanbul': 5.0.5
+      '@vitest/coverage-v8': 5.0.5
+      '@vitest/ui': 5.0.5
       happy-dom: '*'
       jsdom: '*'
       vite: ^6.4.0 || ^7.0.0 || ^8.0.0
@@ -2709,7 +2709,7 @@ snapshots:
 
   '@mozilla/readability@0.6.0': {}
 
-  '@openclaw/ai@2026.10.3(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)':
+  '@openclaw/ai@2026.10.4(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.5)
       '@google/genai': 2.24.0(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))
@@ -2997,16 +2997,16 @@ snapshots:
       '@ubjs/node-win32-arm64-msvc': 0.31.0-3
       '@ubjs/node-win32-x64-msvc': 0.31.0-3
 
-  '@vitest/mocker@5.0.4(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))':
+  '@vitest/mocker@5.0.5(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
-      '@vitest/spy': 5.0.4
+      '@vitest/spy': 5.0.5
       estree-walker: 3.0.3
       magic-string: 1.4.3
     optionalDependencies:
       vite: 8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)
 
-  '@vitest/spy@5.0.4': {}
+  '@vitest/spy@5.0.5': {}
 
   abort-controller@3.0.0:
     dependencies:
@@ -3063,7 +3063,7 @@ snapshots:
       http-errors: 2.0.1
       iconv-lite: 0.7.3
       on-finished: 2.4.1
-      qs: 6.16.0
+      qs: 6.16.1
       raw-body: 3.0.2
       type-is: 2.1.0
     transitivePeerDependencies:
@@ -3340,7 +3340,7 @@ snapshots:
       once: 1.4.0
       parseurl: 1.3.3
       proxy-addr: 2.0.8
-      qs: 6.16.0
+      qs: 6.16.1
       range-parser: 1.3.0
       router: 2.2.0
       send: 1.2.1
@@ -3791,7 +3791,7 @@ snapshots:
       ws: 8.21.3
       zod: 4.6.5
 
-  openclaw@2026.10.3:
+  openclaw@2026.10.4:
     dependencies:
       '@agentclientprotocol/sdk': 1.5.0(zod@4.6.5)
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.5)
@@ -3808,7 +3808,7 @@ snapshots:
       '@mistralai/mistralai': 2.7.0
       '@modelcontextprotocol/sdk': 1.31.0(zod@4.6.5)
       '@mozilla/readability': 0.6.0
-      '@openclaw/ai': 2026.10.3(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
+      '@openclaw/ai': 2026.10.4(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
       '@openclaw/fs-safe': 0.24.2
       '@silvia-odwyer/photon-node': 0.3.4
       '@trycua/cua-driver': 0.28.2
@@ -4035,7 +4035,7 @@ snapshots:
       pngjs: 5.0.0
       yargs: 15.4.1
 
-  qs@6.16.0:
+  qs@6.16.1:
     dependencies:
       es-define-property: 1.0.1
       side-channel: 1.1.1
@@ -4282,7 +4282,7 @@ snapshots:
 
   typebox@1.3.34: {}
 
-  typebox@1.3.37: {}
+  typebox@1.4.0: {}
 
   typescript@7.0.2:
     optionalDependencies:
@@ -4335,10 +4335,10 @@ snapshots:
       jiti: 2.7.0
       yaml: 2.9.1
 
-  vitest@5.0.4(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)):
+  vitest@5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.4(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+      '@vitest/mocker': 5.0.5(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
       chai: 6.3.0
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
