@@ -5,9 +5,10 @@ allowBuilds:
   openclaw: true
   protobufjs: true
 minimumReleaseAgeExclude:
-  - '@openclaw/ai@2026.10.2'
-  - openclaw@2026.10.2
+  - '@openclaw/ai@2026.10.2 || 2026.10.4'
+  - openclaw@2026.10.2 || 2026.10.4
   - zod@4.6.6
-  - '@vitest/mocker@5.0.4'
-  - '@vitest/spy@5.0.4'
-  - vitest@5.0.4
+  - '@vitest/mocker@5.0.4 || 5.0.5'
+  - '@vitest/spy@5.0.4 || 5.0.5'
+  - vitest@5.0.4 || 5.0.5
+  - typebox@1.4.0 || 1.4.1
