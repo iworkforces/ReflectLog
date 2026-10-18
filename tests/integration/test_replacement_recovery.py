@@ -71,6 +71,39 @@ def _config(tmpdir: str) -> Config:
     return create_usearch_config(tmpdir)
 
 
+@pytest.mark.integration
+@pytest.mark.parametrize("successor_state", ["active", "deleted", "readded"])
+async def test_successor_resolution_after_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, successor_state: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = _config(str(tmp_path))
+    manager, _ = create_memory_manager(config)
+    try:
+        assert manager.add_memories([OLD]) == 1
+        original = manager.get_page_records_with_total()[0][0]
+        await _replace(manager)
+        successor = manager.get_page_records_with_total()[0][0]
+        expected_id = successor.id
+        if successor_state != "active":
+            assert manager.delete_memories([NEW]) == [NEW]
+            expected_id = None
+        if successor_state == "readded":
+            assert manager.add_memories([NEW]) == 1
+            expected_id = manager.get_page_records_with_total()[0][0].id
+            assert expected_id != successor.id
+    finally:
+        manager.close()
+    reopened, _ = create_memory_manager(config)
+    try:
+        result = reopened.get_record_with_successor(original.id)
+        assert result.record is None
+        assert result.successor_id == expected_id
+        assert reopened.get_records([original.id]) == ([], [original.id])
+    finally:
+        cleanup_manager(reopened)
+
+
 @contextmanager
 def _manager(tmpdir: str) -> Generator[MemoryManager]:
     manager, _logger = create_memory_manager(_config(tmpdir))

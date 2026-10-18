@@ -108,6 +108,7 @@ if TYPE_CHECKING:
         Embeddings,
         ISemanticSearchEngine,
         IStoredMemory,
+        RecordWithSuccessor,
         ReplacementTransition,
     )
     from ..config.settings import Config
@@ -1147,6 +1148,14 @@ class MemoryManager:
                 )
 
         return await asyncify(resolve)()
+
+    def get_record_with_successor(self, memory_id: int) -> RecordWithSuccessor:
+        with self._shared_workspace(), self._lock:
+            self._ensure_open()
+            self._refresh_engines()
+            return self._semantic_engine.memory_store.get_record_with_successor(
+                self.workspace_id, memory_id
+            )
 
     def get_records(self, ids: list[int]) -> tuple[list[IStoredMemory], list[int]]:
         ordered_ids = list(dict.fromkeys(ids))
