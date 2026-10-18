@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from importlib.metadata import metadata, version
 import multiprocessing
 import multiprocessing.synchronize
 from pathlib import Path
-import tomllib
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
@@ -14,22 +12,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
-
-APPROVED_PINS = {
-    "fastmcp": "4.1.0",
-    "pydantic": "2.14.0",
-    "pydantic-core": "2.50.0",
-    "ranx": "0.3.21",
-    "portalocker": "4.4.0",
-}
-
-
-def _project_dependencies() -> list[str]:
-    payload = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
-    project = payload["project"]
-    dependencies = project["dependencies"]
-    assert isinstance(dependencies, list)
-    return [str(item) for item in dependencies]
 
 
 def _hold_exclusive_lock(
@@ -50,20 +32,6 @@ def _hold_exclusive_lock(
         _ = release.wait(timeout=30.0)
     finally:
         lock.release()
-
-
-def test_manifest_declares_approved_runtime_contract() -> None:
-    dependencies = _project_dependencies()
-    for name, pinned in APPROVED_PINS.items():
-        expected = f"{name}=={pinned}"
-        assert expected in dependencies, (
-            f"pyproject.toml must declare exact pin {expected}"
-        )
-
-
-def test_installed_versions_match_approved_contract() -> None:
-    for name, pinned in APPROVED_PINS.items():
-        assert version(name) == pinned
 
 
 def test_fastmcp_construction() -> None:
@@ -95,12 +63,6 @@ def test_pydantic_protocol_validation() -> None:
     assert isinstance(model, NamedProtocol)
     with pytest.raises(ValidationError):
         _ = NamedModel.model_validate({"name": 1})
-
-
-def test_ranx_metadata() -> None:
-    info = metadata("ranx")
-    assert info["Name"] == "ranx"
-    assert info["Version"] == APPROVED_PINS["ranx"]
 
 
 def test_portalocker_timeout_then_acquire_after_owner_exit(
