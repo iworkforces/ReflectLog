@@ -22,7 +22,7 @@ from reflectlog.core.salvage import (
 from reflectlog.infrastructure.salvage_paths import is_directory_within
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
     from reflectlog.core.salvage import SalvageBundle
 
@@ -137,10 +137,12 @@ class FileSystemBundlePublisher:
         created: list[str] = []
         marker_removed = False
         try:
-            self._write(marker, _MARKER_TEXT, created)
+            self._write(marker, (_MARKER_TEXT,), created)
             self._write(os.path.join(output, RECORDS_FILENAME), bundle.records, created)
             self._write(
-                os.path.join(output, MANIFEST_FILENAME), bundle.manifest, created
+                os.path.join(output, MANIFEST_FILENAME),
+                (bundle.finalize_manifest(),),
+                created,
             )
             self._fs.sync_directory(output)
             self._fs.remove_file(marker)
@@ -159,11 +161,12 @@ class FileSystemBundlePublisher:
                 raise SalvagePublicationError(cleanup_error) from e
             raise
 
-    def _write(self, path: str, payload: bytes, created: list[str]) -> None:
+    def _write(self, path: str, payload: Iterable[bytes], created: list[str]) -> None:
         descriptor = self._fs.create_file(path)
         created.append(path)
         try:
-            self._fs.write_all(descriptor, payload)
+            for chunk in payload:
+                self._fs.write_all(descriptor, chunk)
             self._fs.sync_file(descriptor)
         finally:
             self._fs.close_file(descriptor)
@@ -177,7 +180,7 @@ class FileSystemBundlePublisher:
         if marker_removed:
             restored: list[str] = []
             try:
-                self._write(marker, _MARKER_TEXT, restored)
+                self._write(marker, (_MARKER_TEXT,), restored)
             except OSError:
                 # Still clean up, tracking even a marker whose write/fsync failed.
                 marker_restored = False

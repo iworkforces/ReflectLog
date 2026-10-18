@@ -1002,6 +1002,7 @@ class TestValidateConfig:
         config = Config(
             workspace_id="my-project",
             openrouter_api_key=SecretString("sk-or-v1-" + "a" * 42),
+            admin_password=SecretString("test-admin-password"),
             transport=TransportMode.HTTP,
             port=9103,
             search_score_threshold=0.5,

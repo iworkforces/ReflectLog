@@ -24,6 +24,7 @@ def test_from_config_keeps_provider_model_and_effective_dimensions(
     given = Config(
         workspace_id="identity-test",
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
         embedder_provider=provider,
         embedding_model=model,
         embedding_dims=1536,
@@ -58,6 +59,7 @@ def test_equal_width_does_not_erase_provider_or_model(
     given = Config(
         workspace_id="identity-test",
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
         embedder_provider=provider,
         embedding_model=model,
         embedding_dims=1024,

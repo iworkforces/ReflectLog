@@ -13,7 +13,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Iterable, Sequence
     from contextlib import AbstractContextManager
 
 RECORDS_FILENAME = "memories.jsonl"
@@ -111,7 +111,8 @@ class SalvageSnapshot:
     """
 
     workspace_id: str
-    records: tuple[ActiveRecord, ...]
+    records: Iterable[ActiveRecord]
+    record_count: int
     pending: tuple[RawJournalRow, ...]
     unknown: tuple[RawJournalRow, ...]
     foreign: tuple[RawJournalRow, ...]
@@ -168,17 +169,19 @@ class SourceFingerprint:
 
 @dataclass(frozen=True, slots=True)
 class SalvageBundle:
-    """Fully rendered export payloads, built before any file is written."""
+    """Single-pass records and a manifest finalized after stream exhaustion."""
 
-    records: bytes
-    manifest: bytes
+    records: Iterable[bytes]
+    finalize_manifest: Callable[[], bytes]
 
 
 @runtime_checkable
 class ISalvageSnapshotReader(Protocol):
     """Read a salvage snapshot from a disposable database copy."""
 
-    def read_snapshot(self, database_path: str, workspace_id: str) -> SalvageSnapshot:
+    def read_snapshot(
+        self, database_path: str, workspace_id: str
+    ) -> AbstractContextManager[SalvageSnapshot]:
         """Read ``database_path`` strictly read-only in one transaction.
 
         Raises:

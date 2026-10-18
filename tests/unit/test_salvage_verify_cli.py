@@ -185,6 +185,8 @@ def test_dispatch_when_server_environment_broken(
     monkeypatch.setenv("MCP_PORT", "not-a-port")
     monkeypatch.setenv("MCP_TRANSPORT", "bogus")
     monkeypatch.setenv("EMBEDDER_PROVIDER", "bogus")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("REFLECTLOG_MCP_AUTH_TOKEN", raising=False)
     completed = _verify(bundle)
     assert completed.returncode == 0, completed.stderr

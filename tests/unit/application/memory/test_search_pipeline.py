@@ -143,6 +143,49 @@ def _make_pipeline(
     )
 
 
+@pytest.mark.parametrize("explain", [False, True])
+async def test_explanations_preserve_real_fusion_and_reranking(explain: bool) -> None:
+    semantic = MagicMock()
+    semantic.search.return_value = [("shared", 0.9, _TS), ("semantic", 0.8, _TS)]
+    tantivy = MagicMock()
+    tantivy.search.return_value = [("lexical", 9.0), ("shared", 7.0)]
+    config = _make_config(fusion_ranking_threshold=0.0, reranker_engine="cross_encoder")
+    fusion = RanxFusionEngine(method="rrf", rrf_k=60)
+    manager = MagicMock()
+    reranker = MagicMock()
+    reranker.rerank_async = AsyncMock(
+        return_value=[("lexical", 0.97), ("shared", 0.85)]
+    )
+    manager.cross_encoder_reranker = reranker
+    pipeline = _make_pipeline(
+        semantic=semantic,
+        tantivy=tantivy,
+        fusion=fusion,
+        config=config,
+        memory_manager=manager,
+    )
+
+    result = await pipeline.execute(_make_context(limit=1), explain=explain)
+
+    assert result.memories == ["lexical"]
+    assert result.scores == [0.97] and result.score_kind == "reranker"
+    semantic.search.assert_called_once()
+    tantivy.search.assert_called_once()
+    reranker.rerank_async.assert_awaited_once()
+    if explain:
+        assert result.explanations is not None
+        assert set(result.explanations) == {"lexical"}
+        evidence = result.explanations["lexical"]
+        assert evidence.semantic is None
+        assert evidence.fulltext is not None
+        assert (evidence.fulltext.rank, evidence.fulltext.score) == (1, 9.0)
+        assert evidence.pre_rerank_score == pytest.approx(1 / 61)
+        assert evidence.pre_rerank_score_kind == "rrf"
+        assert evidence.final_score_kind == "reranker"
+    else:
+        assert result.explanations is None and result.stage_outcomes is None
+
+
 class ControllableBackend:
     """Synchronous backend that can block until the event loop progresses."""
 

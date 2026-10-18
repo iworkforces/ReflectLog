@@ -11,10 +11,13 @@ column names, and reasons, never memory content.
 from __future__ import annotations
 
 import base64
-from contextlib import closing
+from contextlib import closing, contextmanager
+from dataclasses import replace
 import os
 from pathlib import Path
 import sqlite3
+import tempfile
+from typing import TYPE_CHECKING
 
 from reflectlog.core.enums import TransitionKind, TransitionStatus
 from reflectlog.core.exceptions import (
@@ -33,6 +36,10 @@ from reflectlog.core.salvage import (
     SchemaReport,
     TableSchema,
 )
+from reflectlog.infrastructure.salvage_paths import is_directory_within
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 _MEMORIES_TABLE = "memories"
 _JOURNAL_TABLE = "replacement_transitions"
@@ -86,18 +93,25 @@ def _row_values(row: tuple[object, ...], count: int, start: int = 0) -> list[Raw
 class SqliteSalvageSnapshotReader:
     """``ISalvageSnapshotReader`` over a read-only connection to a copy."""
 
-    def read_snapshot(self, database_path: str, workspace_id: str) -> SalvageSnapshot:
+    @contextmanager
+    def read_snapshot(
+        self, database_path: str, workspace_id: str
+    ) -> Generator[SalvageSnapshot]:
         if not os.path.isfile(database_path):
             raise SalvageInputError("SQLite database is missing")
         uri = f"{Path(database_path).absolute().as_uri()}?mode=ro"
         try:
             with closing(sqlite3.connect(uri, uri=True, isolation_level=None)) as db:
+                _ = db.execute("PRAGMA cache_size = -2048")
+                _ = db.execute("PRAGMA temp_store = FILE")
                 _ = db.execute("BEGIN")
                 if db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                     raise SalvageDamagedDatabaseError(
                         "SQLite database failed its integrity check"
                     )
-                return _read(db, workspace_id)
+                snapshot = _read(db, workspace_id)
+                with closing(_stream_records(db, workspace_id)) as records:
+                    yield replace(snapshot, records=records)
         except sqlite3.Error as e:
             raise SalvageDamagedDatabaseError(
                 f"SQLite database is unreadable: {e}"
@@ -129,7 +143,7 @@ def _read(db: sqlite3.Connection, workspace_id: str) -> SalvageSnapshot:
             else ("missing columns: " + ", ".join(missing))
         )
         raise SalvageUnsupportedSchemaError(f"memories {detail}")
-    records, foreign_active_count = _read_records(db, workspace_id)
+    record_count, foreign_active_count = _validate_records(db, workspace_id)
     journal_columns = columns.get(_JOURNAL_TABLE)
     journal_status = _journal_status(journal_columns)
     pending: list[RawJournalRow] = []
@@ -152,7 +166,8 @@ def _read(db: sqlite3.Connection, workspace_id: str) -> SalvageSnapshot:
                 unknown.append(row)
     return SalvageSnapshot(
         workspace_id=workspace_id,
-        records=records,
+        records=(),
+        record_count=record_count,
         pending=tuple(pending),
         unknown=tuple(unknown),
         foreign=tuple(foreign),
@@ -188,18 +203,46 @@ def _is_history(row: RawJournalRow, journal_status: JournalStatus) -> bool:
     )
 
 
-def _read_records(
-    db: sqlite3.Connection, workspace_id: str
-) -> tuple[tuple[ActiveRecord, ...], int]:
+def _validate_records(db: sqlite3.Connection, workspace_id: str) -> tuple[int, int]:
+    source_parent = os.path.dirname(
+        os.path.abspath(db.execute("PRAGMA database_list").fetchone()[2])
+    )
+    for variable in ("TMPDIR", "TEMP", "TMP", "SQLITE_TMPDIR"):
+        candidate = os.environ.get(variable)
+        if candidate and is_directory_within(candidate, source_parent):
+            raise SalvageInputError(
+                "the temporary directory is inside the database directory"
+            )
+    parent = os.path.realpath(tempfile.gettempdir())
+    if is_directory_within(parent, source_parent):
+        raise SalvageInputError(
+            "the temporary directory is inside the database directory"
+        )
+    with (
+        tempfile.TemporaryDirectory(
+            prefix="reflectlog-salvage-validation-", dir=parent
+        ) as scratch,
+        closing(sqlite3.connect(os.path.join(scratch, "seen.db"))) as seen,
+    ):
+        _ = seen.execute("PRAGMA cache_size = -2048")
+        _ = seen.execute("PRAGMA temp_store = FILE")
+        _ = seen.execute("CREATE TABLE ids (id INTEGER PRIMARY KEY)")
+        _ = seen.execute(
+            "CREATE TABLE contents (content BLOB PRIMARY KEY, id INTEGER NOT NULL) WITHOUT ROWID"
+        )
+        return _validate_rows(db, seen, workspace_id)
+
+
+def _validate_rows(
+    db: sqlite3.Connection, seen: sqlite3.Connection, workspace_id: str
+) -> tuple[int, int]:
     total = db.execute(f"SELECT COUNT(*) FROM {_MEMORIES_TABLE}").fetchone()
     cursor = db.execute(
         f"SELECT {_cell_sql('id')}, {_cell_sql('content')}, "
         f"{_cell_sql('created_at')} FROM {_MEMORIES_TABLE} WHERE workspace_id = ?",
         (workspace_id,),
     )
-    records: list[ActiveRecord] = []
-    seen_ids: set[int] = set()
-    first_id_by_content: dict[str, int] = {}
+    count = 0
     for position, row in enumerate(cursor, start=1):
         id_value, content, created_at = _row_values(row, 3)
         if id_value.kind is not RawValueKind.INTEGER or not isinstance(
@@ -210,27 +253,49 @@ def _read_records(
             )
         source_id = id_value.value
         label = f"memories row id {source_id}"
-        if source_id in seen_ids:
+        if (
+            seen.execute("SELECT 1 FROM ids WHERE id = ?", (source_id,)).fetchone()
+            is not None
+        ):
             raise SalvageMalformedRecordError(f"{label} is duplicated")
-        seen_ids.add(source_id)
+        _ = seen.execute("INSERT INTO ids VALUES (?)", (source_id,))
         text = _active_content(content, label)
-        if created_at.kind is RawValueKind.NULL:
-            stamp = None
-        elif created_at.kind is RawValueKind.TEXT and isinstance(created_at.value, str):
-            stamp = created_at.value
-        else:
+        if created_at.kind is not RawValueKind.NULL and not (
+            created_at.kind is RawValueKind.TEXT and isinstance(created_at.value, str)
+        ):
             raise SalvageMalformedRecordError(
                 f"{label} has created_at that is neither TEXT nor NULL"
             )
-        first = first_id_by_content.get(text)
+        encoded = text.encode("utf-8")
+        first = seen.execute(
+            "SELECT id FROM contents WHERE content = ?", (encoded,)
+        ).fetchone()
         if first is not None:
             raise SalvageMalformedRecordError(
-                f"{label} duplicates the content of memories row id {first}"
+                f"{label} duplicates the content of memories row id {first[0]}"
             )
-        first_id_by_content[text] = source_id
-        records.append(ActiveRecord(source_id, text, stamp))
-    foreign_active = int(total[0]) - len(records)
-    return tuple(sorted(records, key=lambda record: record.source_id)), foreign_active
+        _ = seen.execute("INSERT INTO contents VALUES (?, ?)", (encoded, source_id))
+        count += 1
+    foreign_active = int(total[0]) - count
+    return count, foreign_active
+
+
+def _stream_records(
+    db: sqlite3.Connection, workspace_id: str
+) -> Generator[ActiveRecord]:
+    with closing(
+        db.execute(
+            f"SELECT id, CAST(content AS BLOB), CAST(created_at AS BLOB) "
+            f"FROM {_MEMORIES_TABLE} WHERE workspace_id = ? ORDER BY id COLLATE BINARY",
+            (workspace_id,),
+        )
+    ) as cursor:
+        for source_id, content, created_at in cursor:
+            yield ActiveRecord(
+                source_id,
+                content.decode("utf-8"),
+                None if created_at is None else created_at.decode("utf-8"),
+            )
 
 
 def _active_content(value: RawValue, label: str) -> str:

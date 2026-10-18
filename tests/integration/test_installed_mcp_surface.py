@@ -42,11 +42,18 @@ async def test_installed_surface_discovery_constraints_and_missing_record(
                 "get_all_memories",
                 "get_memory_by_id",
                 "delete_memories",
+                "get_all_workspaces",
             ]
             assert [tool.name for tool in tools] == expected
             schemas = {tool.name: cast(MCPTool, tool).input_schema for tool in tools}
-            for schema in schemas.values():
-                assert "workspace_id" in schema["required"]
+            for name, schema in schemas.items():
+                if name != "get_all_workspaces":
+                    assert "workspace_id" in schema["required"]
+            assert set(schemas["get_all_workspaces"]["properties"]) == {
+                "admin_password",
+                "limit",
+                "offset",
+            }
             search = schemas["search_memories"]["properties"]
             assert search["query"]["minLength"] == 1
             assert search["query"]["maxLength"] == 1000
@@ -58,6 +65,10 @@ async def test_installed_surface_discovery_constraints_and_missing_record(
             assert limit["minimum"] == 1
             assert limit["maximum"] == 50
             assert schemas["get_memory_by_id"]["properties"]["id"]["minimum"] == 1
+            successor = schemas["get_memory_by_id"]["properties"]["include_successor"]
+            assert successor["type"] == "boolean"
+            assert successor["default"] is False
+            assert "include_successor" not in schemas["get_memory_by_id"]["required"]
             ids = schemas["delete_memories"]["properties"]["ids"]
             assert ids["items"]["minimum"] == 1
             assert ids["maxItems"] == 100
@@ -68,6 +79,22 @@ async def test_installed_surface_discovery_constraints_and_missing_record(
                 "get_memory_by_id", {"id": 999, "workspace_id": "surface"}
             )
             assert result.structured_content == {"record": None}
+            opted_in = await client.call_tool(
+                "get_memory_by_id",
+                {"id": 999, "workspace_id": "surface", "include_successor": True},
+            )
+            assert opted_in.structured_content == {"record": None, "successor": None}
+            assert schemas["get_all_workspaces"]["required"] == ["admin_password"]
+            workspaces = await client.call_tool(
+                "get_all_workspaces", {"admin_password": set_env_vars["ADMIN_PASSWORD"]}
+            )
+            assert workspaces.structured_content == {
+                "workspaces": ["surface"],
+                "total": 1,
+                "offset": 0,
+                "limit": config.get_all_limit,
+                "truncated": False,
+            }
     finally:
         await server.aclose()
 

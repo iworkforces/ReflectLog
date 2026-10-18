@@ -79,7 +79,7 @@ hermes/
 
 ## SYNC HAZARDS
 
-- `plugin.yaml` version == `pyproject.toml` version == `client_version` in `core/client.py`: `"0.1.0"`.
+- `plugin.yaml` version == `pyproject.toml` version == `client_version` in `core/client.py`: `"0.1.1"`.
 - `get_config_schema` in `provider.py` exposes wizard fields; keep their names, coercion, and defaults consistent with `core/config.py`. Advanced settings remain in the JSON file; secrets go to `.env`.
 - Tool schemas and handler argument sets both live in `tool_handlers.py`. Update both together; unknown arguments are rejected.
 - Automatic recall is attempt 1; keep the `attempt` schema bounds and allowlist in `tool_handlers.py` in sync with `MAX_SEARCH_ATTEMPTS` in `core/recall.py`.

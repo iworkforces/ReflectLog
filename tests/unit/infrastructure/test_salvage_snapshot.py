@@ -1,6 +1,8 @@
 """Unit tests for the read-only offline content-salvage snapshot."""
 
 import base64
+from contextlib import closing
+from dataclasses import replace
 import hashlib
 import os
 from pathlib import Path
@@ -52,7 +54,10 @@ def db_path(tmp_path: Path) -> Path:
 
 
 def _read(path: Path, workspace_id: str = WS) -> SalvageSnapshot:
-    return SqliteSalvageSnapshotReader().read_snapshot(str(path), workspace_id)
+    with SqliteSalvageSnapshotReader().read_snapshot(
+        str(path), workspace_id
+    ) as snapshot:
+        return replace(snapshot, records=tuple(snapshot.records))
 
 
 def _execute(path: Path, *statements: str | tuple[str, tuple[object, ...]]) -> None:
@@ -494,6 +499,102 @@ class TestUnsupportedAndDamaged:
 
 
 class TestReadOnlyContract:
+    def test_stream_stays_in_the_validated_transaction(self, db_path: Path) -> None:
+        _plain_db(db_path)
+        with closing(sqlite3.connect(db_path)) as writer:
+            _ = writer.execute("PRAGMA journal_mode=WAL").fetchone()
+            _memory(db_path, WS, "first")
+            with SqliteSalvageSnapshotReader().read_snapshot(
+                str(db_path), WS
+            ) as snapshot:
+                _memory(db_path, WS, "later")
+                assert snapshot.record_count == 1
+                assert [row.content for row in snapshot.records] == ["first"]
+
+    def test_partial_stream_is_closed_on_context_exit(self, db_path: Path) -> None:
+        _plain_db(db_path)
+        _memory(db_path, WS, "first")
+        _memory(db_path, WS, "second")
+        with SqliteSalvageSnapshotReader().read_snapshot(str(db_path), WS) as snapshot:
+            records = iter(snapshot.records)
+            assert next(records).content == "first"
+        assert list(records) == []
+        with closing(sqlite3.connect(db_path, timeout=0)) as writer:
+            _ = writer.execute("BEGIN EXCLUSIVE")
+
+    @pytest.mark.parametrize("collation", ["NOCASE", "RTRIM", "CUSTOM"])
+    def test_exact_content_equality_ignores_source_collation_and_nul(
+        self, db_path: Path, collation: str
+    ) -> None:
+        connection = sqlite3.connect(db_path)
+        try:
+            connection.create_collation("CUSTOM", lambda left, right: 0)
+            _ = connection.execute(
+                f"CREATE TABLE memories (id INTEGER, workspace_id TEXT, "
+                f"content TEXT COLLATE {collation}, created_at TEXT)"
+            )
+            _ = connection.executemany(
+                "INSERT INTO memories VALUES (?, ?, ?, NULL)",
+                [
+                    (9, WS, "same\0a"),
+                    (2, WS, "same\0b"),
+                    (7, WS, "A"),
+                    (1, WS, "a"),
+                    (5, WS, "a "),
+                ],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        snapshot = _read(db_path)
+        assert [(row.source_id, row.content) for row in snapshot.records] == [
+            (1, "a"),
+            (2, "same\0b"),
+            (5, "a "),
+            (7, "A"),
+            (9, "same\0a"),
+        ]
+        _execute(
+            db_path, ("INSERT INTO memories VALUES (10, ?, ?, NULL)", (WS, "same\0a"))
+        )
+        with pytest.raises(
+            SalvageMalformedRecordError,
+            match="row id 10 duplicates the content of memories row id 9",
+        ):
+            _ = _read(db_path)
+
+    @pytest.mark.parametrize(
+        ("rows", "message"),
+        [
+            ([(9, "x", None), (9, "", 1)], "row id 9 is duplicated"),
+            (
+                [(9, "x", None), (2, "x", 1)],
+                "row id 2 has created_at that is neither TEXT nor NULL",
+            ),
+            (
+                [(9, "x", None), (2, "x", None)],
+                "row id 2 duplicates the content of memories row id 9",
+            ),
+            ([(9, "", None), ("bad", "x", None)], "row id 9 content is empty"),
+            ([(9, "x", None), ("bad", "x", None)], "row #2 has a non-integer id"),
+        ],
+    )
+    def test_validation_preserves_scan_order_and_error_precedence(
+        self, db_path: Path, rows: list[tuple[int | str, str, int | None]], message: str
+    ) -> None:
+        _execute(
+            db_path,
+            "CREATE TABLE memories (id, workspace_id TEXT, content TEXT, created_at)",
+        )
+        with closing(sqlite3.connect(db_path)) as connection, connection:
+            _ = connection.executemany(
+                "INSERT INTO memories VALUES (?, ?, ?, ?)",
+                [(source_id, WS, content, stamp) for source_id, content, stamp in rows],
+            )
+        with pytest.raises(SalvageMalformedRecordError) as error:
+            _ = _read(db_path)
+        assert str(error.value) == "memories " + message
+
     def test_database_bytes_are_unchanged_and_no_sidecars_appear(
         self, db_path: Path
     ) -> None:

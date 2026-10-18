@@ -1,6 +1,8 @@
 """Unit tests for MemoryStore SQLite storage."""
 
 import os
+from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 from unittest.mock import MagicMock
@@ -207,6 +209,85 @@ class TestMemoryStoreGetAll:
             store.close()
 
 
+@pytest.mark.parametrize("limit", [0, 1, 10])
+def test_cursor_page_scopes_and_retains_cursor(tmp_path: Path, limit: int) -> None:
+    store = MemoryStore(str(tmp_path / "cursor.db"), create_mock_logger())
+    try:
+        first = store.insert("workspace", "first")
+        _ = store.insert("foreign", "private")
+        last = store.insert("workspace", "last")
+        statements: list[str] = []
+        store.connection.set_trace_callback(statements.append)
+        page = store.get_cursor_page("workspace", limit, first)
+        assert [row.id for row in page.records] == ([last] if limit else [])
+        assert page.total == 2
+        assert page.next_after_id == (last if limit else first)
+        assert page.truncated is (limit == 0)
+        selects = [
+            sql.upper()
+            for sql in statements
+            if sql.lstrip().upper().startswith("SELECT")
+        ]
+        assert all("OFFSET" not in sql for sql in selects)
+        assert any(
+            "ORDER BY ID" in sql and "LIMIT" in sql and "ID >" in sql for sql in selects
+        )
+        empty = store.get_cursor_page("workspace", limit, last + 100)
+        assert empty.records == ()
+        assert empty.next_after_id == last + 100
+        assert empty.truncated is False
+    finally:
+        store.close()
+
+
+def test_cursor_page_metadata_uses_one_snapshot(tmp_path: Path) -> None:
+    path = str(tmp_path / "snapshot.db")
+    store = MemoryStore(path, create_mock_logger())
+    writer = MemoryStore(path, create_mock_logger())
+    try:
+        first = store.insert("workspace", "first")
+        _ = writer.connection
+        reads = 0
+
+        def insert_between_reads(sql: str) -> None:
+            nonlocal reads
+            if sql.lstrip().upper().startswith("SELECT"):
+                reads += 1
+                if reads == 2:
+                    _ = writer.insert("workspace", "concurrent")
+
+        store.connection.set_trace_callback(insert_between_reads)
+        page = store.get_cursor_page("workspace", 1, 0)
+        assert [row.id for row in page.records] == [first]
+        assert page.total == 1
+        assert page.truncated is False
+        assert not store.connection.in_transaction
+        store.connection.set_trace_callback(None)
+        assert store.get_cursor_page("workspace", 10, first).total == 2
+    finally:
+        writer.close()
+        store.close()
+
+
+def test_cursor_page_rolls_back_failed_read(tmp_path: Path) -> None:
+    store = MemoryStore(str(tmp_path / "failed.db"), create_mock_logger())
+    try:
+        _ = store.insert("workspace", "first")
+        store.connection.set_authorizer(
+            lambda action, _table, _column, _db, _source: (
+                sqlite3.SQLITE_DENY
+                if action == sqlite3.SQLITE_READ
+                else sqlite3.SQLITE_OK
+            )
+        )
+        with pytest.raises(StorageError):
+            store.get_cursor_page("workspace", 1, 0)
+        assert not store.connection.in_transaction
+    finally:
+        store.connection.set_authorizer(None)
+        store.close()
+
+
 class TestMemoryStoreDelete:
     """Tests for MemoryStore.delete method."""
 
@@ -332,6 +413,126 @@ class TestMemoryStoreGetRecordsByContents:
             ]
             assert len(selects) == 1
             store.close()
+
+
+def test_successor_live_record_matches_existing_readers_when_timestamp_is_null(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore(db_path=str(tmp_path / "null-timestamp.db"))
+    try:
+        memory_id = store.insert("ws", "legacy memory")
+        assert memory_id is not None
+        store.connection.execute(
+            "UPDATE memories SET created_at = NULL WHERE id = ?", (memory_id,)
+        )
+        store.connection.commit()
+        existing_record = store.get(memory_id)
+        batch_record = store.get_batch([memory_id])[memory_id]
+
+        result = store.get_record_with_successor("ws", memory_id)
+
+        assert result.record == existing_record == batch_record
+        assert result.record is not None
+        assert result.record.created_at == ""
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("latest_active", [False, True])
+def test_successor_uses_latest_archive_id_and_workspace(
+    tmp_path: Path, latest_active: bool
+) -> None:
+    store = MemoryStore(db_path=str(tmp_path / "successors.db"))
+    try:
+        old = store.insert("ws", "old")
+        first = store.insert("ws", "first")
+        latest = store.insert("ws" if latest_active else "foreign", "latest")
+        assert old is not None and first is not None and latest is not None
+        store.archive(old, "ws", "old", "first", "private reason", 0.9)
+        archive_id = store.archive(old, "ws", "old", "latest", "private reason", 0.9)
+        store.archive(old, "foreign", "old", "foreign replacement", "private", 0.9)
+        assert archive_id is not None
+        store.connection.execute("UPDATE archived_memories SET id = id + 8")
+        store.connection.execute(
+            "UPDATE archived_memories SET archived_at = '1900-01-01' WHERE id = ?",
+            (archive_id + 8,),
+        )
+        store.connection.commit()
+        assert store.get_record_with_successor("ws", old).record == store.get(old)
+        assert store.delete(old)
+        result = store.get_record_with_successor("ws", old)
+        assert result.record is None
+        assert result.successor_id == (latest if latest_active else None)
+        assert store.get_record_with_successor("other", old).successor_id is None
+        assert store.get_record_with_successor("ws", 999).successor_id is None
+        assert not store.connection.in_transaction
+    finally:
+        store.close()
+
+
+def test_successor_lookup_holds_one_read_snapshot(tmp_path: Path) -> None:
+    store = MemoryStore(db_path=str(tmp_path / "snapshot.db"))
+    writer = MemoryStore(db_path=store.db_path)
+    try:
+        successor_id = store.insert("ws", "before")
+        store.archive(999, "ws", "old", "before", "private", 0.9)
+        _ = writer.connection
+        changed = False
+
+        def interleave(statement: str) -> None:
+            nonlocal changed
+            if "SELECT replaced_by" in statement and not changed:
+                changed = True
+                writer.connection.execute(
+                    "UPDATE archived_memories SET replaced_by = 'after'"
+                )
+                writer.connection.execute("DELETE FROM memories")
+                writer.connection.execute(
+                    "INSERT INTO memories (workspace_id, content) VALUES ('ws', 'after')"
+                )
+                writer.connection.commit()
+
+        store.connection.set_trace_callback(interleave)
+        result = store.get_record_with_successor("ws", 999)
+        store.connection.set_trace_callback(None)
+        assert changed
+        assert result.record is None
+        assert result.successor_id == successor_id
+        assert not store.connection.in_transaction
+        assert store.get_record_with_successor("ws", 999).successor_id != successor_id
+    finally:
+        writer.close()
+        store.close()
+
+
+def test_successor_lookup_cleans_up_failed_read(tmp_path: Path) -> None:
+    store = MemoryStore(db_path=str(tmp_path / "failed-read.db"))
+    try:
+
+        def authorize(
+            action: int,
+            table: str | None,
+            column: str | None,
+            database: str | None,
+            source: str | None,
+        ) -> int:
+            return (
+                sqlite3.SQLITE_DENY
+                if table == "archived_memories"
+                else sqlite3.SQLITE_OK
+            )
+
+        store.connection.set_authorizer(authorize)
+        with pytest.raises(
+            StorageError, match="Failed to resolve memory successor"
+        ) as raised:
+            store.get_record_with_successor("ws", 999)
+        assert isinstance(raised.value.__cause__, sqlite3.Error)
+        assert not store.connection.in_transaction
+        store.connection.set_authorizer(None)
+        assert store.get_record_with_successor("ws", 999).successor_id is None
+    finally:
+        store.close()
 
 
 class TestMemoryStoreThreadSafety:

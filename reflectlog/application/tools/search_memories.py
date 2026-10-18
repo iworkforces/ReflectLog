@@ -19,7 +19,7 @@ class SearchMemoriesTool(BaseTool):
 
     @override
     def get_instruction_snippet(self) -> str:
-        return "    • search_memories(query: str, workspace_id: str, limit: int | None = None) -> dict\n      Search with stable ids, final scores and score_kind. Limit 1..50."
+        return "    • search_memories(query: str, workspace_id: str, limit: int | None = None, explain: bool = False) -> dict\n      Search with stable ids, final scores and score_kind. Limit 1..50. explain=true adds per-record explanation and request-local stage_outcomes without changing ranking. Semantic/fulltext contributions have one-based ranks and raw scores; null means absent from that backend's filtered fusion input. pre_rerank_score and its kind describe the score before reranking; final_score_kind describes the returned score. Outcomes: disabled, failed, unavailable, empty, skipped_single_hit, applied, degraded. No explanation fields are returned by default."
 
     @override
     def get_handler(self) -> Callable[..., Awaitable[dict[str, object]]]:
@@ -28,6 +28,7 @@ class SearchMemoriesTool(BaseTool):
             limit: Annotated[
                 int | None, Field(ge=1, le=MAX_SEARCH_RECORDS_LIMIT)
             ] = None,
+            explain: bool = False,
         ) -> dict[str, object]:
             if not query.strip() or not 1 <= len(query) <= 1000:
                 raise ValueError(
@@ -45,7 +46,13 @@ class SearchMemoriesTool(BaseTool):
                 )
                 if self.config.log_search_results_verbose:
                     self.logger.info("Query length", extra={"query_length": len(query)})
-                result = await self.memory.search_records(query, limit=page_size)
+                result = (
+                    await self.memory.search_records(
+                        query, limit=page_size, explain=True
+                    )
+                    if explain
+                    else await self.memory.search_records(query, limit=page_size)
+                )
                 result_count = len(result.records)
                 if self.config.log_search_results_verbose:
                     self.logger.info(
@@ -61,19 +68,49 @@ class SearchMemoriesTool(BaseTool):
                 self.log_completion(
                     self.get_name(), query_length=len(query), result_count=result_count
                 )
-                return {
+                payload: dict[str, object] = {
                     "results": [
                         {
                             "id": row.id,
                             "memory": row.content,
                             "score": row.score,
                             "created_at": row.created_at or None,
+                            **(
+                                {
+                                    "explanation": {
+                                        "semantic": {
+                                            "rank": row.explanation.semantic.rank,
+                                            "score": row.explanation.semantic.score,
+                                        }
+                                        if row.explanation.semantic is not None
+                                        else None,
+                                        "fulltext": {
+                                            "rank": row.explanation.fulltext.rank,
+                                            "score": row.explanation.fulltext.score,
+                                        }
+                                        if row.explanation.fulltext is not None
+                                        else None,
+                                        "pre_rerank_score": row.explanation.pre_rerank_score,
+                                        "pre_rerank_score_kind": row.explanation.pre_rerank_score_kind.value,
+                                        "final_score_kind": row.explanation.final_score_kind.value,
+                                    }
+                                }
+                                if explain and row.explanation is not None
+                                else {}
+                            ),
                         }
                         for row in result.records
                     ],
                     "score_kind": result.score_kind.value,
                     "limit": page_size,
                 }
+                if explain and result.stage_outcomes is not None:
+                    payload["stage_outcomes"] = {
+                        "semantic": result.stage_outcomes.semantic.value,
+                        "fulltext": result.stage_outcomes.fulltext.value,
+                        "reranker": result.stage_outcomes.reranker.value,
+                    }
+                return payload
             except Exception as e:
                 self._raise_tool_error(
                     self.get_name(),

@@ -27,6 +27,7 @@ def test_wemm_native_dimension_is_derived_when_override_absent(
 ) -> None:
     monkeypatch.setenv("WORKSPACE_ID", "wemm-test")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
     monkeypatch.setenv("EMBEDDER_PROVIDER", EmbedderProvider.WEMM)
     monkeypatch.setenv("EMBEDDING_MODEL", model)
     monkeypatch.delenv("WEMM_EMBEDDING_DIMS", raising=False)
@@ -58,6 +59,7 @@ def test_wemm_supported_dimension_override_is_accepted(
 ) -> None:
     monkeypatch.setenv("WORKSPACE_ID", "wemm-test")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
     monkeypatch.setenv("EMBEDDER_PROVIDER", EmbedderProvider.WEMM)
     monkeypatch.setenv("EMBEDDING_MODEL", model)
     monkeypatch.setenv("WEMM_EMBEDDING_DIMS", str(dimension))
@@ -80,6 +82,7 @@ def test_wemm_unsupported_model_dimension_is_rejected(
 ) -> None:
     monkeypatch.setenv("WORKSPACE_ID", "wemm-test")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
     monkeypatch.setenv("EMBEDDER_PROVIDER", EmbedderProvider.WEMM)
     monkeypatch.setenv("EMBEDDING_MODEL", model)
     monkeypatch.setenv("WEMM_EMBEDDING_DIMS", str(dimension))
@@ -101,6 +104,7 @@ def test_wemm_closed_configuration_rejects_unknown_values(
 ) -> None:
     monkeypatch.setenv("WORKSPACE_ID", "wemm-test")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
     monkeypatch.setenv("EMBEDDER_PROVIDER", EmbedderProvider.WEMM)
     monkeypatch.setenv("EMBEDDING_MODEL", WeMMModel.EMBEDDING_2B)
     monkeypatch.setenv(field, value)
@@ -113,6 +117,7 @@ def test_direct_embedding_defaults_use_wemm() -> None:
     direct = Config(
         workspace_id="defaults",
         openrouter_api_key=SecretString("key"),
+        admin_password=SecretString("test-admin-password"),
     )
 
     assert direct.embedder_provider is EmbedderProvider.WEMM

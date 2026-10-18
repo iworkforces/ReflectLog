@@ -22,6 +22,7 @@ from reflectlog.core.exceptions import ConfigurationError
 
 REQUIRED_ENV = {
     "OPENROUTER_API_KEY": "sk-test-key-12345",
+    "ADMIN_PASSWORD": "test-admin-password",
 }
 
 
@@ -31,6 +32,7 @@ class TestPresetEnvironmentPrecedence:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         monkeypatch.setenv("REFLECTLOG_PROFILE", "quality")
         monkeypatch.setenv("RERANKER_ENGINE", "openrouter")
         monkeypatch.setenv("OPENROUTER_RERANK_MODEL", "voyageai/rerank-2.5-lite")
@@ -49,6 +51,7 @@ class TestPresetEnvironmentPrecedence:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         monkeypatch.delenv("RERANKER_ENGINE", raising=False)
         monkeypatch.delenv("SEARCH_LIMIT", raising=False)
         monkeypatch.delenv("SEARCH_SCORE_THRESHOLD", raising=False)
@@ -136,6 +139,7 @@ class TestConfigDefaults:
         defaults: dict[str, Any] = {
             "workspace_id": "proj",
             "openrouter_api_key": SecretString("key"),
+            "admin_password": SecretString("test-admin-password"),
         }
         defaults.update(overrides)
         return Config(**defaults)
@@ -259,32 +263,38 @@ class TestFromEnvironmentRequired:
     def test_missing_workspace_id(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("WORKSPACE_ID", raising=False)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         assert Config.from_environment().workspace_id == ""
 
     def test_project_id_env_is_ignored(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("WORKSPACE_ID", raising=False)
         monkeypatch.setenv("PROJECT_ID", "legacy-ws")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         assert Config.from_environment().workspace_id == ""
 
     def test_empty_workspace_id(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         assert Config.from_environment().workspace_id == ""
 
     def test_invalid_workspace_id_characters(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "bad/project!")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         assert Config.from_environment().workspace_id == ""
 
     def test_workspace_id_too_long(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "a" * 65)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         assert Config.from_environment().workspace_id == ""
 
     def test_workspace_id_path_traversal(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "a..b")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         assert Config.from_environment().workspace_id == ""
 
     def test_missing_openrouter_api_key(self, monkeypatch: pytest.MonkeyPatch):
@@ -325,12 +335,14 @@ class TestFromEnvironmentDefaults:
     ):
         monkeypatch.setenv("WORKSPACE_ID", "my_project.v2")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         cfg = Config.from_environment()
         assert cfg.workspace_id == ""
 
     def test_workspace_id_keeps_env_case(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("WORKSPACE_ID", "MyProject")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         cfg = Config.from_environment()
         assert cfg.workspace_id == ""
 
@@ -887,6 +899,7 @@ class TestSingleton:
     ):
         monkeypatch.delenv("WORKSPACE_ID", raising=False)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         assert get_config().workspace_id == ""
 
     def test_get_config_requires_api_key_without_workspace_id(

@@ -1,9 +1,9 @@
 [project]
 name = "hermes-plugin-reflectlog"
-version = "0.1.0"
+version = "0.1.1"
 description = "ReflectLog memory-provider plugin for Hermes Agent"
 requires-python = ">=3.14.8"
-dependencies = ["httpx>=0.27,<1"]
+dependencies = ["httpx>=0.28.1"]
 
 # Hermes installs this file as a member of its own uv workspace. Keep uv
 # settings and dev tools in dev/pyproject.toml.

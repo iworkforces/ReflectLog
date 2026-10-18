@@ -38,7 +38,11 @@ def was_closed(manager: MemoryManager) -> bool:
 
 @pytest.fixture
 def config() -> Config:
-    return Config(workspace_id="", openrouter_api_key=SecretString("sk-test"))
+    return Config(
+        workspace_id="",
+        openrouter_api_key=SecretString("sk-test"),
+        admin_password=SecretString("test-admin-password"),
+    )
 
 
 @pytest.mark.unit
@@ -94,7 +98,11 @@ async def test_configured_workspace_is_not_selected(config: Config) -> None:
         return manager
 
     registry = WorkspaceRegistry(
-        Config(workspace_id="Default", openrouter_api_key=config.openrouter_api_key),
+        Config(
+            workspace_id="Default",
+            openrouter_api_key=config.openrouter_api_key,
+            admin_password=config.admin_password,
+        ),
         factory,
     )
     assert created == []

@@ -33,7 +33,7 @@ class ValidationError:
 
     def __str__(self) -> str:
         """String representation of the error."""
-        if self.field == "OPENROUTER_API_KEY":
+        if self.field in {"OPENROUTER_API_KEY", "ADMIN_PASSWORD"}:
             return f"{self.field}: {self.message} (got: ***REDACTED***)"
         return f"{self.field}: {self.message} (got: {self.value!r})"
 
@@ -759,6 +759,8 @@ def _validate_security_fields(
     config: Config,
 ) -> None:
     """Validate API key formats and security-sensitive fields."""
+    if not config.admin_password.get_secret_value().strip():
+        validator.add_error("ADMIN_PASSWORD", config.admin_password, "Value is empty")
     api_key = config.openrouter_api_key.get_secret_value()
     if api_key.startswith("sk-or"):
         _ = validator.validate_openrouter_api_key_format(api_key)

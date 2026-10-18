@@ -42,6 +42,7 @@ def server_config(tmp_path: Path, set_env_vars: None) -> Config:
     return Config(
         workspace_id="",
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
         embedder_provider=EmbedderProvider.OPENAI,
         embedding_model="openai/text-embedding-3-small",
         embedding_dims=128,

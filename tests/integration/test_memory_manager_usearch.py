@@ -67,6 +67,7 @@ def create_usearch_config(temp_dir: str, project_suffix: str = "") -> Config:
     return Config(
         workspace_id=workspace_id,
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
         embedder_provider=EmbedderProvider.LANGCHAIN,
         embedding_model="mock-model",
         embedding_dims=128,

@@ -198,6 +198,7 @@ class ToolName(StrEnum):
     GET_ALL_MEMORIES = "get_all_memories"
     GET_MEMORY_BY_ID = "get_memory_by_id"
     DELETE_MEMORIES = "delete_memories"
+    GET_ALL_WORKSPACES = "get_all_workspaces"
 
 
 class ConfigProfile(StrEnum):

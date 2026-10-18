@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import hmac
 from ipaddress import ip_address
 import os
+import secrets
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import anyio
@@ -25,9 +26,11 @@ from reflectlog.application.tools.delete_memories import DeleteMemoriesTool
 from reflectlog.application.tools.get_all_memories import GetAllMemoriesTool
 from reflectlog.application.tools.get_memory_by_id import GetMemoryByIdTool
 from reflectlog.application.tools.search_memories import SearchMemoriesTool
+from reflectlog.core.config_adapters import ConfigAdapter
 from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import ConfigurationError
 from reflectlog.core.prompts import build_instructions
+from reflectlog.infrastructure.workspace_discovery import list_stored_workspaces
 
 from .utils.logging import create_logger
 
@@ -63,7 +66,7 @@ class _BearerTokenMiddleware(Middleware):
         return result
 
 
-# Canonical registry of available MCP tool implementations.
+# Workspace-scoped memory tool implementations.
 AVAILABLE_TOOL_CLASSES: dict[str, type[BaseTool]] = {
     "add_memories": AddMemoriesTool,
     "search_memories": SearchMemoriesTool,
@@ -76,12 +79,34 @@ TOOL_INSTRUCTIONS = {
     "add_memories": "    • add_memories(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict\n"
     "      Add memories with semantic embeddings. Empty lists are no-op.\n"
     "      Returns stored/skipped/replaced counts. dry_run previews replacements.",
-    "get_all_memories": "    • get_all_memories(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict\n"
+    "get_all_memories": "    • get_all_memories(workspace_id: str, limit: int | None = None, offset: int = 0, after_id: int | None = None) -> dict\n"
     "      Page stored records. Default cap 1000. Returns records, "
-    "total, offset, limit, truncated.",
-    "search_memories": "    • search_memories(query: str, workspace_id: str, limit: int | None = None) -> dict\n      Search stable ids with final scores and score_kind. Limit 1..50.",
-    "get_memory_by_id": "    • get_memory_by_id(id: int, workspace_id: str) -> dict\n      Return a record or null when missing in this workspace.",
+    "total, offset, limit, truncated. Omit after_id for offset paging. "
+    "For skip-free continuation, start with after_id=0 and pass next_after_id from each page; "
+    "positive offset cannot be combined with after_id. limit=0 probes without advancing. "
+    "Cursor paging survives eviction and restart, but is not a frozen snapshot; "
+    "restoring an older database invalidates continuation.",
+    "search_memories": "    • search_memories(query: str, workspace_id: str, limit: int | None = None, explain: bool = False) -> dict\n"
+    "      Search stable ids with final scores and score_kind. Limit 1..50. "
+    "explain=true adds per-record explanation and request-local stage_outcomes without changing ranking. "
+    "Semantic/fulltext contributions contain one-based rank and raw score; null means absent from "
+    "that backend's filtered fusion input. pre_rerank_score and pre_rerank_score_kind describe "
+    "the score before reranking; final_score_kind describes the returned score. Stage outcomes: "
+    "disabled, failed, unavailable, empty, skipped_single_hit, applied, degraded. "
+    "Explanation fields are omitted by default.",
+    "get_memory_by_id": "    • get_memory_by_id(id: int, workspace_id: str, include_successor: bool = False) -> dict\n"
+    "      Returns {record: record or null}. With include_successor, missing records also return "
+    "successor: {id: int} or null for currently active replacement content in this workspace. "
+    "Single hop only; a re-added matching string has its current id, not historical identity.",
     "delete_memories": "    • delete_memories(ids: list[int], workspace_id: str) -> dict\n      Report actually removed and missing ids.",
+    "get_all_workspaces": "    • get_all_workspaces(admin_password: str, limit: int | None = None, offset: int = 0) -> dict\n"
+    "      Requires the server's ADMIN_PASSWORD; incorrect passwords are rejected before discovery. "
+    "      List stored workspace ids in lexical order, without loading managers or models. "
+    "Returns workspaces, total, offset, limit, truncated. Default and maximum page size "
+    "is GET_ALL_LIMIT (default 1000); negative limits and offsets clamp to zero. "
+    "limit=0 returns only the total. Stored workspaces are canonical direct-child "
+    "directories under indexes with a regular usearch/memories.db marker; symlinks "
+    "are excluded. Missing storage returns an empty page; I/O failures are errors.",
 }
 
 
@@ -171,7 +196,8 @@ class FastMCPServer:
 
     def _initialize_tools(self) -> None:
         """Initialize all MCP tool instances."""
-        available_names = list(AVAILABLE_TOOL_CLASSES.keys())
+        handlers = self._handlers()
+        available_names = list(handlers)
 
         selected_names, invalid_names = self._determine_tool_selection(available_names)
 
@@ -187,7 +213,6 @@ class FastMCPServer:
                 extra={"available_tools": available_names},
             )
 
-        handlers = self._handlers()
         self.tools: list[_RegisteredTool] = []
         for tool_name in selected_names:
             self.tools.append(_RegisteredTool(tool_name, handlers[tool_name]))
@@ -225,6 +250,7 @@ class FastMCPServer:
             "get_all_memories": self._get_all_memories,
             "get_memory_by_id": self._get_memory_by_id,
             "delete_memories": self._delete_memories,
+            "get_all_workspaces": self._get_all_workspaces,
         }
 
     def tool_fn(self, name: str) -> Callable[..., object]:
@@ -285,29 +311,67 @@ class FastMCPServer:
         ],
         workspace_id: str,
         limit: Annotated[int | None, Field(ge=1, le=MAX_SEARCH_RECORDS_LIMIT)] = None,
+        explain: bool = False,
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
+            if explain:
+                return await self._finish_tool(
+                    self._handler("search_memories", manager)(
+                        query, limit, explain=True
+                    )
+                )
             return await self._finish_tool(
                 self._handler("search_memories", manager)(query, limit)
             )
 
     async def _get_all_memories(
-        self, workspace_id: str, limit: int | None = None, offset: int = 0
+        self,
+        workspace_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+        after_id: Annotated[int | None, Field(ge=0, strict=True)] = None,
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
             return await self._finish_tool(
-                self._handler("get_all_memories", manager)(limit, offset)
+                self._handler("get_all_memories", manager)(limit, offset, after_id)
             )
 
     async def _get_memory_by_id(
         self,
         id: Annotated[int, Field(ge=1)],
         workspace_id: str,
+        include_successor: bool = False,
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
             return await self._finish_tool(
-                self._handler("get_memory_by_id", manager)(id)
+                self._handler("get_memory_by_id", manager)(id, include_successor)
             )
+
+    async def _get_all_workspaces(
+        self, admin_password: str, limit: int | None = None, offset: int = 0
+    ) -> dict[str, object]:
+        if not secrets.compare_digest(
+            admin_password.encode("utf-8"),
+            self.config.admin_password.get_secret_value().encode("utf-8"),
+        ):
+            raise ToolError("Unauthorized")
+        workspaces = await anyio.to_thread.run_sync(
+            list_stored_workspaces, ConfigAdapter(self.config).storage_path
+        )
+        page_size = min(
+            self.config.get_all_limit,
+            self.config.get_all_limit if limit is None else max(0, limit),
+        )
+        start = max(0, offset)
+        page = workspaces[start : start + page_size]
+        total = len(workspaces)
+        return {
+            "workspaces": page,
+            "total": total,
+            "offset": start,
+            "limit": page_size,
+            "truncated": start + len(page) < total,
+        }
 
     async def _delete_memories(
         self,
@@ -360,7 +424,8 @@ class FastMCPServer:
 
         instructions = (
             f"{build_instructions(tool_snippets)}\n\n"
-            "Every tool requires workspace_id: str as an argument."
+            "Workspace-scoped memory tools require workspace_id: str as an argument. "
+            "Server-wide tools take no workspace_id."
         )
 
         self.logger.info(

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from reflectlog.application.salvage.manifest import build_bundle, unresolved_reasons
 from reflectlog.core.exceptions import SalvageInputError, ValidationError
+from reflectlog.core.salvage import SalvageBundle
 from reflectlog.utility.security import validate_workspace_id
 from reflectlog.version import __version__
 
@@ -86,20 +87,29 @@ class ContentSalvageService:
             target = self._publisher.resolve_output(
                 output, (archive, inspection.scratch_dir)
             )
-            snapshot = self._reader.read_snapshot(inspection.database_path, requested)
-            inspection.verify_unchanged()
-            bundle = build_bundle(
-                tool_version=self._tool_version,
-                snapshot=snapshot,
-                fingerprints=inspection.fingerprints,
-                identity=inspection.identity,
-                generation=inspection.generation,
-            )
-        self._publisher.publish(target, bundle)
+            with self._reader.read_snapshot(
+                inspection.database_path, requested
+            ) as snapshot:
+                inspection.verify_unchanged()
+                bundle = build_bundle(
+                    tool_version=self._tool_version,
+                    snapshot=snapshot,
+                    fingerprints=inspection.fingerprints,
+                    identity=inspection.identity,
+                    generation=inspection.generation,
+                )
+
+                def finalize_manifest() -> bytes:
+                    inspection.verify_unchanged()
+                    return bundle.finalize_manifest()
+
+                self._publisher.publish(
+                    target, SalvageBundle(bundle.records, finalize_manifest)
+                )
         reasons = unresolved_reasons(snapshot)
         return SalvageResult(
             output=target,
-            record_count=len(snapshot.records),
+            record_count=snapshot.record_count,
             rebuild_ready=not reasons,
             unresolved_reasons=reasons,
         )

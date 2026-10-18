@@ -181,7 +181,7 @@ class ReflectLogClient:
         request_timeout: float,
         transport: httpx.BaseTransport | None = None,
         client_name: str = "reflectlog-hermes",
-        client_version: str = "0.1.0",
+        client_version: str = "0.1.1",
     ) -> None:
         self._url = url
         self._token = token

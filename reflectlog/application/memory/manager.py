@@ -105,13 +105,16 @@ if TYPE_CHECKING:
     from ...core.logging import IStructuredLogger
     from ...core.search_health import SearchFailureSnapshot
     from ...core.types import (
+        CursorPage,
         Embeddings,
         ISemanticSearchEngine,
         IStoredMemory,
+        RecordWithSuccessor,
         ReplacementTransition,
     )
     from ..config.settings import Config
     from .fusion.base import FusionEngine
+    from .search_evidence import RankingExplanation, SearchStageOutcomes
 
 
 def wemm_config(config: Config) -> WeMMEmbeddingConfig:
@@ -140,12 +143,14 @@ class ScoredMemoryRecord:
     content: str
     score: float
     created_at: str | None
+    explanation: RankingExplanation | None = None
 
 
 @dataclass(frozen=True)
 class RecordSearchResult:
     records: tuple[ScoredMemoryRecord, ...]
     score_kind: SearchScoreKind
+    stage_outcomes: SearchStageOutcomes | None = None
 
 
 @final
@@ -1049,7 +1054,7 @@ class MemoryManager:
         return (await self._search_result(query, limit)).memories
 
     async def _search_result(
-        self, query: str, limit: int | None = None
+        self, query: str, limit: int | None = None, *, explain: bool = False
     ) -> SearchResult:
         self._ensure_open()
         if not query.strip():
@@ -1111,16 +1116,26 @@ class MemoryManager:
             # (which counts its own failures) has not started.
             self._search_failure_recorder.record(SearchComponent.SEMANTIC, refusal)
             raise
-        result = await self._search_pipeline.execute(
-            context, include_timestamp_map=False
+        result = (
+            await self._search_pipeline.execute(
+                context, include_timestamp_map=False, explain=True
+            )
+            if explain
+            else await self._search_pipeline.execute(
+                context, include_timestamp_map=False
+            )
         )
 
         return result
 
     async def search_records(
-        self, query: str, limit: int | None = None
+        self, query: str, limit: int | None = None, *, explain: bool = False
     ) -> RecordSearchResult:
-        result = await self._search_result(query, limit)
+        result = (
+            await self._search_result(query, limit, explain=True)
+            if explain
+            else await self._search_result(query, limit)
+        )
 
         def resolve() -> RecordSearchResult:
             with self._shared_workspace(), self._lock:
@@ -1136,6 +1151,11 @@ class MemoryManager:
                         content=content,
                         score=score,
                         created_at=by_content[content].created_at or None,
+                        explanation=(
+                            result.explanations.get(content)
+                            if explain and result.explanations is not None
+                            else None
+                        ),
                     )
                     for content, score in zip(
                         result.memories, result.scores, strict=True
@@ -1143,10 +1163,20 @@ class MemoryManager:
                     if content in by_content
                 )
                 return RecordSearchResult(
-                    records, result.score_kind if records else SearchScoreKind.NONE
+                    records,
+                    result.score_kind if records else SearchScoreKind.NONE,
+                    result.stage_outcomes if explain else None,
                 )
 
         return await asyncify(resolve)()
+
+    def get_record_with_successor(self, memory_id: int) -> RecordWithSuccessor:
+        with self._shared_workspace(), self._lock:
+            self._ensure_open()
+            self._refresh_engines()
+            return self._semantic_engine.memory_store.get_record_with_successor(
+                self.workspace_id, memory_id
+            )
 
     def get_records(self, ids: list[int]) -> tuple[list[IStoredMemory], list[int]]:
         ordered_ids = list(dict.fromkeys(ids))
@@ -1177,6 +1207,14 @@ class MemoryManager:
             return list(
                 store.get_page_records(self.workspace_id, limit, offset)
             ), store.count(self.workspace_id)
+
+    def get_cursor_page(self, limit: int, after_id: int) -> CursorPage:
+        with self._shared_workspace(), self._lock:
+            self._ensure_open()
+            self._refresh_engines()
+            return self._semantic_engine.memory_store.get_cursor_page(
+                self.workspace_id, limit, after_id
+            )
 
     def delete_records(self, ids: list[int]) -> tuple[list[int], list[int]]:
         records, _ = self.get_records(ids)

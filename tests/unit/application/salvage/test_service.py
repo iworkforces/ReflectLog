@@ -3,6 +3,7 @@
 import ast
 from collections.abc import Generator
 import contextlib
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ from reflectlog.core.exceptions import (
     SalvageUnsafeOutputError,
     SalvageUnsupportedSchemaError,
 )
-from reflectlog.core.salvage import IArchiveInspection, SalvageSnapshot
+from reflectlog.core.salvage import ActiveRecord, IArchiveInspection, SalvageSnapshot
 from reflectlog.infrastructure.memory_store import MemoryStore
 from reflectlog.infrastructure.salvage_archive import ArchiveInspector
 from reflectlog.infrastructure.salvage_publication import (
@@ -453,19 +454,93 @@ class TestUnsafeOutput:
 
 
 class TestChangeDuringSalvage:
+    @pytest.mark.parametrize("stage", ["iteration", "encoding", "write", "late-change"])
+    def test_stream_failures_release_snapshot_and_inspection_and_remove_output(
+        self, tmp_path: Path, stage: str
+    ) -> None:
+        archive = make_archive(
+            tmp_path / "archive", memories=[(WS, "first", None), (WS, "second", None)]
+        )
+        before = tree_digest(archive)
+        inspector = RecordingInspector()
+
+        class StreamingReader(SqliteSalvageSnapshotReader):
+            active = False
+            closed = False
+
+            @contextlib.contextmanager
+            def read_snapshot(
+                self, database_path: str, workspace_id: str
+            ) -> Generator[SalvageSnapshot]:
+                try:
+                    with super().read_snapshot(database_path, workspace_id) as snapshot:
+                        self.active = True
+
+                        def records() -> Generator[ActiveRecord]:
+                            for record in snapshot.records:
+                                yield (
+                                    replace(record, content="\ud800")
+                                    if stage == "encoding"
+                                    else record
+                                )
+                                if stage == "iteration":
+                                    raise RuntimeError("injected iteration failure")
+                                if stage == "late-change":
+                                    with open(
+                                        archive / "usearch" / "memories.db", "ab"
+                                    ) as handle:
+                                        _ = handle.write(b"changed")
+
+                        with contextlib.closing(records()) as stream:
+                            yield replace(snapshot, records=stream)
+                finally:
+                    self.active = False
+                    self.closed = True
+
+        reader = StreamingReader()
+
+        class WritingFileSystem(OsPublicationFileSystem):
+            def write_all(self, descriptor: int, payload: bytes) -> None:
+                assert reader.active
+                assert os.path.isdir(inspector.scratch_dirs[0])
+                if stage == "write" and payload.startswith(b'{"content"'):
+                    raise OSError(28, "No space left on device")
+                super().write_all(descriptor, payload)
+
+        expected = {
+            "iteration": RuntimeError,
+            "encoding": UnicodeEncodeError,
+            "write": SalvagePublicationError,
+            "late-change": SalvageArchiveChangedError,
+        }[stage]
+        output = tmp_path / "export"
+        service = ContentSalvageService(
+            inspector, reader, FileSystemBundlePublisher(WritingFileSystem())
+        )
+        with pytest.raises(expected):
+            _ = service.salvage(
+                archive=str(archive), workspace_id=WS, output=str(output)
+            )
+        assert reader.closed
+        assert not output.exists()
+        assert not os.path.exists(inspector.scratch_dirs[0])
+        if stage != "late-change":
+            assert tree_digest(archive) == before
+
     def test_archive_change_between_fingerprint_passes_fails_without_output(
         self, tmp_path: Path
     ) -> None:
         archive = make_archive(tmp_path / "archive", memories=[(WS, "a", None)])
 
         class ChangingReader(SqliteSalvageSnapshotReader):
+            @contextlib.contextmanager
             def read_snapshot(
                 self, database_path: str, workspace_id: str
-            ) -> SalvageSnapshot:
-                snapshot = super().read_snapshot(database_path, workspace_id)
-                with open(archive / "usearch" / "memories.db", "ab") as handle:
-                    _ = handle.write(b"\0")
-                return snapshot
+            ) -> Generator[SalvageSnapshot]:
+                with super().read_snapshot(database_path, workspace_id) as snapshot:
+                    with open(archive / "usearch" / "memories.db", "ab") as handle:
+                        _ = handle.write(b"\0")
+                    yield snapshot
 
         inspector = RecordingInspector()
         service = ContentSalvageService(

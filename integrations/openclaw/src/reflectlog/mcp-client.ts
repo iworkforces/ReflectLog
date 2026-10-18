@@ -32,7 +32,7 @@ export type ReflectLogClientDeps = {
 };
 
 const connectSdk: ConnectFn = async (config, options) => {
-  const client = new Client({ name: "openclaw-memory-reflectlog", version: "0.1.0" });
+  const client = new Client({ name: "openclaw-memory-reflectlog", version: "0.1.1" });
   const transport = new StreamableHTTPClientTransport(
     new URL(config.url), { requestInit: { headers: options.headers } });
   try {

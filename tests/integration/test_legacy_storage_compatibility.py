@@ -264,6 +264,7 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
     config = Config(
         workspace_id="legacy-tools",
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
     )
     logger = MagicMock()
     memory = MagicMock(spec=MemoryManager)
@@ -298,6 +299,7 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
         "get_all_memories",
         "get_memory_by_id",
         "delete_memories",
+        "get_all_workspaces",
     ]
 
     add_params = list(signature(add.get_handler()).parameters)
@@ -306,10 +308,14 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
     remove_params = list(signature(remove.get_handler()).parameters)
     id_params = list(signature(get_by_id.get_handler()).parameters)
     assert add_params == ["memories", "dry_run", "allow_replace"]
-    assert search_params == ["query", "limit"]
-    assert get_all_params == ["limit", "offset"]
+    assert search_params == ["query", "limit", "explain"]
+    assert get_all_params == ["limit", "offset", "after_id"]
     assert remove_params == ["ids"]
-    assert id_params == ["id"]
+    assert id_params == ["id", "include_successor"]
+    assert (
+        signature(get_by_id.get_handler()).parameters["include_successor"].default
+        is False
+    )
 
     empty_add = await add.get_handler()([])
     assert empty_add == {

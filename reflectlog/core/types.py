@@ -114,12 +114,30 @@ class IStoredMemory(Protocol):
     def created_at(self) -> str: ...
 
 
+@dataclass(frozen=True, slots=True)
+class CursorPage:
+    records: tuple[IStoredMemory, ...]
+    total: int
+    truncated: bool
+    next_after_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class RecordWithSuccessor:
+    record: IStoredMemory | None
+    successor_id: int | None = None
+
+
 class IArchiveMemoryStore(Protocol):
     db_path: str
 
     def get(self, memory_id: int) -> IStoredMemory | None: ...
 
     def get_batch(self, memory_ids: list[int]) -> Mapping[int, IStoredMemory]: ...
+
+    def get_record_with_successor(
+        self, workspace_id: str, memory_id: int
+    ) -> RecordWithSuccessor: ...
 
     def get_records_by_contents(
         self, workspace_id: str, contents: list[str]
@@ -128,6 +146,10 @@ class IArchiveMemoryStore(Protocol):
     def get_page_records(
         self, workspace_id: str, limit: int | None, offset: int
     ) -> Sequence[IStoredMemory]: ...
+
+    def get_cursor_page(
+        self, workspace_id: str, limit: int, after_id: int
+    ) -> CursorPage: ...
 
     def count(self, workspace_id: str) -> int: ...
 

@@ -333,9 +333,10 @@ This runs typecheck, vitest, build, then `pnpm test:dist`. To run the compiled
 smoke alone, run `pnpm build` first. A native Node child imports
 `@iworkforces/openclaw-memory-reflectlog` through its `dist/index.js` package
 export, without a TypeScript loader or mocked SDK. It registers with the real
-OpenClaw `2026.10.2` registry through a version-guarded adapter that locates the
+OpenClaw `2026.10.4` registry through an exact-version-guarded adapter that locates the
 internal registry chunk by content because the host exports no registry factory.
-Host version or registry-seam differences fail closed.
+The plugin requires OpenClaw `>=2026.10.4`, while the compiled smoke is pinned to
+`2026.10.4`. Host version or registry-seam differences fail closed.
 
 The smoke checks the memory capability, six `memory_*` tools, recall names,
 plugin service, and `reflectlog` CLI registration through real Commander. It
