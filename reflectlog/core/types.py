@@ -114,6 +114,12 @@ class IStoredMemory(Protocol):
     def created_at(self) -> str: ...
 
 
+@dataclass(frozen=True, slots=True)
+class RecordWithSuccessor:
+    record: IStoredMemory | None
+    successor_id: int | None = None
+
+
 class IArchiveMemoryStore(Protocol):
     db_path: str
 
