@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 from unittest.mock import patch
@@ -232,6 +233,212 @@ class TestRun:
 
 
 class TestSubprocess:
+    @pytest.mark.parametrize(
+        "stage", ["iteration", "encoding", "write", "finalization"]
+    )
+    def test_streaming_failures_roll_back_through_offline_dispatch(
+        self, tmp_path: Path, stage: str
+    ) -> None:
+        archive = make_archive(
+            tmp_path / "archive", memories=[(WS, SECRET, None), (WS, "second", None)]
+        )
+        before = tree_digest(archive)
+        output = tmp_path / "export"
+        injection = r"""
+import contextlib, os, sqlite3, tempfile
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import patch
+from reflectlog.application.salvage import service
+from reflectlog.infrastructure import salvage_snapshot, salvage_publication
+connections, scratch_dirs, descriptors = [], [], {}
+written = 0
+original_connect = sqlite3.connect
+original_mkdtemp = tempfile.mkdtemp
+original_stream = salvage_snapshot._stream_records
+original_bundle = service.build_bundle
+original_create = salvage_publication.OsPublicationFileSystem.create_file
+original_write = salvage_publication.OsPublicationFileSystem.write_all
+original_close = salvage_publication.OsPublicationFileSystem.close_file
+def connect(*args, **kwargs):
+    connection = original_connect(*args, **kwargs)
+    connections.append(connection)
+    return connection
+def mkdtemp(*args, **kwargs):
+    directory = original_mkdtemp(*args, **kwargs)
+    scratch_dirs.append(directory)
+    return directory
+def stream(database, workspace_id):
+    with contextlib.closing(original_stream(database, workspace_id)) as records:
+        for position, record in enumerate(records):
+            if position == 1 and stage == "iteration":
+                assert written == 1
+                raise RuntimeError("injected iteration failure")
+            if position == 1 and stage == "encoding":
+                assert written == 1
+                record = replace(record, content="\ud800")
+            yield record
+def build_bundle(**kwargs):
+    bundle = original_bundle(**kwargs)
+    def finalize():
+        assert written == 2
+        bundle.finalize_manifest()
+        raise RuntimeError("injected finalization failure")
+    return replace(bundle, finalize_manifest=finalize) if stage == "finalization" else bundle
+def create(filesystem, path):
+    descriptor = original_create(filesystem, path)
+    descriptors[descriptor] = Path(path).name
+    return descriptor
+def write(filesystem, descriptor, payload):
+    global written
+    if descriptors[descriptor] == "memories.jsonl" and stage == "write" and written == 1:
+        raise OSError(28, "injected write failure")
+    original_write(filesystem, descriptor, payload)
+    if descriptors[descriptor] == "memories.jsonl":
+        written += 1
+def close(filesystem, descriptor):
+    original_close(filesystem, descriptor)
+    del descriptors[descriptor]
+with contextlib.ExitStack() as patches:
+    patches.enter_context(patch.object(sqlite3, "connect", connect))
+    patches.enter_context(patch.object(tempfile, "mkdtemp", mkdtemp))
+    patches.enter_context(patch.object(salvage_snapshot, "_stream_records", stream))
+    patches.enter_context(patch.object(service, "build_bundle", build_bundle))
+    patches.enter_context(patch.object(salvage_publication.OsPublicationFileSystem, "create_file", create))
+    patches.enter_context(patch.object(salvage_publication.OsPublicationFileSystem, "write_all", write))
+    patches.enter_context(patch.object(salvage_publication.OsPublicationFileSystem, "close_file", close))
+    code = "no-exit"
+    try:
+        main()
+    except SystemExit as exc:
+        code = exc.code
+    finally:
+        closed = []
+        for connection in connections:
+            try:
+                connection.execute("SELECT 1")
+            except sqlite3.ProgrammingError:
+                closed.append(True)
+            else:
+                closed.append(False)
+        print("RECEIPT=" + json.dumps({"exit": code, "written": written,
+            "connections_closed": closed, "scratch_removed": [not os.path.exists(path) for path in scratch_dirs],
+            "descriptors_closed": not descriptors}))
+        print("MODULES=" + json.dumps(sorted(sys.modules)))
+"""
+        harness = (
+            "import sys\nstage = sys.argv[4]\n"
+            + HARNESS.split('code = "no-exit"')[0]
+            + injection
+        )
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not any(
+                secret in key for secret in ("API_KEY", "TOKEN", "SECRET", "PASSWORD")
+            )
+        }
+
+        completed = subprocess.run(
+            [sys.executable, "-c", harness, str(archive), WS, str(output), stage],
+            cwd=REPO,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        lines = completed.stdout.splitlines()
+        assert len(lines) == 2, completed.stderr
+        receipt = json.loads(lines[0].removeprefix("RECEIPT="))
+        assert receipt == {
+            "exit": 1 if stage == "write" else "no-exit",
+            "written": 2 if stage == "finalization" else 1,
+            "connections_closed": [True, True],
+            "scratch_removed": [True, True],
+            "descriptors_closed": True,
+        }
+        assert not output.exists()
+        assert tree_digest(archive) == before
+        modules = json.loads(lines[1].removeprefix("MODULES="))
+        assert not [
+            name
+            for name in modules
+            if any(
+                name == bad or name.startswith(f"{bad}.") for bad in FORBIDDEN_MODULES
+            )
+            or name.startswith("reflectlog.application.config")
+        ]
+        assert SECRET not in completed.stdout + completed.stderr
+        if stage == "write":
+            assert completed.returncode == 0
+            assert completed.stderr.startswith("reflectlog salvage: ")
+            assert completed.stderr.count("\n") == 1
+            assert "rolled back" in completed.stderr
+        else:
+            assert completed.returncode == 1
+            assert "Traceback" in completed.stderr
+            expected = "UnicodeEncodeError" if stage == "encoding" else "RuntimeError"
+            assert expected in completed.stderr
+            assert "reflectlog salvage: " not in completed.stderr
+
+    def test_growing_fixed_size_payload_has_bounded_offline_cli_memory(
+        self, tmp_path: Path
+    ) -> None:
+        peaks: list[int] = []
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not any(
+                secret in key for secret in ("API_KEY", "TOKEN", "SECRET", "PASSWORD")
+            )
+        }
+        harness = (
+            HARNESS.replace(
+                'code = "no-exit"',
+                'import tracemalloc\nfrom reflectlog.application.salvage.service import ContentSalvageService\nContentSalvageService.from_defaults()\ntracemalloc.start()\ncode = "no-exit"',
+            )
+            + '\nprint("PEAK=" + str(tracemalloc.get_traced_memory()[1]))\n'
+        )
+        for count in (32, 256, 2048):
+            archive = make_archive(tmp_path / f"archive-{count}", memories=[])
+            connection = sqlite3.connect(archive / "usearch" / "memories.db")
+            try:
+                _ = connection.executemany(
+                    "INSERT INTO memories (workspace_id, content, created_at) VALUES (?, ?, NULL)",
+                    ((WS, f"{index:08d}" + "x" * (8192 - 8)) for index in range(count)),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            output = tmp_path / f"export-{count}"
+            completed = subprocess.run(
+                [sys.executable, "-c", harness, str(archive), WS, str(output)],
+                cwd=REPO,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            assert completed.returncode == 0, completed.stderr
+            lines = completed.stdout.splitlines()
+            assert json.loads(lines[0])["record_count"] == count
+            assert lines[1] == "EXIT=0"
+            modules = json.loads(lines[2].removeprefix("MODULES="))
+            assert not [
+                name
+                for name in modules
+                if any(
+                    name == bad or name.startswith(f"{bad}.")
+                    for bad in FORBIDDEN_MODULES
+                )
+            ]
+            peaks.append(int(lines[3].removeprefix("PEAK=")))
+            assert (output / "memories.jsonl").stat().st_size > count * 8192
+        assert max(peaks) - min(peaks) < 2 * 1024 * 1024, peaks
+        assert max(peaks) < 8 * 1024 * 1024, peaks
+
     def test_installed_command_exports_wal_only_content_without_heavy_imports(
         self, tmp_path: Path
     ) -> None:

@@ -54,6 +54,7 @@ def _snapshot(
     return SalvageSnapshot(
         workspace_id="ws",
         records=records,
+        record_count=len(records),
         pending=pending,
         unknown=unknown,
         foreign=foreign,
@@ -76,17 +77,20 @@ def _bundle(snapshot: SalvageSnapshot) -> dict[str, object]:
         ),
         generation=GenerationSidecarReport(SidecarStatus.PRESENT, "3"),
     )
-    parsed: dict[str, object] = json.loads(bundle.manifest)
+    _ = b"".join(bundle.records)
+    parsed: dict[str, object] = json.loads(bundle.finalize_manifest())
     return parsed
 
 
 class TestRenderRecords:
-    def test_lines_are_sorted_compact_utf8_with_sorted_keys(self) -> None:
-        rendered = render_records(
-            [
-                ActiveRecord(7, "déjà vu \u2028 \u00e9", None),
-                ActiveRecord(2, 'quote " and \\ and \n newline', "2026-01-01"),
-            ]
+    def test_ordered_lines_are_compact_utf8_with_sorted_keys(self) -> None:
+        rendered = b"".join(
+            render_records(
+                [
+                    ActiveRecord(2, 'quote " and \\ and \n newline', "2026-01-01"),
+                    ActiveRecord(7, "déjà vu \u2028 \u00e9", None),
+                ]
+            )
         )
 
         lines = rendered.decode("utf-8").split("\n")
@@ -101,7 +105,7 @@ class TestRenderRecords:
         assert "\\u" not in lines[1]
 
     def test_empty_records_render_empty_bytes(self) -> None:
-        assert render_records([]) == b""
+        assert b"".join(render_records([])) == b""
 
 
 class TestReasons:
@@ -144,6 +148,62 @@ class TestReasons:
 
 
 class TestManifest:
+    def test_format_one_golden_bytes_and_deferred_finalization(self) -> None:
+        bundle = build_bundle(
+            tool_version="golden",
+            snapshot=_snapshot(
+                records=(
+                    ActiveRecord(-2, 'é\0"\\\n\u2028', "t\0"),
+                    ActiveRecord(9, "last", None),
+                )
+            ),
+            fingerprints=(),
+            identity=IdentitySidecarReport(SidecarStatus.MISSING),
+            generation=GenerationSidecarReport(SidecarStatus.MISSING),
+        )
+        with pytest.raises(RuntimeError, match="exhausted"):
+            _ = bundle.finalize_manifest()
+        expected = (
+            '{"content":"é\\u0000\\"\\\\\\n\u2028","source_created_at":"t\\u0000","source_id":-2}\n'
+            '{"content":"last","source_created_at":null,"source_id":9}\n'
+        ).encode("utf-8")
+        assert b"".join(bundle.records) == expected
+        manifest = bundle.finalize_manifest()
+        expected_manifest = {
+            "format": "reflectlog.content-salvage",
+            "format_version": 1,
+            "reflectlog_version": "golden",
+            "workspace_id": "ws",
+            "rebuild_ready": True,
+            "unresolved_reasons": [],
+            "identity": {"status": "missing", "fields": {}},
+            "generation": {"status": "missing", "raw": None},
+            "source_fingerprints": [],
+            "schema": {
+                "journal_status": "supported",
+                "tables": [{"name": "memories", "columns": ["id"]}],
+            },
+            "records": {
+                "file": "memories.jsonl",
+                "count": 2,
+                "sha256": hashlib.sha256(expected).hexdigest(),
+            },
+            "journal": {"pending": [], "unknown": [], "foreign_workspace": []},
+            "history": {"completed_journal_rows": 4},
+            "foreign_active_count": 2,
+            "not_preserved": [
+                "embedding identity: provider, model, and dimensions are recorded as observed but the rebuilt workspace gets its own",
+                "memory ids: rebuilt memories receive new ids",
+                "created_at timestamps: rebuilt memories are stamped when re-added",
+                "replacement and archive history: archived memories and completed journal rows are not exported",
+                "vectors: embeddings and the full-text index are rebuilt from content",
+            ],
+        }
+        assert manifest == (
+            json.dumps(expected_manifest, sort_keys=True, indent=2, ensure_ascii=False)
+            + "\n"
+        ).encode("utf-8")
+
     def test_manifest_is_sorted_indented_json_with_trailing_newline(self) -> None:
         bundle = build_bundle(
             tool_version="1",
@@ -153,7 +213,8 @@ class TestManifest:
             generation=GenerationSidecarReport(SidecarStatus.MISSING),
         )
 
-        text = bundle.manifest.decode("utf-8")
+        _ = b"".join(bundle.records)
+        text = bundle.finalize_manifest().decode("utf-8")
         assert text.endswith("}\n")
         assert (
             text
@@ -204,11 +265,12 @@ class TestManifest:
             generation=GenerationSidecarReport(SidecarStatus.MISSING),
         )
 
-        entry = json.loads(bundle.manifest)["records"]
+        payload = b"".join(bundle.records)
+        entry = json.loads(bundle.finalize_manifest())["records"]
         assert entry == {
             "file": "memories.jsonl",
             "count": 2,
-            "sha256": hashlib.sha256(bundle.records).hexdigest(),
+            "sha256": hashlib.sha256(payload).hexdigest(),
         }
 
     def test_raw_journal_evidence_is_lossless_and_separate(self) -> None:

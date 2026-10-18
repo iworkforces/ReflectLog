@@ -17,7 +17,7 @@ from reflectlog.core.salvage import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Iterator, Sequence
 
     from reflectlog.core.salvage import (
         ActiveRecord,
@@ -42,23 +42,22 @@ NOT_PRESERVED: Final = (
 )
 
 
-def render_records(records: Sequence[ActiveRecord]) -> bytes:
-    """Render one JSON line per record, sorted by source id."""
-    lines = [
-        json.dumps(
-            {
-                "content": record.content,
-                "source_created_at": record.created_at,
-                "source_id": record.source_id,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-        for record in sorted(records, key=lambda item: item.source_id)
-    ]
-    return "".join(lines).encode("utf-8")
+def render_records(records: Iterable[ActiveRecord]) -> Iterator[bytes]:
+    """Encode one compact UTF-8 JSON line at a time, in input order."""
+    for record in records:
+        yield (
+            json.dumps(
+                {
+                    "content": record.content,
+                    "source_created_at": record.created_at,
+                    "source_id": record.source_id,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
 
 
 def unresolved_reasons(snapshot: SalvageSnapshot) -> tuple[str, ...]:
@@ -100,8 +99,21 @@ def build_bundle(
     identity: IdentitySidecarReport,
     generation: GenerationSidecarReport,
 ) -> SalvageBundle:
-    """Render ``memories.jsonl`` and ``manifest.json`` bytes in memory."""
-    records = render_records(snapshot.records)
+    """Stream records, then finalize the format-1 manifest from their digest."""
+    digest = hashlib.sha256()
+    count = 0
+    byte_length = 0
+    exhausted = False
+
+    def records() -> Iterator[bytes]:
+        nonlocal count, byte_length, exhausted
+        for chunk in render_records(snapshot.records):
+            digest.update(chunk)
+            count += 1
+            byte_length += len(chunk)
+            yield chunk
+        exhausted = True
+
     reasons = unresolved_reasons(snapshot)
     manifest: dict[str, object] = {
         "format": FORMAT_NAME,
@@ -128,8 +140,6 @@ def build_bundle(
         },
         "records": {
             "file": RECORDS_FILENAME,
-            "count": len(snapshot.records),
-            "sha256": hashlib.sha256(records).hexdigest(),
         },
         "journal": {
             "pending": _journal_rows(snapshot.pending),
@@ -140,5 +150,16 @@ def build_bundle(
         "foreign_active_count": snapshot.foreign_active_count,
         "not_preserved": list(NOT_PRESERVED),
     }
-    rendered = json.dumps(manifest, sort_keys=True, indent=2, ensure_ascii=False)
-    return SalvageBundle(records=records, manifest=(rendered + "\n").encode("utf-8"))
+
+    def finalize_manifest() -> bytes:
+        if not exhausted:
+            raise RuntimeError("records must be exhausted before manifest finalization")
+        manifest["records"] = {
+            "file": RECORDS_FILENAME,
+            "count": count,
+            "sha256": digest.hexdigest(),
+        }
+        rendered = json.dumps(manifest, sort_keys=True, indent=2, ensure_ascii=False)
+        return (rendered + "\n").encode("utf-8")
+
+    return SalvageBundle(records=records(), finalize_manifest=finalize_manifest)

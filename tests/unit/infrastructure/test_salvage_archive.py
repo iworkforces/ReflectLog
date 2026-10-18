@@ -53,10 +53,10 @@ class TestCopy:
             scratch = Path(inspection.scratch_dir)
             assert scratch.name.startswith("reflectlog-salvage-")
             assert Path(inspection.database_path).parent == scratch
-            snapshot = SqliteSalvageSnapshotReader().read_snapshot(
+            with SqliteSalvageSnapshotReader().read_snapshot(
                 inspection.database_path, WS
-            )
-            assert [r.content for r in snapshot.records] == ["kept"]
+            ) as snapshot:
+                assert [r.content for r in snapshot.records] == ["kept"]
         assert not scratch.exists()
 
     def test_scratch_is_removed_when_the_body_fails(self, archive: Path) -> None:
@@ -98,14 +98,13 @@ class TestCopy:
         )
 
         with ArchiveInspector().inspect(str(wal_archive)) as inspection:
-            snapshot = SqliteSalvageSnapshotReader().read_snapshot(
+            with SqliteSalvageSnapshotReader().read_snapshot(
                 inspection.database_path, WS
-            )
+            ) as snapshot:
+                records = tuple(snapshot.records)
             paths = [item.path for item in inspection.fingerprints]
 
-        assert [(r.source_id, r.content) for r in snapshot.records] == [
-            (row_id, "wal only")
-        ]
+        assert [(r.source_id, r.content) for r in records] == [(row_id, "wal only")]
         assert "usearch/memories.db-wal" in paths
         assert "usearch/memories.db-shm" in paths
 
@@ -115,16 +114,17 @@ class TestCopy:
         clean = make_clean_wal_format_archive(tmp_path / "archive", tmp_path, "clean")
 
         with ArchiveInspector().inspect(str(clean)) as inspection:
-            snapshot = SqliteSalvageSnapshotReader().read_snapshot(
+            with SqliteSalvageSnapshotReader().read_snapshot(
                 inspection.database_path, WS
-            )
+            ) as snapshot:
+                records = tuple(snapshot.records)
             wal_in_archive = [
                 item.path
                 for item in inspection.fingerprints
                 if item.path.endswith("-wal")
             ]
 
-        assert [r.content for r in snapshot.records] == ["clean"]
+        assert [r.content for r in records] == ["clean"]
         assert wal_in_archive == []
         assert not (clean / "usearch" / "memories.db-wal").exists()
 
@@ -274,20 +274,23 @@ class TestArchiveIsNeverModified:
         real_mkdtemp = tempfile.mkdtemp
         before = tree_digest(archive)
 
-        def observe_creation(*, prefix: str, dir: str | None = None) -> str:
+        def observe_creation(
+            suffix: str | None = None, prefix: str | None = None, dir: str | None = None
+        ) -> str:
             parents.append(dir)
-            return real_mkdtemp(prefix=prefix, dir=dir)
+            return real_mkdtemp(suffix=suffix, prefix=prefix, dir=dir)
 
         monkeypatch.setattr(tempfile, "mkdtemp", observe_creation)
 
         with ArchiveInspector().inspect(str(archive)) as inspection:
             scratch = Path(inspection.scratch_dir)
             assert scratch.parent == tmp_path.resolve()
-            _ = SqliteSalvageSnapshotReader().read_snapshot(
+            with SqliteSalvageSnapshotReader().read_snapshot(
                 inspection.database_path, WS
-            )
+            ) as snapshot:
+                _ = tuple(snapshot.records)
 
-        assert parents == [os.path.realpath(tmp_path)]
+        assert parents == [os.path.realpath(tmp_path)] * 2
         assert not scratch.exists()
         assert tree_digest(archive) == before
 
@@ -296,9 +299,10 @@ class TestArchiveIsNeverModified:
         before = tree_digest(wal_archive)
 
         with ArchiveInspector().inspect(str(wal_archive)) as inspection:
-            _ = SqliteSalvageSnapshotReader().read_snapshot(
+            with SqliteSalvageSnapshotReader().read_snapshot(
                 inspection.database_path, WS
-            )
+            ) as snapshot:
+                _ = tuple(snapshot.records)
             inspection.verify_unchanged()
 
         assert tree_digest(wal_archive) == before
@@ -311,11 +315,12 @@ class TestArchiveIsNeverModified:
             os.chmod(path, 0o555 if path.is_dir() else 0o444)
         try:
             with ArchiveInspector().inspect(str(archive)) as inspection:
-                snapshot = SqliteSalvageSnapshotReader().read_snapshot(
+                with SqliteSalvageSnapshotReader().read_snapshot(
                     inspection.database_path, WS
-                )
+                ) as snapshot:
+                    records = tuple(snapshot.records)
                 inspection.verify_unchanged()
-            assert [r.content for r in snapshot.records] == ["kept"]
+            assert [r.content for r in records] == ["kept"]
             assert tree_digest(archive) == before
         finally:
             for path in paths:

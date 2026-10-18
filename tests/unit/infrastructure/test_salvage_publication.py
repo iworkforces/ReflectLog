@@ -1,5 +1,6 @@
 """Unit tests for crash-visible publication of an offline-salvage bundle."""
 
+from collections.abc import Iterator
 import os
 from pathlib import Path
 import stat
@@ -17,10 +18,41 @@ from reflectlog.infrastructure.salvage_publication import (
     OsPublicationFileSystem,
 )
 
-BUNDLE = SalvageBundle(records=b'{"a":1}\n', manifest=b"{}\n")
+BUNDLE = SalvageBundle(records=(b'{"a":1}\n',), finalize_manifest=lambda: b"{}\n")
 posix_only = pytest.mark.skipif(
     sys.platform == "win32", reason="POSIX permission bits are not enforced"
 )
+
+
+@pytest.mark.parametrize("stage", ["iteration", "encoding", "finalization"])
+@pytest.mark.parametrize("interruption", [False, True])
+def test_stream_failures_close_descriptors_and_roll_back(
+    tmp_path: Path, stage: str, interruption: bool
+) -> None:
+    filesystem = FaultyFileSystem("unused")
+    output = tmp_path / "export"
+    error = (
+        KeyboardInterrupt() if interruption else ValueError("injected stream failure")
+    )
+
+    def chunks() -> Iterator[bytes]:
+        yield b"first\n"
+        if stage == "iteration" or interruption and stage == "encoding":
+            raise error
+        if stage == "encoding":
+            yield "\ud800".encode("utf-8")
+
+    def finalize() -> bytes:
+        raise error
+
+    bundle = SalvageBundle(
+        chunks(), finalize if stage == "finalization" else BUNDLE.finalize_manifest
+    )
+    expected = KeyboardInterrupt if interruption else ValueError
+    with pytest.raises(expected):
+        FileSystemBundlePublisher(filesystem).publish(str(output), bundle)
+    assert filesystem.descriptors == {}
+    assert not output.exists()
 
 
 class FaultyFileSystem(OsPublicationFileSystem):
@@ -113,8 +145,8 @@ class TestSuccessfulPublication:
         _publish(FileSystemBundlePublisher(), output)
 
         assert sorted(os.listdir(output)) == ["manifest.json", "memories.jsonl"]
-        assert (output / "memories.jsonl").read_bytes() == BUNDLE.records
-        assert (output / "manifest.json").read_bytes() == BUNDLE.manifest
+        assert (output / "memories.jsonl").read_bytes() == b"".join(BUNDLE.records)
+        assert (output / "manifest.json").read_bytes() == BUNDLE.finalize_manifest()
 
     @posix_only
     def test_directory_is_0700_and_files_are_0600(self, tmp_path: Path) -> None:
@@ -160,7 +192,7 @@ class TestSuccessfulPublication:
 
         _publish(FileSystemBundlePublisher(), output)
 
-        assert (output / "memories.jsonl").read_bytes() == BUNDLE.records
+        assert (output / "memories.jsonl").read_bytes() == b"".join(BUNDLE.records)
 
     def test_directory_sync_is_skipped_when_it_cannot_be_opened(
         self, tmp_path: Path
