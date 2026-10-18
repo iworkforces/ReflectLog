@@ -114,6 +114,7 @@ if TYPE_CHECKING:
     )
     from ..config.settings import Config
     from .fusion.base import FusionEngine
+    from .search_evidence import RankingExplanation, SearchStageOutcomes
 
 
 def wemm_config(config: Config) -> WeMMEmbeddingConfig:
@@ -142,12 +143,14 @@ class ScoredMemoryRecord:
     content: str
     score: float
     created_at: str | None
+    explanation: RankingExplanation | None = None
 
 
 @dataclass(frozen=True)
 class RecordSearchResult:
     records: tuple[ScoredMemoryRecord, ...]
     score_kind: SearchScoreKind
+    stage_outcomes: SearchStageOutcomes | None = None
 
 
 @final
@@ -1051,7 +1054,7 @@ class MemoryManager:
         return (await self._search_result(query, limit)).memories
 
     async def _search_result(
-        self, query: str, limit: int | None = None
+        self, query: str, limit: int | None = None, *, explain: bool = False
     ) -> SearchResult:
         self._ensure_open()
         if not query.strip():
@@ -1113,16 +1116,26 @@ class MemoryManager:
             # (which counts its own failures) has not started.
             self._search_failure_recorder.record(SearchComponent.SEMANTIC, refusal)
             raise
-        result = await self._search_pipeline.execute(
-            context, include_timestamp_map=False
+        result = (
+            await self._search_pipeline.execute(
+                context, include_timestamp_map=False, explain=True
+            )
+            if explain
+            else await self._search_pipeline.execute(
+                context, include_timestamp_map=False
+            )
         )
 
         return result
 
     async def search_records(
-        self, query: str, limit: int | None = None
+        self, query: str, limit: int | None = None, *, explain: bool = False
     ) -> RecordSearchResult:
-        result = await self._search_result(query, limit)
+        result = (
+            await self._search_result(query, limit, explain=True)
+            if explain
+            else await self._search_result(query, limit)
+        )
 
         def resolve() -> RecordSearchResult:
             with self._shared_workspace(), self._lock:
@@ -1138,6 +1151,11 @@ class MemoryManager:
                         content=content,
                         score=score,
                         created_at=by_content[content].created_at or None,
+                        explanation=(
+                            result.explanations.get(content)
+                            if explain and result.explanations is not None
+                            else None
+                        ),
                     )
                     for content, score in zip(
                         result.memories, result.scores, strict=True
@@ -1145,7 +1163,9 @@ class MemoryManager:
                     if content in by_content
                 )
                 return RecordSearchResult(
-                    records, result.score_kind if records else SearchScoreKind.NONE
+                    records,
+                    result.score_kind if records else SearchScoreKind.NONE,
+                    result.stage_outcomes if explain else None,
                 )
 
         return await asyncify(resolve)()

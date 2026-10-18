@@ -5,6 +5,12 @@ import pytest
 
 from reflectlog.application.config.settings import Config
 from reflectlog.application.memory.manager import RecordSearchResult, ScoredMemoryRecord
+from reflectlog.application.memory.search_evidence import (
+    BackendContribution,
+    RankingExplanation,
+    SearchStageOutcomes,
+    StageOutcome,
+)
 from reflectlog.application.tools.search_memories import SearchMemoriesTool
 from reflectlog.core.enums import SearchScoreKind
 from reflectlog.core.exceptions import InconsistentStateError, SearchError
@@ -26,6 +32,56 @@ async def test_search_records_shape(
         "limit": 2,
     }
     mock_memory_manager.search_records.assert_awaited_once_with("query", limit=2)
+
+
+@pytest.mark.parametrize("explain", [False, True])
+async def test_explanations_are_serialized_only_when_requested(
+    mock_config: Config,
+    mock_memory_manager: MagicMock,
+    mock_tool_logger: MagicMock,
+    explain: bool,
+) -> None:
+    explanation = RankingExplanation(
+        BackendContribution(2, 0.8),
+        None,
+        0.03,
+        SearchScoreKind.RRF,
+        SearchScoreKind.RRF,
+    )
+    mock_memory_manager.search_records = AsyncMock(
+        return_value=RecordSearchResult(
+            (ScoredMemoryRecord(7, "text", 0.03, None, explanation),),
+            SearchScoreKind.RRF,
+            SearchStageOutcomes(
+                StageOutcome.APPLIED, StageOutcome.EMPTY, StageOutcome.DISABLED
+            ),
+        )
+    )
+    tool = SearchMemoriesTool(mock_config, mock_memory_manager, mock_tool_logger)
+
+    result = await tool.get_handler()("query", 2, explain=explain)
+
+    row = {"id": 7, "memory": "text", "score": 0.03, "created_at": None}
+    expected: dict[str, object] = {"results": [row], "score_kind": "rrf", "limit": 2}
+    if explain:
+        row["explanation"] = {
+            "semantic": {"rank": 2, "score": 0.8},
+            "fulltext": None,
+            "pre_rerank_score": 0.03,
+            "pre_rerank_score_kind": "rrf",
+            "final_score_kind": "rrf",
+        }
+        expected["stage_outcomes"] = {
+            "semantic": "applied",
+            "fulltext": "empty",
+            "reranker": "disabled",
+        }
+        mock_memory_manager.search_records.assert_awaited_once_with(
+            "query", limit=2, explain=True
+        )
+    else:
+        mock_memory_manager.search_records.assert_awaited_once_with("query", limit=2)
+    assert result == expected
 
 
 @pytest.mark.parametrize(
