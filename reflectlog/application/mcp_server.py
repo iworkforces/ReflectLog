@@ -76,9 +76,13 @@ TOOL_INSTRUCTIONS = {
     "add_memories": "    • add_memories(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict\n"
     "      Add memories with semantic embeddings. Empty lists are no-op.\n"
     "      Returns stored/skipped/replaced counts. dry_run previews replacements.",
-    "get_all_memories": "    • get_all_memories(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict\n"
+    "get_all_memories": "    • get_all_memories(workspace_id: str, limit: int | None = None, offset: int = 0, after_id: int | None = None) -> dict\n"
     "      Page stored records. Default cap 1000. Returns records, "
-    "total, offset, limit, truncated.",
+    "total, offset, limit, truncated. Omit after_id for offset paging. "
+    "For skip-free continuation, start with after_id=0 and pass next_after_id from each page; "
+    "positive offset cannot be combined with after_id. limit=0 probes without advancing. "
+    "Cursor paging survives eviction and restart, but is not a frozen snapshot; "
+    "restoring an older database invalidates continuation.",
     "search_memories": "    • search_memories(query: str, workspace_id: str, limit: int | None = None) -> dict\n      Search stable ids with final scores and score_kind. Limit 1..50.",
     "get_memory_by_id": "    • get_memory_by_id(id: int, workspace_id: str, include_successor: bool = False) -> dict\n"
     "      Returns {record: record or null}. With include_successor, missing records also return "
@@ -295,11 +299,15 @@ class FastMCPServer:
             )
 
     async def _get_all_memories(
-        self, workspace_id: str, limit: int | None = None, offset: int = 0
+        self,
+        workspace_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+        after_id: Annotated[int | None, Field(ge=0, strict=True)] = None,
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
             return await self._finish_tool(
-                self._handler("get_all_memories", manager)(limit, offset)
+                self._handler("get_all_memories", manager)(limit, offset, after_id)
             )
 
     async def _get_memory_by_id(
