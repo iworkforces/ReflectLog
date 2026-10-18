@@ -32,10 +32,11 @@ uv sync
 
 ### Configuration
 
-Create a `.env` file with your API key:
+Create a `.env` file with your API key and a private admin password:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-your-key-here
+ADMIN_PASSWORD=replace-with-a-private-admin-password
 ```
 
 ### Running the Server
@@ -141,7 +142,7 @@ ReflectLog provides six MCP tools:
 3. `get_all_memories(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict`: Returns `records` (`id`, `memory`, nullable `created_at`), `total`, `offset`, `limit`, and `truncated`, ordered by id. Default and maximum page size is `GET_ALL_LIMIT` (default 1000). Negative limits and offsets clamp to 0. `limit=0` returns no records but the real total, useful as a cheap connectivity probe.
 4. `get_memory_by_id(id: int, workspace_id: str) -> dict`: Returns `{"record": {"id": ..., "memory": ..., "created_at": ...}}` or `{"record": null}` if the id is absent in that workspace. `created_at` is nullable; foreign-workspace ids are not found. The id must be positive.
 5. `delete_memories(ids: list[int], workspace_id: str) -> dict`: Delete by stable id. At most 100 positive ids; duplicates collapse in first-seen order and an empty list is a no-op. Returns `removed` (ids actually deleted) and `missing` (ids not found, including concurrent-deletion shortfalls).
-6. `get_all_workspaces(limit: int | None = None, offset: int = 0) -> dict`: List stored workspace ids in lexical order. Returns `workspaces` (`list[str]`), `total`, `offset`, `limit`, and `truncated` from the same observed directory scan. Default and maximum page size is `GET_ALL_LIMIT` (default 1000); negative limits and offsets clamp to 0. `limit=0` returns an empty page with the real total. This server-wide tool takes no `workspace_id`.
+6. `get_all_workspaces(admin_password: str, limit: int | None = None, offset: int = 0) -> dict`: List stored workspace ids in lexical order. Returns `workspaces` (`list[str]`), `total`, `offset`, `limit`, and `truncated` from the same observed directory scan. Default and maximum page size is `GET_ALL_LIMIT` (default 1000); negative limits and offsets clamp to 0. `limit=0` returns an empty page with the real total. This server-wide tool takes no `workspace_id`.
 
 The five memory tools require an explicit `workspace_id: str` on every call.
 `WORKSPACE_ID` in the environment or `.env` is not used as a default. Active
@@ -161,7 +162,11 @@ a close succeeds; shutdown retries them without a timeout. This applies to all
 five memory tools without changing their schemas.
 
 `get_all_workspaces` discovers durable storage rather than the evictable manager
-cache. A stored workspace is a valid, canonical lowercase direct-child directory
+cache. Its required `admin_password` argument must exactly match the server's
+`ADMIN_PASSWORD`, including any surrounding whitespace. Incorrect passwords fail
+with a content-free error before any storage discovery. This is separate from
+HTTP bearer authentication and does not change the five memory tools.
+A stored workspace is a valid, canonical lowercase direct-child directory
 under `indexes/` (relative to the server's working directory), with a regular
 `usearch/memories.db` file. Empty initialized databases count; empty directories,
 lock-only directories, unrelated folders, noncanonical names, and symlinked
@@ -202,7 +207,7 @@ page = await get_all_memories(workspace_id="my-project")
 # Returns {"records": [...], "total": N, "offset": 0, "limit": 1000, "truncated": bool}
 
 # Discover stored workspaces without loading them
-workspaces = await get_all_workspaces(limit=100, offset=0)
+workspaces = await get_all_workspaces(admin_password=admin_password, limit=100, offset=0)
 
 # Look up and delete a returned id in the same workspace
 if page["records"]:
@@ -221,6 +226,12 @@ probe = await get_all_memories(workspace_id="my-project", limit=0)
 | Variable | Description |
 |----------|-------------|
 | `OPENROUTER_API_KEY` | OpenRouter API key for LLM/embeddings and optional remote reranking |
+| `ADMIN_PASSWORD` | Private password required at server startup and as the `get_all_workspaces` argument; missing, empty, or whitespace-only values are rejected, even when that tool is filtered out |
+
+Set `ADMIN_PASSWORD` in the server environment or `.env` before starting the
+server. Choose a private value, not the example placeholder, and share it only
+with clients allowed to discover workspaces. Offline `salvage` and
+`salvage-verify` remain credentials-free.
 
 ### Optional Configuration
 
