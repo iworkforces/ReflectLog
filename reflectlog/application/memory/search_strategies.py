@@ -33,6 +33,13 @@ from reflectlog.core.enums import RerankerEngine, SearchComponent, SearchScoreKi
 from reflectlog.core.exceptions import InitializationError, SearchError
 
 from ..utils.logging import format_fusion_score_status
+from .search_evidence import (
+    BackendContribution,
+    RankingExplanation,
+    SearchEvidence,
+    SearchStageOutcomes,
+    StageOutcome,
+)
 
 # Constants for magic numbers (documented for maintainability)
 MIN_OVERFETCH_LIMIT = 8  # Floor so tiny limits still have fusion diversity
@@ -78,6 +85,8 @@ class SearchResult:
     tantivy_results: list[tuple[str, float]]
     scores: list[float] = field(default_factory=list[float])
     score_kind: SearchScoreKind = SearchScoreKind.NONE
+    explanations: dict[str, RankingExplanation] | None = None
+    stage_outcomes: SearchStageOutcomes | None = None
 
 
 def _reranking_output(
@@ -148,13 +157,18 @@ class SearchPipeline:
             self._failure_recorder.record(component, error)
 
     async def execute(
-        self, context: SearchContext, *, include_timestamp_map: bool = True
+        self,
+        context: SearchContext,
+        *,
+        include_timestamp_map: bool = True,
+        explain: bool = False,
     ) -> SearchResult:
         """Execute the full search pipeline.
 
         Args:
             context: Search context with query, limit, and configuration.
             include_timestamp_map: Complete timestamps for all candidates even without reranking.
+            explain: Capture request-local ranking evidence for returned contents.
 
         Returns:
             SearchResult with memories and metadata.
@@ -170,7 +184,9 @@ class SearchPipeline:
             work already running in a worker thread.
         """
         try:
-            return await self._execute_hybrid_search(context, include_timestamp_map)
+            return await self._execute_hybrid_search(
+                context, include_timestamp_map, SearchEvidence() if explain else None
+            )
 
         except SearchError, InitializationError:
             raise
@@ -186,7 +202,10 @@ class SearchPipeline:
             raise SearchError(f"Failed to execute search: {e}") from e
 
     async def _execute_hybrid_search(
-        self, context: SearchContext, include_timestamp_map: bool
+        self,
+        context: SearchContext,
+        include_timestamp_map: bool,
+        evidence: SearchEvidence | None = None,
     ) -> SearchResult:
         """Execute 4-step hybrid search pipeline."""
         # Step 1: Parallel Search
@@ -213,6 +232,32 @@ class SearchPipeline:
             raise SearchError(
                 f"Failed to execute search: {tantivy_error}"
             ) from tantivy_error
+
+        if evidence is not None:
+            evidence.semantic = {
+                content: BackendContribution(rank, score)
+                for rank, (content, score, _) in enumerate(semantic_results, 1)
+            }
+            evidence.fulltext = {
+                content: BackendContribution(rank, score)
+                for rank, (content, score) in enumerate(tantivy_results, 1)
+            }
+            evidence.semantic_outcome = (
+                StageOutcome.FAILED
+                if semantic_error is not None
+                else StageOutcome.APPLIED
+                if semantic_results
+                else StageOutcome.EMPTY
+            )
+            evidence.fulltext_outcome = (
+                StageOutcome.FAILED
+                if tantivy_error is not None
+                else StageOutcome.UNAVAILABLE
+                if self._tantivy_engine is None
+                else StageOutcome.APPLIED
+                if tantivy_results
+                else StageOutcome.EMPTY
+            )
 
         timestamp_map: dict[str, str] = {
             msg: created_at for msg, _, created_at in semantic_results
@@ -256,9 +301,21 @@ class SearchPipeline:
                     timestamp_map={},
                     semantic_results=semantic_results,
                     tantivy_results=tantivy_results,
+                    explanations={} if evidence is not None else None,
+                    stage_outcomes=evidence.outcomes()
+                    if evidence is not None
+                    else None,
                 )
 
         # Step 4: Reranking (or skip if 0-1 results)
+        if evidence is not None:
+            evidence.candidates = dict(hybrid_results)
+            evidence.pre_rerank_score_kind = score_kind
+            evidence.reranker_outcome = (
+                StageOutcome.SKIPPED_SINGLE_HIT
+                if len(hybrid_results) == 1
+                else StageOutcome.EMPTY
+            )
         rerank_step_num = 4 if context.enable_rrf_fusion else 3
         if len(hybrid_results) <= 1:
             self._log_skip_reranking(len(hybrid_results), rerank_step_num)
@@ -272,9 +329,18 @@ class SearchPipeline:
                     [msg for msg, _ in hybrid_results],
                     context.workspace_id,
                 )
-            hybrid_results, reranked = await self._step4_reranking(
-                context, hybrid_results, timestamp_map, rerank_step_num
-            )
+            if evidence is None:
+                hybrid_results, reranked = await self._step4_reranking(
+                    context, hybrid_results, timestamp_map, rerank_step_num
+                )
+            else:
+                hybrid_results, reranked = await self._step4_reranking(
+                    context,
+                    hybrid_results,
+                    timestamp_map,
+                    rerank_step_num,
+                    evidence=evidence,
+                )
             if reranked:
                 score_kind = SearchScoreKind.RERANKER
 
@@ -299,6 +365,12 @@ class SearchPipeline:
             tantivy_results=tantivy_results,
             scores=[score for _, score in hybrid_results[: context.limit]],
             score_kind=score_kind if memories else SearchScoreKind.NONE,
+            explanations=(
+                evidence.explanations(memories, score_kind)
+                if evidence is not None
+                else None
+            ),
+            stage_outcomes=evidence.outcomes() if evidence is not None else None,
         )
 
     async def _step1_parallel_search(
@@ -652,9 +724,25 @@ class SearchPipeline:
         results: list[tuple[str, float]],
         timestamp_map: dict[str, str],
         step_num: int,
+        *,
+        evidence: SearchEvidence | None = None,
     ) -> tuple[list[tuple[str, float]], bool]:
         """Step 4: Rerank results using the cross-encoder when enabled."""
+        if evidence is not None:
+            evidence.reranker_outcome = (
+                StageOutcome.DISABLED
+                if self.config.reranker_engine == RerankerEngine.NONE
+                else StageOutcome.UNAVAILABLE
+            )
         if self.config.reranker_engine == RerankerEngine.CROSS_ENCODER:
+            if evidence is not None:
+                return await self._rerank_cross_encoder(
+                    context,
+                    results,
+                    step_num,
+                    timestamp_map=timestamp_map,
+                    evidence=evidence,
+                )
             return await self._rerank_cross_encoder(
                 context, results, step_num, timestamp_map=timestamp_map
             )
@@ -672,8 +760,15 @@ class SearchPipeline:
                     timestamp_map,
                     top_k=context.limit,
                 )
-                return _reranking_output(results, reranked)
+                output, produced = _reranking_output(results, reranked)
+                if evidence is not None:
+                    evidence.reranker_outcome = (
+                        StageOutcome.APPLIED if produced else StageOutcome.DEGRADED
+                    )
+                return output, produced
             except Exception as exc:
+                if evidence is not None:
+                    evidence.reranker_outcome = StageOutcome.FAILED
                 self._record_failure(SearchComponent.OPENROUTER_RERANKER, exc)
                 self.logger.warning(
                     "OpenRouter reranking failed; returning fused results",
@@ -691,12 +786,16 @@ class SearchPipeline:
         step_num: int,
         cross_encoder_reranker: CrossEncoderReranker | None = None,
         timestamp_map: dict[str, str] | None = None,
+        *,
+        evidence: SearchEvidence | None = None,
     ) -> tuple[list[tuple[str, float]], bool]:
         """Rerank using CrossEncoder."""
         # Use provided reranker or fetch via _get_reranker
         if cross_encoder_reranker is None:
             cross_encoder_reranker = self._get_cross_encoder_reranker()
             if cross_encoder_reranker is None:
+                if evidence is not None:
+                    evidence.reranker_outcome = StageOutcome.UNAVAILABLE
                 return results, False
 
         self.logger.info(
@@ -725,6 +824,8 @@ class SearchPipeline:
                     top_k=self._cross_encoder_top_k(context),
                 )
         except Exception as exc:
+            if evidence is not None:
+                evidence.reranker_outcome = StageOutcome.FAILED
             self._record_failure(SearchComponent.CROSS_ENCODER, exc)
             self.logger.warning(
                 "CrossEncoder failed; returning fused results",
@@ -732,6 +833,10 @@ class SearchPipeline:
             )
             return results, False
         reranked_results, produced = _reranking_output(results, reranked_results)
+        if evidence is not None:
+            evidence.reranker_outcome = (
+                StageOutcome.APPLIED if produced else StageOutcome.DEGRADED
+            )
         if not produced:
             return results, False
         results = reranked_results

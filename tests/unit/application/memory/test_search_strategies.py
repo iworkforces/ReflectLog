@@ -7,6 +7,7 @@ Covers uncovered lines: 128-137, 295, 365, 374-378, 451, 457, 475,
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import anyio
 import pytest
 
 from reflectlog.application.config.settings import Config
@@ -23,6 +24,312 @@ from reflectlog.core.exceptions import SearchError
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestSearchExplanations:
+    @pytest.mark.parametrize("fusion", [True, False])
+    async def test_filtered_source_ranks_and_candidate_scores(
+        self,
+        pipeline: SearchPipeline,
+        mock_semantic_engine: MagicMock,
+        mock_tantivy_engine: MagicMock,
+        mock_fusion_engine: MagicMock,
+        mock_config: Mock,
+        fusion: bool,
+    ) -> None:
+        mock_config.search_score_threshold = 0.5
+        mock_config.fusion_ranking_threshold = 0.0
+        mock_semantic_engine.search.return_value = [
+            ("shared", 0.9, "ts"),
+            ("weak", 0.2, "ts"),
+            ("semantic", 0.7, "ts"),
+        ]
+        mock_tantivy_engine.search.return_value = [
+            ("stale", 12.0),
+            ("weak", 9.0),
+            ("shared", 7.0),
+        ]
+        mock_semantic_engine.memory_store.exists_many.side_effect = (
+            lambda _workspace, contents: set(contents) - {"stale"}
+        )
+        mock_fusion_engine.fuse.return_value = [
+            ("shared", 0.03),
+            ("weak", 0.02),
+            ("semantic", 0.01),
+        ]
+
+        result = await pipeline.execute(
+            _make_context(enable_rrf_fusion=fusion), explain=True
+        )
+
+        assert result.explanations is not None
+        shared = result.explanations["shared"]
+        assert shared.semantic is not None and shared.fulltext is not None
+        assert (shared.semantic.rank, shared.semantic.score) == (1, 0.9)
+        assert (shared.fulltext.rank, shared.fulltext.score) == (2, 7.0)
+        assert result.explanations["weak"].semantic is None
+        assert result.explanations["semantic"].fulltext is None
+        assert result.explanations["semantic"].semantic is not None
+        assert result.explanations["semantic"].semantic.rank == 2
+        assert shared.pre_rerank_score == (0.03 if fusion else 0.9)
+        assert shared.pre_rerank_score_kind == ("rrf" if fusion else "concatenated")
+        assert shared.final_score_kind == shared.pre_rerank_score_kind
+        assert result.stage_outcomes is not None
+        assert result.stage_outcomes.semantic == "applied"
+        assert result.stage_outcomes.fulltext == "applied"
+        assert result.stage_outcomes.reranker == "disabled"
+
+    @pytest.mark.parametrize("engine", ["cross_encoder", "openrouter"])
+    @pytest.mark.parametrize(
+        "outcome", ["failed", "degraded", "applied", "unavailable", "filtered"]
+    )
+    async def test_reranker_outcomes_and_pre_rerank_snapshot(
+        self,
+        pipeline: SearchPipeline,
+        mock_semantic_engine: MagicMock,
+        mock_config: Mock,
+        mock_memory_manager: MagicMock,
+        engine: str,
+        outcome: str,
+    ) -> None:
+        mock_config.reranker_engine = engine
+        mock_semantic_engine.search.return_value = [("a", 0.9, "ts"), ("b", 0.8, "ts")]
+        reranker = MagicMock()
+        reranker.rerank_async = AsyncMock(return_value=None)
+        if outcome == "failed":
+            reranker.rerank_async.side_effect = RuntimeError("private failure")
+        elif outcome == "applied":
+            reranker.rerank_async.return_value = [("b", 0.95)]
+        elif outcome == "filtered":
+            reranker.rerank_async.return_value = []
+        if engine == "cross_encoder":
+            mock_memory_manager.cross_encoder_reranker = (
+                None if outcome == "unavailable" else reranker
+            )
+        else:
+            mock_memory_manager.openrouter_reranker = (
+                None if outcome == "unavailable" else reranker
+            )
+
+        result = await pipeline.execute(
+            _make_context(enable_rrf_fusion=False), explain=True
+        )
+
+        assert result.stage_outcomes is not None
+        assert result.stage_outcomes.reranker == (
+            "applied" if outcome == "filtered" else outcome
+        )
+        assert result.explanations is not None
+        if outcome == "filtered":
+            assert result.memories == [] and result.scores == []
+            assert result.explanations == {}
+            assert result.score_kind == "none"
+            reranker.rerank_async.assert_awaited_once()
+            return
+        assert result.explanations["b"].pre_rerank_score == 0.8
+        assert result.explanations["b"].pre_rerank_score_kind == "semantic"
+        assert result.explanations["b"].final_score_kind == (
+            "reranker" if outcome == "applied" else "semantic"
+        )
+        assert reranker.rerank_async.await_count == (
+            0 if outcome == "unavailable" else 1
+        )
+
+    @pytest.mark.parametrize(
+        "count,expected", [(0, "empty"), (1, "skipped_single_hit")]
+    )
+    async def test_small_candidate_sets(
+        self,
+        pipeline: SearchPipeline,
+        mock_semantic_engine: MagicMock,
+        count: int,
+        expected: str,
+    ) -> None:
+        mock_semantic_engine.search.return_value = [("a", 0.9, "ts")][:count]
+
+        result = await pipeline.execute(
+            _make_context(enable_rrf_fusion=False), explain=True
+        )
+
+        assert result.stage_outcomes is not None
+        assert result.stage_outcomes.reranker == expected
+
+    @pytest.mark.parametrize("failed_backend", ["semantic", "fulltext"])
+    async def test_backend_fallback_uses_original_errors(
+        self,
+        pipeline: SearchPipeline,
+        mock_semantic_engine: MagicMock,
+        mock_tantivy_engine: MagicMock,
+        failed_backend: str,
+    ) -> None:
+        mock_semantic_engine.search.return_value = [("a", 0.9, "ts")]
+        mock_tantivy_engine.search.return_value = [("a", 7.0)]
+        failed = (
+            mock_semantic_engine
+            if failed_backend == "semantic"
+            else mock_tantivy_engine
+        )
+        failed.search.side_effect = RuntimeError("private failure")
+
+        result = await pipeline.execute(
+            _make_context(enable_rrf_fusion=False), explain=True
+        )
+
+        assert result.stage_outcomes is not None
+        assert (result.stage_outcomes.semantic, result.stage_outcomes.fulltext) == (
+            ("failed", "applied")
+            if failed_backend == "semantic"
+            else ("applied", "failed")
+        )
+        mock_semantic_engine.search.assert_called_once()
+        mock_tantivy_engine.search.assert_called_once()
+        assert result.memories == ["a"]
+
+    async def test_missing_fulltext_backend_is_unavailable(
+        self,
+        pipeline: SearchPipeline,
+        mock_semantic_engine: MagicMock,
+    ) -> None:
+        pipeline._tantivy_engine = None
+        mock_semantic_engine.search.return_value = [("a", 0.9, "ts")]
+
+        result = await pipeline.execute(
+            _make_context(enable_rrf_fusion=False), explain=True
+        )
+
+        assert result.stage_outcomes is not None
+        assert result.stage_outcomes.fulltext == "unavailable"
+        assert result.explanations is not None
+        assert result.explanations["a"].fulltext is None
+
+    async def test_threshold_and_live_filter_leave_empty_backends(
+        self,
+        pipeline: SearchPipeline,
+        mock_semantic_engine: MagicMock,
+        mock_tantivy_engine: MagicMock,
+        mock_config: Mock,
+    ) -> None:
+        mock_config.search_score_threshold = 0.8
+        mock_semantic_engine.search.return_value = [("weak", 0.2, "ts")]
+        mock_tantivy_engine.search.return_value = [("stale", 7.0)]
+        mock_semantic_engine.memory_store.exists_many.side_effect = (
+            lambda _workspace, _contents: set[str]()
+        )
+
+        result = await pipeline.execute(
+            _make_context(enable_rrf_fusion=False), explain=True
+        )
+
+        assert result.stage_outcomes is not None
+        assert (
+            result.stage_outcomes.semantic,
+            result.stage_outcomes.fulltext,
+            result.stage_outcomes.reranker,
+        ) == ("empty", "empty", "empty")
+        assert result.explanations == {}
+
+    async def test_empty_fusion_threshold_result_has_stage_outcomes(
+        self,
+        pipeline: SearchPipeline,
+        mock_semantic_engine: MagicMock,
+        mock_tantivy_engine: MagicMock,
+        mock_fusion_engine: MagicMock,
+    ) -> None:
+        mock_semantic_engine.search.return_value = [("a", 0.9, "ts")]
+        mock_tantivy_engine.search.return_value = [("b", 7.0)]
+        mock_fusion_engine.fuse.return_value = []
+
+        result = await pipeline.execute(_make_context(), explain=True)
+
+        assert result.stage_outcomes is not None
+        assert (
+            result.stage_outcomes.semantic,
+            result.stage_outcomes.fulltext,
+            result.stage_outcomes.reranker,
+        ) == ("applied", "applied", "empty")
+        assert result.explanations == {}
+
+    @pytest.mark.parametrize("fallback_outcome", ["failed", "degraded"])
+    async def test_concurrent_explanations_are_request_local(
+        self,
+        pipeline: SearchPipeline,
+        mock_semantic_engine: MagicMock,
+        mock_config: Mock,
+        mock_memory_manager: MagicMock,
+        fallback_outcome: str,
+    ) -> None:
+        mock_config.reranker_engine = "openrouter"
+        mock_semantic_engine.search.return_value = [("a", 0.9, "ts"), ("b", 0.8, "ts")]
+        entered = anyio.Event()
+        release = anyio.Event()
+        results: dict[str, SearchResult] = {}
+
+        async def rerank(
+            query: str,
+            _results: list[tuple[str, float]],
+            _timestamps: dict[str, str],
+            *,
+            top_k: int,
+        ) -> list[tuple[str, float]] | None:
+            if query == "degraded":
+                entered.set()
+                await release.wait()
+                if fallback_outcome == "failed":
+                    raise RuntimeError("private failure")
+                return None
+            await entered.wait()
+            release.set()
+            return [("b", 0.99)]
+
+        mock_memory_manager.openrouter_reranker = MagicMock(
+            rerank_async=AsyncMock(side_effect=rerank)
+        )
+
+        async def search(query: str) -> None:
+            results[query] = await pipeline.execute(
+                _make_context(query=query, enable_rrf_fusion=False), explain=True
+            )
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(search, "degraded")
+            group.start_soon(search, "applied")
+
+        degraded = results["degraded"]
+        applied = results["applied"]
+        assert (
+            degraded.stage_outcomes is not None and applied.stage_outcomes is not None
+        )
+        assert degraded.stage_outcomes.reranker == fallback_outcome
+        assert applied.stage_outcomes.reranker == "applied"
+        assert degraded.explanations is not None and applied.explanations is not None
+        assert degraded.explanations["b"].final_score_kind == "semantic"
+        assert applied.explanations["b"].final_score_kind == "reranker"
+
+    async def test_opt_in_preserves_results_and_default_metadata(
+        self,
+        pipeline: SearchPipeline,
+        mock_semantic_engine: MagicMock,
+    ) -> None:
+        mock_semantic_engine.search.return_value = [("a", 0.9, "ts"), ("b", 0.8, "ts")]
+
+        plain = await pipeline.execute(_make_context(enable_rrf_fusion=False))
+        explained = await pipeline.execute(
+            _make_context(enable_rrf_fusion=False), explain=True
+        )
+
+        assert plain.explanations is None and plain.stage_outcomes is None
+        assert (
+            plain.memories,
+            plain.scores,
+            plain.score_kind,
+            plain.timestamp_map,
+        ) == (
+            explained.memories,
+            explained.scores,
+            explained.score_kind,
+            explained.timestamp_map,
+        )
 
 
 @pytest.fixture
