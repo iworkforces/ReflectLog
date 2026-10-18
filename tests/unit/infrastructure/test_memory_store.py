@@ -209,6 +209,85 @@ class TestMemoryStoreGetAll:
             store.close()
 
 
+@pytest.mark.parametrize("limit", [0, 1, 10])
+def test_cursor_page_scopes_and_retains_cursor(tmp_path: Path, limit: int) -> None:
+    store = MemoryStore(str(tmp_path / "cursor.db"), create_mock_logger())
+    try:
+        first = store.insert("workspace", "first")
+        _ = store.insert("foreign", "private")
+        last = store.insert("workspace", "last")
+        statements: list[str] = []
+        store.connection.set_trace_callback(statements.append)
+        page = store.get_cursor_page("workspace", limit, first)
+        assert [row.id for row in page.records] == ([last] if limit else [])
+        assert page.total == 2
+        assert page.next_after_id == (last if limit else first)
+        assert page.truncated is (limit == 0)
+        selects = [
+            sql.upper()
+            for sql in statements
+            if sql.lstrip().upper().startswith("SELECT")
+        ]
+        assert all("OFFSET" not in sql for sql in selects)
+        assert any(
+            "ORDER BY ID" in sql and "LIMIT" in sql and "ID >" in sql for sql in selects
+        )
+        empty = store.get_cursor_page("workspace", limit, last + 100)
+        assert empty.records == ()
+        assert empty.next_after_id == last + 100
+        assert empty.truncated is False
+    finally:
+        store.close()
+
+
+def test_cursor_page_metadata_uses_one_snapshot(tmp_path: Path) -> None:
+    path = str(tmp_path / "snapshot.db")
+    store = MemoryStore(path, create_mock_logger())
+    writer = MemoryStore(path, create_mock_logger())
+    try:
+        first = store.insert("workspace", "first")
+        _ = writer.connection
+        reads = 0
+
+        def insert_between_reads(sql: str) -> None:
+            nonlocal reads
+            if sql.lstrip().upper().startswith("SELECT"):
+                reads += 1
+                if reads == 2:
+                    _ = writer.insert("workspace", "concurrent")
+
+        store.connection.set_trace_callback(insert_between_reads)
+        page = store.get_cursor_page("workspace", 1, 0)
+        assert [row.id for row in page.records] == [first]
+        assert page.total == 1
+        assert page.truncated is False
+        assert not store.connection.in_transaction
+        store.connection.set_trace_callback(None)
+        assert store.get_cursor_page("workspace", 10, first).total == 2
+    finally:
+        writer.close()
+        store.close()
+
+
+def test_cursor_page_rolls_back_failed_read(tmp_path: Path) -> None:
+    store = MemoryStore(str(tmp_path / "failed.db"), create_mock_logger())
+    try:
+        _ = store.insert("workspace", "first")
+        store.connection.set_authorizer(
+            lambda action, _table, _column, _db, _source: (
+                sqlite3.SQLITE_DENY
+                if action == sqlite3.SQLITE_READ
+                else sqlite3.SQLITE_OK
+            )
+        )
+        with pytest.raises(StorageError):
+            store.get_cursor_page("workspace", 1, 0)
+        assert not store.connection.in_transaction
+    finally:
+        store.connection.set_authorizer(None)
+        store.close()
+
+
 class TestMemoryStoreDelete:
     """Tests for MemoryStore.delete method."""
 

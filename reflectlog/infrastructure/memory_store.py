@@ -21,6 +21,7 @@ from reflectlog.core.enums import TransitionKind, TransitionStatus
 from reflectlog.core.exceptions import StorageError
 from reflectlog.core.logging import IStructuredLogger
 from reflectlog.core.types import (
+    CursorPage,
     MemoryStoreSnapshot,
     RecordWithSuccessor,
     ReplacementTransition,
@@ -797,6 +798,43 @@ class MemoryStore(BaseModel):
                 return found
             except sqlite3.Error as e:
                 raise StorageError(f"Failed to check memory existence: {e}") from e
+            finally:
+                cursor.close()
+
+    def get_cursor_page(
+        self, workspace_id: str, limit: int, after_id: int
+    ) -> CursorPage:
+        with self._conn_lock:
+            connection = self.connection
+            cursor = connection.cursor()
+            try:
+                _ = cursor.execute("BEGIN")
+                try:
+                    rows = cursor.execute(
+                        "SELECT id, workspace_id, content, created_at FROM memories "
+                        "WHERE workspace_id = ? AND id > ? ORDER BY id LIMIT ?",
+                        (workspace_id, after_id, limit + 1),
+                    ).fetchall()
+                    total = cursor.execute(
+                        "SELECT COUNT(*) FROM memories WHERE workspace_id = ?",
+                        (workspace_id,),
+                    ).fetchone()[0]
+                    records = tuple(
+                        MemoryRecord(
+                            int(row[0]), str(row[1]), str(row[2]), row[3] or ""
+                        )
+                        for row in rows[:limit]
+                    )
+                    return CursorPage(
+                        records,
+                        int(total),
+                        len(rows) > limit,
+                        records[-1].id if records else after_id,
+                    )
+                finally:
+                    connection.rollback()
+            except sqlite3.Error as error:
+                raise StorageError("Failed to retrieve cursor page") from error
             finally:
                 cursor.close()
 
