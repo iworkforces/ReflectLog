@@ -105,6 +105,7 @@ if TYPE_CHECKING:
     from ...core.logging import IStructuredLogger
     from ...core.search_health import SearchFailureSnapshot
     from ...core.types import (
+        CursorPage,
         Embeddings,
         ISemanticSearchEngine,
         IStoredMemory,
@@ -1186,6 +1187,14 @@ class MemoryManager:
             return list(
                 store.get_page_records(self.workspace_id, limit, offset)
             ), store.count(self.workspace_id)
+
+    def get_cursor_page(self, limit: int, after_id: int) -> CursorPage:
+        with self._shared_workspace(), self._lock:
+            self._ensure_open()
+            self._refresh_engines()
+            return self._semantic_engine.memory_store.get_cursor_page(
+                self.workspace_id, limit, after_id
+            )
 
     def delete_records(self, ids: list[int]) -> tuple[list[int], list[int]]:
         records, _ = self.get_records(ids)

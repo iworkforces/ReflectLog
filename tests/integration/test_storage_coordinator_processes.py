@@ -2,17 +2,81 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import multiprocessing
 import multiprocessing.synchronize
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from reflectlog.core.exceptions import LeaseTimeoutError, StorageCoordinationError
+from reflectlog.core.logging import IStructuredLogger
 from reflectlog.core.storage_coordination import LeaseMode
+from reflectlog.infrastructure.memory_store import MemoryStore
 from reflectlog.infrastructure.storage_coordinator import (
     PortalockerStorageCoordinator,
 )
+
+
+def _mutate_cursor_workspace(root: str, workspace_id: str) -> None:
+    from reflectlog.application.memory.manager import MemoryManager
+    from tests.integration.test_memory_manager_usearch import (
+        MockEmbedder,
+        create_usearch_config,
+    )
+
+    config = replace(create_usearch_config(root), workspace_id=workspace_id)
+    with patch(
+        "reflectlog.application.memory.manager.LangchainQwenEmbeddings",
+        return_value=MockEmbedder(),
+    ):
+        manager = MemoryManager(config, MagicMock(spec=IStructuredLogger))
+        try:
+            _ = manager.delete_memories(["old"])
+            _ = manager.add_memories(["concurrent"])
+        finally:
+            manager.close()
+
+
+@pytest.mark.integration
+def test_cursor_refreshes_after_process_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from reflectlog.application.memory.manager import MemoryManager
+    from tests.integration.test_memory_manager_usearch import (
+        MockEmbedder,
+        create_usearch_config,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    config = create_usearch_config(str(tmp_path))
+    with patch(
+        "reflectlog.application.memory.manager.LangchainQwenEmbeddings",
+        return_value=MockEmbedder(),
+    ):
+        manager = MemoryManager(config, MagicMock(spec=IStructuredLogger))
+        child = multiprocessing.get_context("spawn").Process(
+            target=_mutate_cursor_workspace,
+            args=(str(tmp_path), config.workspace_id),
+        )
+        try:
+            _ = manager.add_memories(["old", "retained", "last"])
+            first = manager.get_cursor_page(2, 0)
+            child.start()
+            child.join(timeout=30.0)
+            assert child.exitcode == 0
+            tail = manager.get_cursor_page(10, first.next_after_id)
+            assert [row.content for row in tail.records] == ["last", "concurrent"]
+            assert tail.total == 3
+            assert tail.truncated is False
+            assert all(row.id > first.next_after_id for row in tail.records)
+        finally:
+            if child.pid is not None:
+                if child.is_alive():
+                    child.terminate()
+                child.join(timeout=10.0)
+            manager.close()
 
 
 def _hold_exclusive(
@@ -25,6 +89,66 @@ def _hold_exclusive(
     with coordinator.acquire(workspace_id):
         ready.set()
         _ = release.wait(timeout=30.0)
+
+
+def _insert_during_cursor_read(
+    path: str,
+    ready: multiprocessing.synchronize.Event,
+    write: multiprocessing.synchronize.Event,
+    committed: multiprocessing.synchronize.Event,
+) -> None:
+    store = MemoryStore(path, MagicMock(spec=IStructuredLogger))
+    try:
+        _ = store.connection
+        ready.set()
+        if not write.wait(timeout=20.0):
+            raise RuntimeError("Reader did not reach its second query")
+        _ = store.insert("alpha", "concurrent")
+        committed.set()
+    finally:
+        store.close()
+
+
+@pytest.mark.integration
+def test_cursor_snapshot_with_process_writer(tmp_path: Path) -> None:
+    path = str(tmp_path / "cursor.db")
+    store = MemoryStore(path, MagicMock(spec=IStructuredLogger))
+    first = store.insert("alpha", "first")
+    ctx = multiprocessing.get_context("spawn")
+    ready, write, committed = ctx.Event(), ctx.Event(), ctx.Event()
+    child = ctx.Process(
+        target=_insert_during_cursor_read, args=(path, ready, write, committed)
+    )
+    child.start()
+    try:
+        assert ready.wait(timeout=10.0)
+        reads = 0
+
+        def coordinate_writer(sql: str) -> None:
+            nonlocal reads
+            if sql.lstrip().upper().startswith("SELECT"):
+                reads += 1
+                if reads == 2:
+                    write.set()
+                    assert committed.wait(timeout=10.0)
+
+        store.connection.set_trace_callback(coordinate_writer)
+        page = store.get_cursor_page("alpha", 1, 0)
+        assert [row.id for row in page.records] == [first]
+        assert page.total == 1
+        assert page.truncated is False
+        store.connection.set_trace_callback(None)
+        tail = store.get_cursor_page("alpha", 1, first)
+        assert [row.content for row in tail.records] == ["concurrent"]
+        assert tail.total == 2
+        child.join(timeout=10.0)
+        assert child.exitcode == 0
+    finally:
+        write.set()
+        if child.is_alive():
+            child.terminate()
+        child.join(timeout=10.0)
+        store.close()
 
 
 def _acquire_after_kill(
