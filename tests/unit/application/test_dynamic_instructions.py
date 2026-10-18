@@ -11,13 +11,14 @@ from reflectlog.application.mcp_server import AVAILABLE_TOOL_CLASSES, FastMCPSer
 from reflectlog.application.memory.manager import MemoryManager
 from reflectlog.core.prompts import INSTRUCTIONS_HEADER, TOOL_ORDER, build_instructions
 
-NAMES = [
+MEMORY_NAMES = [
     "add_memories",
     "search_memories",
     "get_all_memories",
     "get_memory_by_id",
     "delete_memories",
 ]
+NAMES = [*MEMORY_NAMES, "get_all_workspaces"]
 
 
 @pytest.mark.parametrize("names", [NAMES, NAMES[:2], NAMES[2:3], []])
@@ -53,7 +54,7 @@ def test_unknown_tools_sort_alphabetically_after_known_tools() -> None:
     )
 
 
-@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("name", MEMORY_NAMES)
 def test_tool_snippet_documents_wire_signature(
     name: str, set_env_vars: dict[str, str]
 ) -> None:
@@ -75,6 +76,7 @@ def test_tool_snippet_documents_wire_signature(
         ("get_all_memories", NAMES[2:3]),
         ("none", []),
         ("Add-Memories-Tool", NAMES[:1]),
+        ("Get-All-Workspaces-Tool", ["get_all_workspaces"]),
     ],
 )
 async def test_dynamic_selection_and_required_workspace(
@@ -97,4 +99,7 @@ async def test_dynamic_selection_and_required_workspace(
     assert list(server.registered_tools) == expected
     assert {tool.name for tool in tools} == set(expected)
     for tool in tools:
-        assert "workspace_id" in tool.input_schema["required"]
+        if tool.name in MEMORY_NAMES:
+            assert "workspace_id" in tool.input_schema["required"]
+        else:
+            assert "workspace_id" not in tool.input_schema["properties"]

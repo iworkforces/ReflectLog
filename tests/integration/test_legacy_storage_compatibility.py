@@ -298,6 +298,7 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
         "get_all_memories",
         "get_memory_by_id",
         "delete_memories",
+        "get_all_workspaces",
     ]
 
     add_params = list(signature(add.get_handler()).parameters)

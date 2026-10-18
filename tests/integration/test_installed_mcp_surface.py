@@ -42,11 +42,17 @@ async def test_installed_surface_discovery_constraints_and_missing_record(
                 "get_all_memories",
                 "get_memory_by_id",
                 "delete_memories",
+                "get_all_workspaces",
             ]
             assert [tool.name for tool in tools] == expected
             schemas = {tool.name: cast(MCPTool, tool).input_schema for tool in tools}
-            for schema in schemas.values():
-                assert "workspace_id" in schema["required"]
+            for name, schema in schemas.items():
+                if name != "get_all_workspaces":
+                    assert "workspace_id" in schema["required"]
+            assert set(schemas["get_all_workspaces"]["properties"]) == {
+                "limit",
+                "offset",
+            }
             search = schemas["search_memories"]["properties"]
             assert search["query"]["minLength"] == 1
             assert search["query"]["maxLength"] == 1000
@@ -77,6 +83,14 @@ async def test_installed_surface_discovery_constraints_and_missing_record(
                 {"id": 999, "workspace_id": "surface", "include_successor": True},
             )
             assert opted_in.structured_content == {"record": None, "successor": None}
+            workspaces = await client.call_tool("get_all_workspaces", {})
+            assert workspaces.structured_content == {
+                "workspaces": ["surface"],
+                "total": 1,
+                "offset": 0,
+                "limit": config.get_all_limit,
+                "truncated": False,
+            }
     finally:
         await server.aclose()
 

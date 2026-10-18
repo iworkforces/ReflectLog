@@ -25,9 +25,11 @@ from reflectlog.application.tools.delete_memories import DeleteMemoriesTool
 from reflectlog.application.tools.get_all_memories import GetAllMemoriesTool
 from reflectlog.application.tools.get_memory_by_id import GetMemoryByIdTool
 from reflectlog.application.tools.search_memories import SearchMemoriesTool
+from reflectlog.core.config_adapters import ConfigAdapter
 from reflectlog.core.enums import EmbedderProvider
 from reflectlog.core.exceptions import ConfigurationError
 from reflectlog.core.prompts import build_instructions
+from reflectlog.infrastructure.workspace_discovery import list_stored_workspaces
 
 from .utils.logging import create_logger
 
@@ -63,7 +65,7 @@ class _BearerTokenMiddleware(Middleware):
         return result
 
 
-# Canonical registry of available MCP tool implementations.
+# Workspace-scoped memory tool implementations.
 AVAILABLE_TOOL_CLASSES: dict[str, type[BaseTool]] = {
     "add_memories": AddMemoriesTool,
     "search_memories": SearchMemoriesTool,
@@ -96,6 +98,13 @@ TOOL_INSTRUCTIONS = {
     "successor: {id: int} or null for currently active replacement content in this workspace. "
     "Single hop only; a re-added matching string has its current id, not historical identity.",
     "delete_memories": "    • delete_memories(ids: list[int], workspace_id: str) -> dict\n      Report actually removed and missing ids.",
+    "get_all_workspaces": "    • get_all_workspaces(limit: int | None = None, offset: int = 0) -> dict\n"
+    "      List stored workspace ids in lexical order, without loading managers or models. "
+    "Returns workspaces, total, offset, limit, truncated. Default and maximum page size "
+    "is GET_ALL_LIMIT (default 1000); negative limits and offsets clamp to zero. "
+    "limit=0 returns only the total. Stored workspaces are canonical direct-child "
+    "directories under indexes with a regular usearch/memories.db marker; symlinks "
+    "are excluded. Missing storage returns an empty page; I/O failures are errors.",
 }
 
 
@@ -185,7 +194,8 @@ class FastMCPServer:
 
     def _initialize_tools(self) -> None:
         """Initialize all MCP tool instances."""
-        available_names = list(AVAILABLE_TOOL_CLASSES.keys())
+        handlers = self._handlers()
+        available_names = list(handlers)
 
         selected_names, invalid_names = self._determine_tool_selection(available_names)
 
@@ -201,7 +211,6 @@ class FastMCPServer:
                 extra={"available_tools": available_names},
             )
 
-        handlers = self._handlers()
         self.tools: list[_RegisteredTool] = []
         for tool_name in selected_names:
             self.tools.append(_RegisteredTool(tool_name, handlers[tool_name]))
@@ -239,6 +248,7 @@ class FastMCPServer:
             "get_all_memories": self._get_all_memories,
             "get_memory_by_id": self._get_memory_by_id,
             "delete_memories": self._delete_memories,
+            "get_all_workspaces": self._get_all_workspaces,
         }
 
     def tool_fn(self, name: str) -> Callable[..., object]:
@@ -335,6 +345,27 @@ class FastMCPServer:
                 self._handler("get_memory_by_id", manager)(id, include_successor)
             )
 
+    async def _get_all_workspaces(
+        self, limit: int | None = None, offset: int = 0
+    ) -> dict[str, object]:
+        workspaces = await anyio.to_thread.run_sync(
+            list_stored_workspaces, ConfigAdapter(self.config).storage_path
+        )
+        page_size = min(
+            self.config.get_all_limit,
+            self.config.get_all_limit if limit is None else max(0, limit),
+        )
+        start = max(0, offset)
+        page = workspaces[start : start + page_size]
+        total = len(workspaces)
+        return {
+            "workspaces": page,
+            "total": total,
+            "offset": start,
+            "limit": page_size,
+            "truncated": start + len(page) < total,
+        }
+
     async def _delete_memories(
         self,
         ids: Annotated[
@@ -386,7 +417,8 @@ class FastMCPServer:
 
         instructions = (
             f"{build_instructions(tool_snippets)}\n\n"
-            "Every tool requires workspace_id: str as an argument."
+            "Workspace-scoped memory tools require workspace_id: str as an argument. "
+            "Server-wide tools take no workspace_id."
         )
 
         self.logger.info(

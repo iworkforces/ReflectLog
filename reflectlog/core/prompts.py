@@ -90,6 +90,7 @@ TOOL_ORDER: list[str] = [
     "get_all_memories",
     "get_memory_by_id",
     "delete_memories",
+    "get_all_workspaces",
 ]
 
 

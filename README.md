@@ -134,15 +134,16 @@ Pick the configuration for your client:
 
 ### MCP Tools
 
-ReflectLog provides exactly five MCP tools:
+ReflectLog provides six MCP tools:
 
 1. `add_memories(memories: list[str], workspace_id: str, dry_run: bool = False, allow_replace: bool = True) -> dict`: Store memories; returns `stored_count`, `skipped_count`, `replaced_count`, `replacements` (`old_memory`, `new_memory`, `confidence`, `reason`), and `dry_run`. With `allow_replace=True` (default) and `ENABLE_SMART_REPLACE` enabled, LLM smart replacement may replace an existing contradicting memory. Set `allow_replace=False` to skip smart replacement; exact deduplication still applies. `dry_run=True` previews without storing.
 2. `search_memories(query: str, workspace_id: str, limit: int | None = None) -> dict`: Hybrid semantic + full-text search. Returns `results` (`id`, `memory`, final `score`, nullable `created_at`), `score_kind`, and effective `limit`. Queries must contain non-whitespace content and be 1..1000 characters; explicit limits are 1..50 and omitted limits use `SEARCH_LIMIT`. Score kinds are `reranker`, `rrf`, `semantic`, `fulltext`, `concatenated`, and `none`; scores are not comparable across kinds.
 3. `get_all_memories(workspace_id: str, limit: int | None = None, offset: int = 0) -> dict`: Returns `records` (`id`, `memory`, nullable `created_at`), `total`, `offset`, `limit`, and `truncated`, ordered by id. Default and maximum page size is `GET_ALL_LIMIT` (default 1000). Negative limits and offsets clamp to 0. `limit=0` returns no records but the real total, useful as a cheap connectivity probe.
 4. `get_memory_by_id(id: int, workspace_id: str) -> dict`: Returns `{"record": {"id": ..., "memory": ..., "created_at": ...}}` or `{"record": null}` if the id is absent in that workspace. `created_at` is nullable; foreign-workspace ids are not found. The id must be positive.
 5. `delete_memories(ids: list[int], workspace_id: str) -> dict`: Delete by stable id. At most 100 positive ids; duplicates collapse in first-seen order and an empty list is a no-op. Returns `removed` (ids actually deleted) and `missing` (ids not found, including concurrent-deletion shortfalls).
+6. `get_all_workspaces(limit: int | None = None, offset: int = 0) -> dict`: List stored workspace ids in lexical order. Returns `workspaces` (`list[str]`), `total`, `offset`, `limit`, and `truncated` from the same observed directory scan. Default and maximum page size is `GET_ALL_LIMIT` (default 1000); negative limits and offsets clamp to 0. `limit=0` returns an empty page with the real total. This server-wide tool takes no `workspace_id`.
 
-Every tool call requires an explicit `workspace_id: str`.
+The five memory tools require an explicit `workspace_id: str` on every call.
 `WORKSPACE_ID` in the environment or `.env` is not used as a default. Active
 workspace managers are cached per workspace. Idle managers expire after 15
 minutes without a call; a sweep runs every 60 seconds, with at most 8 idle
@@ -157,12 +158,25 @@ in-progress close is awaited. If none is idle or closing, the call fails before
 loading with `Resident workspace limit reached; no idle workspace could be released`;
 retry later. Existing sessions keep working. Failed closes remain counted until
 a close succeeds; shutdown retries them without a timeout. This applies to all
-five tools without changing their schemas.
+five memory tools without changing their schemas.
+
+`get_all_workspaces` discovers durable storage rather than the evictable manager
+cache. A stored workspace is a valid, canonical lowercase direct-child directory
+under `indexes/` (relative to the server's working directory), with a regular
+`usearch/memories.db` file. Empty initialized databases count; empty directories,
+lock-only directories, unrelated folders, noncanonical names, and symlinked
+workspace directories, `usearch` directories, or database markers do not.
+Discovery only reads filesystem metadata: it opens no SQLite database, vector
+index, or model, constructs no managers, acquires no resident-capacity slot, and
+writes no files. A missing `indexes/` returns an empty page; other I/O failures
+are tool errors. A symlinked or non-directory storage root is an error.
+Pagination is not a frozen snapshot across calls; concurrent storage changes
+may affect later pages. Presence of the marker does not certify database health.
 
 There is no MCP health-check tool. Search-failure counters
 remain internal to each workspace manager and are not exposed over MCP.
 
-`ALLOWED_TOOLS` optionally filters the five names with a comma-separated list.
+`ALLOWED_TOOLS` optionally filters the six names with a comma-separated list.
 Kebab-case, CamelCase, and an `_tool` suffix are normalized; `all` or `*`
 enables all tools. Unknown names, including old tool names, are ignored with a warning.
 
@@ -186,6 +200,9 @@ results = await search_memories("web frameworks", workspace_id="my-project", lim
 # Get all memories
 page = await get_all_memories(workspace_id="my-project")
 # Returns {"records": [...], "total": N, "offset": 0, "limit": 1000, "truncated": bool}
+
+# Discover stored workspaces without loading them
+workspaces = await get_all_workspaces(limit=100, offset=0)
 
 # Look up and delete a returned id in the same workspace
 if page["records"]:
@@ -374,7 +391,7 @@ Content salvage doesn't preserve original memory ids or `created_at` timestamps
 in the rebuilt workspace. Re-added memories receive new ids and timestamps at
 re-add time. Vectors and the full-text index are rebuilt from content;
 replacement/archive history and completed journal rows aren't restored. The
-new workspace records its own embedding identity. The five MCP tools are
+new workspace records its own embedding identity. The five memory tools are
 unchanged; there is no import tool. See
 [offline content salvage](docs/storage-coordination.md#offline-content-salvage)
 for the manifest, publication, and failure contract.
@@ -446,7 +463,7 @@ ReflectLog/
 ./start-unittest.sh
 ./start-unittest.sh --coverage
 
-# Run server (workspace_id required on every tool call)
+# Run server (workspace_id required on memory tool calls)
 ./start-reflectlog-mcp-server.sh
 
 # Export content from an archived, stopped workspace

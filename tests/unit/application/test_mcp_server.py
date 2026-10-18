@@ -26,13 +26,14 @@ from reflectlog.core.enums import SearchScoreKind
 from reflectlog.core.exceptions import InconsistentStateError, SearchError, StorageError
 from reflectlog.infrastructure.memory_store import MemoryRecord
 
-NAMES = [
+MEMORY_NAMES = [
     "add_memories",
     "search_memories",
     "get_all_memories",
     "get_memory_by_id",
     "delete_memories",
 ]
+NAMES = [*MEMORY_NAMES, "get_all_workspaces"]
 OLD_NAMES = {
     "add",
     "get_all",
@@ -68,7 +69,7 @@ def capacity_manager(config: Config, _logger: object) -> MagicMock:
     return manager
 
 
-@pytest.mark.parametrize("tool_name", NAMES)
+@pytest.mark.parametrize("tool_name", MEMORY_NAMES)
 async def test_default_resident_capacity_is_unlimited(
     set_env_vars, tool_name: str
 ) -> None:
@@ -125,7 +126,7 @@ async def test_default_resident_capacity_is_unlimited(
                     await asyncio.gather(*invocations)
 
 
-@pytest.mark.parametrize("tool_name", NAMES)
+@pytest.mark.parametrize("tool_name", MEMORY_NAMES)
 async def test_resident_capacity_rejects_active_then_evicts_idle(
     set_env_vars, tool_name: str
 ) -> None:
@@ -208,7 +209,7 @@ async def test_resident_capacity_reuses_canonical_workspace(set_env_vars) -> Non
         client_factory = cast("Callable[[object], Client]", Client)
         async with client_factory(server.mcp) as client:
             for workspace in ("ReflectLog", "  REFLECTLOG \t", "reflectlog"):
-                for name in NAMES:
+                for name in MEMORY_NAMES:
                     result = await client.call_tool(
                         name, {"workspace_id": workspace, **TOOL_ARGUMENTS[name]}
                     )
@@ -295,7 +296,8 @@ def mcp_server(set_env_vars, mock_usearch_engine):
 
         server.memory_manager = cast("MagicMock", anyio.run(manager))
         server.memory_manager.memory = mock_usearch_engine
-        for tool in server.registered_tools.values():
+        for name in MEMORY_NAMES:
+            tool = server.registered_tools[name]
             tool.fn = partial(tool.fn, workspace_id=server.config.workspace_id)
         yield server
         anyio.run(server.aclose)
@@ -735,6 +737,9 @@ async def test_delete_error_wrapping(mcp_server, failure: Exception) -> None:
         ),
         (",".join(reversed(NAMES)), NAMES, []),
         ("delete_memories,search_memories", [NAMES[1], NAMES[4]], []),
+        ("GetAllWorkspacesTool", ["get_all_workspaces"], []),
+        ("all", NAMES, []),
+        ("*", NAMES, []),
         ("none", [], []),
     ],
 )
@@ -830,7 +835,8 @@ async def test_workspace_normalization_required_schema_and_startup_metrics(
             assert [tool.name for tool in tools] == NAMES
             assert list(server.registered_tools) == NAMES
             for tool in tools:
-                assert "workspace_id" in tool.input_schema["required"]
+                if tool.name in MEMORY_NAMES:
+                    assert "workspace_id" in tool.input_schema["required"]
             with pytest.raises(Exception, match="workspace_id"):
                 await client.call_tool("get_all_memories", {})
             assert factory.call_count == 0
