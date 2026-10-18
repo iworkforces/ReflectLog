@@ -83,7 +83,14 @@ TOOL_INSTRUCTIONS = {
     "positive offset cannot be combined with after_id. limit=0 probes without advancing. "
     "Cursor paging survives eviction and restart, but is not a frozen snapshot; "
     "restoring an older database invalidates continuation.",
-    "search_memories": "    • search_memories(query: str, workspace_id: str, limit: int | None = None) -> dict\n      Search stable ids with final scores and score_kind. Limit 1..50.",
+    "search_memories": "    • search_memories(query: str, workspace_id: str, limit: int | None = None, explain: bool = False) -> dict\n"
+    "      Search stable ids with final scores and score_kind. Limit 1..50. "
+    "explain=true adds per-record explanation and request-local stage_outcomes without changing ranking. "
+    "Semantic/fulltext contributions contain one-based rank and raw score; null means absent from "
+    "that backend's filtered fusion input. pre_rerank_score and pre_rerank_score_kind describe "
+    "the score before reranking; final_score_kind describes the returned score. Stage outcomes: "
+    "disabled, failed, unavailable, empty, skipped_single_hit, applied, degraded. "
+    "Explanation fields are omitted by default.",
     "get_memory_by_id": "    • get_memory_by_id(id: int, workspace_id: str, include_successor: bool = False) -> dict\n"
     "      Returns {record: record or null}. With include_successor, missing records also return "
     "successor: {id: int} or null for currently active replacement content in this workspace. "
@@ -292,8 +299,15 @@ class FastMCPServer:
         ],
         workspace_id: str,
         limit: Annotated[int | None, Field(ge=1, le=MAX_SEARCH_RECORDS_LIMIT)] = None,
+        explain: bool = False,
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
+            if explain:
+                return await self._finish_tool(
+                    self._handler("search_memories", manager)(
+                        query, limit, explain=True
+                    )
+                )
             return await self._finish_tool(
                 self._handler("search_memories", manager)(query, limit)
             )

@@ -6,10 +6,18 @@ import json
 from pathlib import Path
 from typing import Never
 
+import anyio
+from fastmcp import Client
+from fastmcp.exceptions import ToolError
+from mcp.types import Tool
+from pydantic import TypeAdapter
 import pytest
 
 from reflectlog.application.config.settings import Config
+from reflectlog.application.mcp_server import FastMCPServer
 from reflectlog.application.memory.manager import MemoryManager
+from reflectlog.application.memory.search_evidence import StageOutcome
+from reflectlog.application.memory.search_strategies import SearchContext, SearchResult
 from reflectlog.application.memory.workspace_registry import WorkspaceRegistry
 from reflectlog.core.enums import RerankerEngine, SearchComponent
 from reflectlog.core.exceptions import SearchError
@@ -277,3 +285,242 @@ async def test_real_registry_idle_eviction_resets_failure_record(
             assert_failures(await health(second), {})
     finally:
         await registry.close()
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "normal",
+        "concatenated",
+        "semantic_failed",
+        "fulltext_failed",
+        "reranker_failed",
+        "applied",
+        "degraded",
+        "unavailable",
+        "single",
+        "empty",
+        "disabled",
+    ],
+)
+async def test_explained_real_records_preserve_ranking(
+    manager: MemoryManager, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    manager.add_memories(MEMORIES[:1] if mode == "single" else MEMORIES)
+    expected_semantic = StageOutcome.APPLIED
+    expected_fulltext = StageOutcome.APPLIED
+    expected_reranker = StageOutcome.DISABLED
+    if mode == "concatenated":
+        manager.config = replace(manager.config, enable_rrf_fusion=False)
+        manager._search_pipeline.config = manager.config
+    if mode == "semantic_failed":
+        monkeypatch.setattr(type(manager._semantic_engine), "search", fail_search)
+        expected_semantic = StageOutcome.FAILED
+    if mode == "fulltext_failed":
+        assert manager._tantivy_engine is not None
+        monkeypatch.setattr(type(manager._tantivy_engine), "search", fail_search)
+        expected_fulltext = StageOutcome.FAILED
+    if mode == "disabled":
+        manager._search_pipeline._tantivy_engine = None
+        expected_fulltext = StageOutcome.UNAVAILABLE
+    if mode in (
+        "reranker_failed",
+        "applied",
+        "degraded",
+        "unavailable",
+        "single",
+        "empty",
+    ):
+        manager.config = replace(
+            manager.config,
+            reranker_engine=RerankerEngine.OPENROUTER,
+            openrouter_rerank_model="test-model",
+        )
+        manager._search_pipeline.config = manager.config
+        expected_reranker = StageOutcome.FAILED
+        monkeypatch.setattr(OpenRouterReranker, "rerank_async", fail_rerank)
+        if mode == "applied":
+
+            async def applied(
+                _self: OpenRouterReranker,
+                query: str,
+                candidates: list[tuple[str, float]],
+                *args: object,
+                **kwargs: object,
+            ) -> list[tuple[str, float]]:
+                return [
+                    (content, 0.9 - index * 0.1)
+                    for index, (content, _) in enumerate(reversed(candidates))
+                ]
+
+            monkeypatch.setattr(OpenRouterReranker, "rerank_async", applied)
+            expected_reranker = StageOutcome.APPLIED
+        if mode == "degraded":
+
+            async def degraded(*args: object, **kwargs: object) -> None:
+                return None
+
+            monkeypatch.setattr(OpenRouterReranker, "rerank_async", degraded)
+            expected_reranker = StageOutcome.DEGRADED
+        if mode == "unavailable":
+            monkeypatch.setattr(
+                MemoryManager, "openrouter_reranker", property(lambda self: None)
+            )
+            expected_reranker = StageOutcome.UNAVAILABLE
+        if mode == "single":
+            expected_reranker = StageOutcome.SKIPPED_SINGLE_HIT
+        if mode == "empty":
+            manager.delete_memories(MEMORIES)
+            expected_semantic = expected_fulltext = expected_reranker = (
+                StageOutcome.EMPTY
+            )
+    plain = await manager.search_records(QUERY)
+
+    explained = await manager.search_records(QUERY, explain=True)
+
+    assert [
+        (row.id, row.content, row.score, row.created_at) for row in explained.records
+    ] == [(row.id, row.content, row.score, row.created_at) for row in plain.records]
+    assert explained.score_kind == plain.score_kind
+    assert plain.stage_outcomes is None
+    outcomes = explained.stage_outcomes
+    assert outcomes is not None
+    assert (outcomes.semantic, outcomes.fulltext, outcomes.reranker) == (
+        expected_semantic,
+        expected_fulltext,
+        expected_reranker,
+    )
+    for row in explained.records:
+        assert row.explanation is not None
+        assert row.explanation.final_score_kind == explained.score_kind
+        for contribution in (row.explanation.semantic, row.explanation.fulltext):
+            assert contribution is None or contribution.rank >= 1
+
+
+@pytest.mark.parametrize("delete_all", [False, True])
+async def test_explained_records_drop_deleted_pipeline_hit(
+    manager: MemoryManager, monkeypatch: pytest.MonkeyPatch, delete_all: bool
+) -> None:
+    manager.add_memories(MEMORIES)
+    execute = manager._search_pipeline.execute
+    captured: list[SearchResult] = []
+
+    async def delete_after_search(
+        context: SearchContext,
+        *,
+        include_timestamp_map: bool = True,
+        explain: bool = False,
+    ) -> SearchResult:
+        result = await execute(
+            context, include_timestamp_map=include_timestamp_map, explain=explain
+        )
+        captured.append(result)
+        manager.delete_memories(result.memories if delete_all else [result.memories[0]])
+        return result
+
+    monkeypatch.setattr(manager._search_pipeline, "execute", delete_after_search)
+
+    result = await manager.search_records(QUERY, explain=True)
+
+    pipeline = captured[0]
+    assert pipeline.explanations is not None
+    assert len(result.records) == (0 if delete_all else 1)
+    if not delete_all:
+        assert result.records[0].content == pipeline.memories[1]
+        assert (
+            result.records[0].explanation == pipeline.explanations[pipeline.memories[1]]
+        )
+
+
+async def test_overlapping_explanations_are_request_local(
+    manager: MemoryManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager.add_memories(MEMORIES)
+    manager.config = replace(
+        manager.config,
+        reranker_engine=RerankerEngine.OPENROUTER,
+        openrouter_rerank_model="test-model",
+    )
+    manager._search_pipeline.config = manager.config
+    entered = anyio.Event()
+    release = anyio.Event()
+    outcomes: dict[str, StageOutcome] = {}
+
+    async def rerank(
+        _self: OpenRouterReranker, query: str, *args: object, **kwargs: object
+    ) -> None:
+        if query == QUERY:
+            entered.set()
+            await release.wait()
+            return None
+        raise ValueError(SECRET)
+
+    async def search(query: str) -> None:
+        result = await manager.search_records(query, explain=True)
+        assert result.stage_outcomes is not None
+        outcomes[query] = result.stage_outcomes.reranker
+
+    monkeypatch.setattr(OpenRouterReranker, "rerank_async", rerank)
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(search, QUERY)
+            await entered.wait()
+            await search("healthprobe other")
+            release.set()
+
+    assert outcomes == {
+        QUERY: StageOutcome.DEGRADED,
+        "healthprobe other": StageOutcome.FAILED,
+    }
+
+
+async def test_registered_mcp_search_explanation(
+    manager: MemoryManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def factory(_self: FastMCPServer, config: Config) -> MemoryManager:
+        return create_memory_manager(config)[0]
+
+    monkeypatch.setattr(FastMCPServer, "_create_manager", factory)
+    server = FastMCPServer(manager.config)
+    try:
+        async with server._registry.acquire(manager.workspace_id) as active:
+            active.add_memories(MEMORIES)
+        async with Client(server.mcp) as client:
+            tools = await client.list_tools()
+            search_tool = next(tool for tool in tools if tool.name == "search_memories")
+            assert isinstance(search_tool, Tool)
+            schema = search_tool.input_schema
+            assert schema["properties"]["explain"]["default"] is False
+            assert schema["properties"]["explain"]["type"] == "boolean"
+            arguments: dict[str, object] = {
+                "query": QUERY,
+                "workspace_id": manager.workspace_id,
+            }
+            plain = (
+                await client.call_tool("search_memories", arguments)
+            ).structured_content
+            explained = (
+                await client.call_tool(
+                    "search_memories", {**arguments, "explain": True}
+                )
+            ).structured_content
+            assert plain is not None and explained is not None
+            assert "stage_outcomes" not in plain
+            assert explained["stage_outcomes"] == {
+                "semantic": "applied",
+                "fulltext": "applied",
+                "reranker": "disabled",
+            }
+            rows = TypeAdapter(list[dict[str, object]]).validate_python(
+                explained["results"]
+            )
+            assert [
+                {key: value for key, value in row.items() if key != "explanation"}
+                for row in rows
+            ] == plain["results"]
+            assert all("explanation" in row for row in rows)
+            with pytest.raises(ToolError, match="validation"):
+                await client.call_tool("search_memories", {**arguments, "limit": 0})
+    finally:
+        await server.aclose()
