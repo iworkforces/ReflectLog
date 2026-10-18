@@ -5,11 +5,81 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from reflectlog.application.mcp_server import FastMCPServer
-from reflectlog.application.memory.add_phases import SmartReplacementPhase
+from reflectlog.application.memory.add_phases import (
+    ReplacementInfo,
+    SmartReplacementPhase,
+)
 from tests.integration.test_memory_manager_usearch import (
     MockEmbedder,
     create_usearch_config,
 )
+
+
+@pytest.mark.integration
+async def test_successor_workflow_preserves_missing_and_live_responses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = create_usearch_config(str(tmp_path))
+    workspace = config.workspace_id
+    with patch(
+        "reflectlog.application.memory.manager.LangchainQwenEmbeddings",
+        return_value=MockEmbedder(),
+    ):
+        server = FastMCPServer(config)
+        try:
+            await server._add_memories(
+                ["old convention"], workspace, allow_replace=False
+            )
+            async with server._registry.acquire(workspace) as manager:
+                original = manager.get_page_records_with_total()[0][0]
+                await manager._storage_phase.execute(
+                    ["new convention"],
+                    {
+                        "new convention": [
+                            ReplacementInfo(
+                                old_memory="old convention",
+                                new_memory="new convention",
+                                confidence=0.95,
+                                reason="private reason",
+                                similarity_score=0.9,
+                            )
+                        ]
+                    },
+                )
+                successor = manager.get_page_records_with_total()[0][0]
+            assert await server._get_memory_by_id(original.id, workspace) == {
+                "record": None
+            }
+            assert await server._get_memory_by_id(original.id, workspace, True) == {
+                "record": None,
+                "successor": {"id": successor.id},
+            }
+            live = await server._get_memory_by_id(successor.id, workspace)
+            assert await server._get_memory_by_id(successor.id, workspace, True) == live
+            assert await server._get_memory_by_id(
+                original.id, "foreign-workspace", True
+            ) == {
+                "record": None,
+                "successor": None,
+            }
+            await server._delete_memories([successor.id], workspace)
+            assert await server._get_memory_by_id(original.id, workspace, True) == {
+                "record": None,
+                "successor": None,
+            }
+            await server._add_memories(
+                ["new convention"], workspace, allow_replace=False
+            )
+            async with server._registry.acquire(workspace) as manager:
+                readded = manager.get_page_records_with_total()[0][0]
+            assert readded.id != successor.id
+            assert await server._get_memory_by_id(original.id, workspace, True) == {
+                "record": None,
+                "successor": {"id": readded.id},
+            }
+        finally:
+            await server.aclose()
 
 
 @pytest.mark.integration

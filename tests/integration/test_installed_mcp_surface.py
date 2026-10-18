@@ -58,6 +58,10 @@ async def test_installed_surface_discovery_constraints_and_missing_record(
             assert limit["minimum"] == 1
             assert limit["maximum"] == 50
             assert schemas["get_memory_by_id"]["properties"]["id"]["minimum"] == 1
+            successor = schemas["get_memory_by_id"]["properties"]["include_successor"]
+            assert successor["type"] == "boolean"
+            assert successor["default"] is False
+            assert "include_successor" not in schemas["get_memory_by_id"]["required"]
             ids = schemas["delete_memories"]["properties"]["ids"]
             assert ids["items"]["minimum"] == 1
             assert ids["maxItems"] == 100
@@ -68,6 +72,11 @@ async def test_installed_surface_discovery_constraints_and_missing_record(
                 "get_memory_by_id", {"id": 999, "workspace_id": "surface"}
             )
             assert result.structured_content == {"record": None}
+            opted_in = await client.call_tool(
+                "get_memory_by_id",
+                {"id": 999, "workspace_id": "surface", "include_successor": True},
+            )
+            assert opted_in.structured_content == {"record": None, "successor": None}
     finally:
         await server.aclose()
 

@@ -80,7 +80,10 @@ TOOL_INSTRUCTIONS = {
     "      Page stored records. Default cap 1000. Returns records, "
     "total, offset, limit, truncated.",
     "search_memories": "    • search_memories(query: str, workspace_id: str, limit: int | None = None) -> dict\n      Search stable ids with final scores and score_kind. Limit 1..50.",
-    "get_memory_by_id": "    • get_memory_by_id(id: int, workspace_id: str) -> dict\n      Return a record or null when missing in this workspace.",
+    "get_memory_by_id": "    • get_memory_by_id(id: int, workspace_id: str, include_successor: bool = False) -> dict\n"
+    "      Returns {record: record or null}. With include_successor, missing records also return "
+    "successor: {id: int} or null for currently active replacement content in this workspace. "
+    "Single hop only; a re-added matching string has its current id, not historical identity.",
     "delete_memories": "    • delete_memories(ids: list[int], workspace_id: str) -> dict\n      Report actually removed and missing ids.",
 }
 
@@ -303,10 +306,11 @@ class FastMCPServer:
         self,
         id: Annotated[int, Field(ge=1)],
         workspace_id: str,
+        include_successor: bool = False,
     ) -> dict[str, object]:
         async with self._registry.acquire(workspace_id) as manager:
             return await self._finish_tool(
-                self._handler("get_memory_by_id", manager)(id)
+                self._handler("get_memory_by_id", manager)(id, include_successor)
             )
 
     async def _delete_memories(
