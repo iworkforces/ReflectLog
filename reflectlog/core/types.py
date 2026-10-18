@@ -115,6 +115,14 @@ class IStoredMemory(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class CursorPage:
+    records: tuple[IStoredMemory, ...]
+    total: int
+    truncated: bool
+    next_after_id: int
+
+
+@dataclass(frozen=True, slots=True)
 class RecordWithSuccessor:
     record: IStoredMemory | None
     successor_id: int | None = None
@@ -138,6 +146,10 @@ class IArchiveMemoryStore(Protocol):
     def get_page_records(
         self, workspace_id: str, limit: int | None, offset: int
     ) -> Sequence[IStoredMemory]: ...
+
+    def get_cursor_page(
+        self, workspace_id: str, limit: int, after_id: int
+    ) -> CursorPage: ...
 
     def count(self, workspace_id: str) -> int: ...
 
