@@ -127,6 +127,10 @@ class IArchiveMemoryStore(Protocol):
 
     def get_batch(self, memory_ids: list[int]) -> Mapping[int, IStoredMemory]: ...
 
+    def get_record_with_successor(
+        self, workspace_id: str, memory_id: int
+    ) -> RecordWithSuccessor: ...
+
     def get_records_by_contents(
         self, workspace_id: str, contents: list[str]
     ) -> Sequence[IStoredMemory]: ...

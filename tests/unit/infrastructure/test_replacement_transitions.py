@@ -1,6 +1,7 @@
 """Unit tests for durable replacement transitions on MemoryStore."""
 
 import os
+from pathlib import Path
 import tempfile
 
 import pytest
@@ -13,6 +14,34 @@ from reflectlog.infrastructure.memory_store import (
     TRANSITION_PENDING,
     MemoryStore,
 )
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_successor_is_single_hop_and_does_not_replay_pending_transition(
+    tmp_path: Path, completed: bool
+) -> None:
+    store = MemoryStore(db_path=str(tmp_path / "successor.db"))
+    try:
+        transition = _begin(store)
+        if completed:
+            store.complete_replacement_transition(transition.id)
+        before = store.list_pending_transitions()
+        assert store.get_record_with_successor("proj1", 11).successor_id is None
+        successor_id = store.insert("proj1", "Use spaces")
+        assert successor_id is not None
+        assert store.get_record_with_successor("proj1", 11).successor_id == successor_id
+        store.archive(
+            successor_id, "proj1", "Use spaces", "Use four spaces", "private", 0.9
+        )
+        assert store.delete(successor_id)
+        store.insert("proj1", "Use four spaces")
+        assert store.get_record_with_successor("proj1", 11).successor_id is None
+        readded_id = store.insert("proj1", "Use spaces")
+        assert readded_id != successor_id
+        assert store.get_record_with_successor("proj1", 11).successor_id == readded_id
+        assert store.list_pending_transitions() == before
+    finally:
+        store.close()
 
 
 def _begin(store: MemoryStore) -> ReplacementTransition:

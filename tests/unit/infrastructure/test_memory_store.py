@@ -1,6 +1,8 @@
 """Unit tests for MemoryStore SQLite storage."""
 
 import os
+from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 from unittest.mock import MagicMock
@@ -332,6 +334,126 @@ class TestMemoryStoreGetRecordsByContents:
             ]
             assert len(selects) == 1
             store.close()
+
+
+def test_successor_live_record_matches_existing_readers_when_timestamp_is_null(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore(db_path=str(tmp_path / "null-timestamp.db"))
+    try:
+        memory_id = store.insert("ws", "legacy memory")
+        assert memory_id is not None
+        store.connection.execute(
+            "UPDATE memories SET created_at = NULL WHERE id = ?", (memory_id,)
+        )
+        store.connection.commit()
+        existing_record = store.get(memory_id)
+        batch_record = store.get_batch([memory_id])[memory_id]
+
+        result = store.get_record_with_successor("ws", memory_id)
+
+        assert result.record == existing_record == batch_record
+        assert result.record is not None
+        assert result.record.created_at == ""
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("latest_active", [False, True])
+def test_successor_uses_latest_archive_id_and_workspace(
+    tmp_path: Path, latest_active: bool
+) -> None:
+    store = MemoryStore(db_path=str(tmp_path / "successors.db"))
+    try:
+        old = store.insert("ws", "old")
+        first = store.insert("ws", "first")
+        latest = store.insert("ws" if latest_active else "foreign", "latest")
+        assert old is not None and first is not None and latest is not None
+        store.archive(old, "ws", "old", "first", "private reason", 0.9)
+        archive_id = store.archive(old, "ws", "old", "latest", "private reason", 0.9)
+        store.archive(old, "foreign", "old", "foreign replacement", "private", 0.9)
+        assert archive_id is not None
+        store.connection.execute("UPDATE archived_memories SET id = id + 8")
+        store.connection.execute(
+            "UPDATE archived_memories SET archived_at = '1900-01-01' WHERE id = ?",
+            (archive_id + 8,),
+        )
+        store.connection.commit()
+        assert store.get_record_with_successor("ws", old).record == store.get(old)
+        assert store.delete(old)
+        result = store.get_record_with_successor("ws", old)
+        assert result.record is None
+        assert result.successor_id == (latest if latest_active else None)
+        assert store.get_record_with_successor("other", old).successor_id is None
+        assert store.get_record_with_successor("ws", 999).successor_id is None
+        assert not store.connection.in_transaction
+    finally:
+        store.close()
+
+
+def test_successor_lookup_holds_one_read_snapshot(tmp_path: Path) -> None:
+    store = MemoryStore(db_path=str(tmp_path / "snapshot.db"))
+    writer = MemoryStore(db_path=store.db_path)
+    try:
+        successor_id = store.insert("ws", "before")
+        store.archive(999, "ws", "old", "before", "private", 0.9)
+        _ = writer.connection
+        changed = False
+
+        def interleave(statement: str) -> None:
+            nonlocal changed
+            if "SELECT replaced_by" in statement and not changed:
+                changed = True
+                writer.connection.execute(
+                    "UPDATE archived_memories SET replaced_by = 'after'"
+                )
+                writer.connection.execute("DELETE FROM memories")
+                writer.connection.execute(
+                    "INSERT INTO memories (workspace_id, content) VALUES ('ws', 'after')"
+                )
+                writer.connection.commit()
+
+        store.connection.set_trace_callback(interleave)
+        result = store.get_record_with_successor("ws", 999)
+        store.connection.set_trace_callback(None)
+        assert changed
+        assert result.record is None
+        assert result.successor_id == successor_id
+        assert not store.connection.in_transaction
+        assert store.get_record_with_successor("ws", 999).successor_id != successor_id
+    finally:
+        writer.close()
+        store.close()
+
+
+def test_successor_lookup_cleans_up_failed_read(tmp_path: Path) -> None:
+    store = MemoryStore(db_path=str(tmp_path / "failed-read.db"))
+    try:
+
+        def authorize(
+            action: int,
+            table: str | None,
+            column: str | None,
+            database: str | None,
+            source: str | None,
+        ) -> int:
+            return (
+                sqlite3.SQLITE_DENY
+                if table == "archived_memories"
+                else sqlite3.SQLITE_OK
+            )
+
+        store.connection.set_authorizer(authorize)
+        with pytest.raises(
+            StorageError, match="Failed to resolve memory successor"
+        ) as raised:
+            store.get_record_with_successor("ws", 999)
+        assert isinstance(raised.value.__cause__, sqlite3.Error)
+        assert not store.connection.in_transaction
+        store.connection.set_authorizer(None)
+        assert store.get_record_with_successor("ws", 999).successor_id is None
+    finally:
+        store.close()
 
 
 class TestMemoryStoreThreadSafety:
