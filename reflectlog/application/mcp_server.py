@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import hmac
 from ipaddress import ip_address
 import os
+import secrets
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import anyio
@@ -98,7 +99,8 @@ TOOL_INSTRUCTIONS = {
     "successor: {id: int} or null for currently active replacement content in this workspace. "
     "Single hop only; a re-added matching string has its current id, not historical identity.",
     "delete_memories": "    • delete_memories(ids: list[int], workspace_id: str) -> dict\n      Report actually removed and missing ids.",
-    "get_all_workspaces": "    • get_all_workspaces(limit: int | None = None, offset: int = 0) -> dict\n"
+    "get_all_workspaces": "    • get_all_workspaces(admin_password: str, limit: int | None = None, offset: int = 0) -> dict\n"
+    "      Requires the server's ADMIN_PASSWORD; incorrect passwords are rejected before discovery. "
     "      List stored workspace ids in lexical order, without loading managers or models. "
     "Returns workspaces, total, offset, limit, truncated. Default and maximum page size "
     "is GET_ALL_LIMIT (default 1000); negative limits and offsets clamp to zero. "
@@ -346,8 +348,13 @@ class FastMCPServer:
             )
 
     async def _get_all_workspaces(
-        self, limit: int | None = None, offset: int = 0
+        self, admin_password: str, limit: int | None = None, offset: int = 0
     ) -> dict[str, object]:
+        if not secrets.compare_digest(
+            admin_password.encode("utf-8"),
+            self.config.admin_password.get_secret_value().encode("utf-8"),
+        ):
+            raise ToolError("Unauthorized")
         workspaces = await anyio.to_thread.run_sync(
             list_stored_workspaces, ConfigAdapter(self.config).storage_path
         )

@@ -50,6 +50,7 @@ async def test_installed_surface_discovery_constraints_and_missing_record(
                 if name != "get_all_workspaces":
                     assert "workspace_id" in schema["required"]
             assert set(schemas["get_all_workspaces"]["properties"]) == {
+                "admin_password",
                 "limit",
                 "offset",
             }
@@ -83,7 +84,10 @@ async def test_installed_surface_discovery_constraints_and_missing_record(
                 {"id": 999, "workspace_id": "surface", "include_successor": True},
             )
             assert opted_in.structured_content == {"record": None, "successor": None}
-            workspaces = await client.call_tool("get_all_workspaces", {})
+            assert schemas["get_all_workspaces"]["required"] == ["admin_password"]
+            workspaces = await client.call_tool(
+                "get_all_workspaces", {"admin_password": set_env_vars["ADMIN_PASSWORD"]}
+            )
             assert workspaces.structured_content == {
                 "workspaces": ["surface"],
                 "total": 1,
