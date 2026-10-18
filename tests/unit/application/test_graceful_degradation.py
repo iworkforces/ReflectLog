@@ -29,7 +29,11 @@ async def test_candidate_checks_keep_memory_and_reply_private(scenario: str) -> 
     logger = RecordingLogger()
     phase = SmartReplacementPhase(
         Mock(spec=ISemanticSearchEngine),
-        Config(workspace_id="test", openrouter_api_key=SecretString("key")),
+        Config(
+            workspace_id="test",
+            openrouter_api_key=SecretString("key"),
+            admin_password=SecretString("test-admin-password"),
+        ),
         logger,
         None,
     )

@@ -240,6 +240,7 @@ class Config:
     # Core settings (required)
     workspace_id: str
     openrouter_api_key: SecretString  # Wrapped for security - use .get_secret_value()
+    admin_password: SecretString
 
     # Transport settings
     transport: TransportMode = TransportMode.HTTP
@@ -384,6 +385,10 @@ class Config:
 
     # Tool registration settings
     allowed_tools: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.admin_password.get_secret_value().strip():
+            raise ConfigurationError("Invalid ADMIN_PASSWORD: value is empty")
 
     # Static helper methods for parsing configuration sections
     # These methods improve testability and maintainability by extracting
@@ -777,6 +782,7 @@ class Config:
             )
         # Wrap in SecretString to prevent accidental logging
         openrouter_api_key = SecretString(openrouter_api_key_raw)
+        admin_password = SecretString(_env_field_value("ADMIN_PASSWORD", ""))
 
         # Parse configuration sections using helper methods
         transport_config = cls._parse_transport_config()
@@ -795,6 +801,7 @@ class Config:
             # Required settings
             workspace_id="",
             openrouter_api_key=openrouter_api_key,
+            admin_password=admin_password,
             # Parsed configuration sections
             **transport_config,
             **embedding_config,

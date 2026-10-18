@@ -41,6 +41,7 @@ def manager(monkeypatch):
     # Set required environment variables before creating config
     monkeypatch.setenv("WORKSPACE_ID", "test-chaos-project")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
     monkeypatch.setenv("SEARCH_LIMIT", "10")
     monkeypatch.setenv("EMBEDDING_DIMS", "1536")
     monkeypatch.setenv("RERANKER_ENGINE", "none")

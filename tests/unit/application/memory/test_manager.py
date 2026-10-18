@@ -145,6 +145,7 @@ def mock_config() -> Config:
     return Config(
         workspace_id="test_project",
         openrouter_api_key=SecretString("test-api-key"),
+        admin_password=SecretString("test-admin-password"),
         tantivy_index_path_template="{workspace_id}_tantivy_test",
         search_score_threshold=0.8,
         fusion_ranking_threshold=0.5,

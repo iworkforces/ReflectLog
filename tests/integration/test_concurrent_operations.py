@@ -68,6 +68,7 @@ def create_test_config(workspace_id: str = "test-concurrent") -> Config:
     return Config(
         workspace_id=workspace_id,
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
         embedder_provider=EmbedderProvider.LANGCHAIN,
         embedding_model="mock-model",
         embedding_dims=128,

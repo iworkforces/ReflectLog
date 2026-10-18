@@ -52,6 +52,7 @@ async def test_cancelled_mcp_add_drains_before_close_and_reopens(
     config = Config(
         workspace_id="",
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
         embedder_provider=EmbedderProvider.OPENAI,
         embedding_model="openai/text-embedding-3-small",
         embedding_dims=128,
@@ -238,6 +239,7 @@ async def test_cancelled_mcp_resident_capacity_keeps_native_work_pinned(
         workspace_id="",
         workspace_max_resident=1,
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
         embedder_provider=EmbedderProvider.OPENAI,
         embedding_model="openai/text-embedding-3-small",
         embedding_dims=128,

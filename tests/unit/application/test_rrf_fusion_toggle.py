@@ -24,6 +24,7 @@ class TestRRFFusionToggleConfig:
             {
                 "WORKSPACE_ID": "test",
                 "OPENROUTER_API_KEY": "test-key",
+                "ADMIN_PASSWORD": "test-admin-password",
             },
             clear=True,
         ):
@@ -37,6 +38,7 @@ class TestRRFFusionToggleConfig:
             {
                 "WORKSPACE_ID": "test",
                 "OPENROUTER_API_KEY": "test-key",
+                "ADMIN_PASSWORD": "test-admin-password",
                 "ENABLE_RRF_FUSION": "true",
             },
             clear=True,
@@ -51,6 +53,7 @@ class TestRRFFusionToggleConfig:
             {
                 "WORKSPACE_ID": "test",
                 "OPENROUTER_API_KEY": "test-key",
+                "ADMIN_PASSWORD": "test-admin-password",
                 "ENABLE_RRF_FUSION": "false",
             },
             clear=True,
@@ -75,6 +78,7 @@ class TestRRFFusionToggleConfig:
                 {
                     "WORKSPACE_ID": "test",
                     "OPENROUTER_API_KEY": "test-key",
+                    "ADMIN_PASSWORD": "test-admin-password",
                     "ENABLE_RRF_FUSION": value,
                 },
                 clear=True,
@@ -94,6 +98,7 @@ class TestRRFFusionToggleConfig:
                 {
                     "WORKSPACE_ID": "test",
                     "OPENROUTER_API_KEY": "test-key",
+                    "ADMIN_PASSWORD": "test-admin-password",
                     "ENABLE_RRF_FUSION": value,
                 },
                 clear=True,

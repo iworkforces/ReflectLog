@@ -29,6 +29,7 @@ async def infer_workflow(enabled: bool, port: int) -> None:
             "MCP_PORT": str(port),
             "LOG_LEVEL": "INFO",
             "WORKSPACE_ID": workspace,
+            "ADMIN_PASSWORD": "test-admin-password",
         }
     )
     server = subprocess.Popen(

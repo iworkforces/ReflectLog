@@ -284,6 +284,7 @@ def test_environment_without_workspace_builds_unbound_template(
     monkeypatch.setenv("EMBEDDING_MODEL", "tencent/WeMM-Embedding-2B")
     monkeypatch.setenv("RERANKER_ENGINE", "none")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
     config = Config.from_environment()
     assert config.workspace_id == ""
     assert any(error.field == "WORKSPACE_ID" for error in validate_config(config))

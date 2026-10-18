@@ -34,6 +34,7 @@ def manager(monkeypatch: MonkeyPatch):
     """Provide a MemoryManager instance for testing."""
     monkeypatch.setenv("WORKSPACE_ID", "test-security-project")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
 
     mock_semantic_engine = MagicMock()
     mock_semantic_engine.search.return_value = []

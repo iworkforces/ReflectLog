@@ -45,6 +45,7 @@ class TestServerInitializationErrors:
 
         monkeypatch.delenv("WORKSPACE_ID", raising=False)
         monkeypatch.setenv("OPENROUTER_API_KEY", "test_key")
+        monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
         server = FastMCPServer()
         try:
             assert server.config.workspace_id == ""
@@ -532,7 +533,11 @@ class TestHttpAuthAndBind:
         monkeypatch.setenv("REFLECTLOG_MCP_AUTH_TOKEN", token)
         with patch.object(FastMCP, "add_middleware", autospec=True) as add_middleware:
             server = FastMCPServer(
-                Config(workspace_id="test", openrouter_api_key=SecretString("k"))
+                Config(
+                    workspace_id="test",
+                    openrouter_api_key=SecretString("k"),
+                    admin_password=SecretString("test-admin-password"),
+                )
             )
             server._install_http_auth()
         if token:
@@ -591,6 +596,7 @@ class TestHttpAuthAndBind:
             Config(
                 workspace_id="test",
                 openrouter_api_key=SecretString("k"),
+                admin_password=SecretString("test-admin-password"),
                 transport=TransportMode.HTTP,
                 host="127.0.0.1",
             )
@@ -618,6 +624,7 @@ class TestHttpAuthAndBind:
             Config(
                 workspace_id="test",
                 openrouter_api_key=SecretString("k"),
+                admin_password=SecretString("test-admin-password"),
                 transport=TransportMode.HTTP,
                 host="0.0.0.0",
             )
@@ -649,6 +656,7 @@ class TestHttpAuthAndBind:
             Config(
                 workspace_id="test",
                 openrouter_api_key=SecretString("k"),
+                admin_password=SecretString("test-admin-password"),
                 transport=TransportMode.HTTP,
                 host="::0",
             )

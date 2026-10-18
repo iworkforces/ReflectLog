@@ -315,6 +315,7 @@ def test_environment_workspace_remains_optional(
 ) -> None:
     monkeypatch.delenv("WORKSPACE_ID", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test_api_key")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
     assert Config.from_environment().workspace_id == ""
 
 

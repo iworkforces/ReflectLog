@@ -23,6 +23,7 @@ def _config(*, cache_enabled: bool) -> Config:
     return Config(
         workspace_id="wemm-test",
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
         embedder_provider=EmbedderProvider.WEMM,
         embedding_model=WeMMModel.EMBEDDING_4B,
         wemm_embedding_dims=1024,
@@ -56,6 +57,7 @@ def test_engine_factory_keeps_remote_provider_on_existing_adapter() -> None:
     remote_config = Config(
         workspace_id=config.workspace_id,
         openrouter_api_key=config.openrouter_api_key,
+        admin_password=config.admin_password,
         embedder_provider=EmbedderProvider.OPENAI,
         embedding_cache_enabled=False,
         eager_initialization=False,

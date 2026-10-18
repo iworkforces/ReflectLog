@@ -52,6 +52,7 @@ def minimal_config() -> Config:
     return Config(
         workspace_id="test-project",
         openrouter_api_key=SecretString("sk-test-key-12345"),
+        admin_password=SecretString("test-admin-password"),
     )
 
 
@@ -61,6 +62,7 @@ def custom_config() -> Config:
     return Config(
         workspace_id="custom-proj",
         openrouter_api_key=SecretString("sk-custom-key-99999"),
+        admin_password=SecretString("test-admin-password"),
         transport=TransportMode.HTTP,
         host="0.0.0.0",
         port=8080,
@@ -519,6 +521,7 @@ class TestSearchConfigAdapter:
         config = Config(
             workspace_id="test",
             openrouter_api_key=SecretString("sk-key"),
+            admin_password=SecretString("test-admin-password"),
         )
         object.__setattr__(config, "reranker_engine", "invalid_engine")
         adapter = SearchConfigAdapter(config)
@@ -878,6 +881,7 @@ class TestEdgeCases:
         config = Config(
             workspace_id="my-project.v2",
             openrouter_api_key=SecretString("sk-key"),
+            admin_password=SecretString("test-admin-password"),
         )
         adapter = ConfigAdapter(config)
         assert adapter.usearch_index_path == "indexes/my-project.v2/usearch"
@@ -888,6 +892,7 @@ class TestEdgeCases:
         config = Config(
             workspace_id="MyProject",
             openrouter_api_key=SecretString("sk-key"),
+            admin_password=SecretString("test-admin-password"),
         )
         adapter = ConfigAdapter(config)
         storage = StorageConfigAdapter(config)
@@ -902,6 +907,7 @@ class TestEdgeCases:
         config = Config(
             workspace_id="test",
             openrouter_api_key=SecretString("sk-key"),
+            admin_password=SecretString("test-admin-password"),
             reranker_engine=RerankerEngine.NONE,
         )
         adapter = ConfigAdapter(config)
@@ -913,6 +919,7 @@ class TestEdgeCases:
             config = Config(
                 workspace_id="test",
                 openrouter_api_key=SecretString("sk-key"),
+                admin_password=SecretString("test-admin-password"),
                 transport=transport,
             )
             adapter = ConfigAdapter(config)
@@ -953,6 +960,7 @@ class TestEdgeCases:
         config = Config(
             workspace_id="test",
             openrouter_api_key=SecretString("sk-key"),
+            admin_password=SecretString("test-admin-password"),
             fusion_ranking_threshold=0.0,
         )
         adapter = ConfigAdapter(config)
@@ -963,6 +971,7 @@ class TestEdgeCases:
         config = Config(
             workspace_id="test",
             openrouter_api_key=SecretString("sk-key"),
+            admin_password=SecretString("test-admin-password"),
             search_limit=1000,
         )
         adapter = SearchConfigAdapter(config)
@@ -973,6 +982,7 @@ class TestEdgeCases:
         config = Config(
             workspace_id="test",
             openrouter_api_key=SecretString("sk-key"),
+            admin_password=SecretString("test-admin-password"),
         )
         # StorageConfigAdapter hardcodes "cosine"
         adapter = StorageConfigAdapter(config)
@@ -986,6 +996,7 @@ class TestEdgeCases:
         config = Config(
             workspace_id="any-id",
             openrouter_api_key=SecretString("sk-key"),
+            admin_password=SecretString("test-admin-password"),
         )
         adapter = StorageConfigAdapter(config)
         assert adapter.storage_path == "indexes"

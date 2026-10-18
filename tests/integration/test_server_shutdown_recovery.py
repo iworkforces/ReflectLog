@@ -41,6 +41,7 @@ def test_lease_handoff_after_close(tmp_path: Path) -> None:
     config = Config(
         workspace_id="ws",
         openrouter_api_key=SecretString("test"),
+        admin_password=SecretString("test-admin-password"),
         tantivy_index_path_template=str(tmp_path / "{workspace_id}" / "tantivy"),
         embedder_provider=EmbedderProvider.OPENAI,
         embedding_model="openai/text-embedding-3-large",
@@ -121,6 +122,7 @@ async def test_signal_shutdown_drains_real_storage_and_reopens(
     config = Config(
         workspace_id="",
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
         embedder_provider=EmbedderProvider.OPENAI,
         embedding_model="openai/text-embedding-3-small",
         embedding_dims=128,

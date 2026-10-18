@@ -264,6 +264,7 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
     config = Config(
         workspace_id="legacy-tools",
         openrouter_api_key=SecretString("test-key"),
+        admin_password=SecretString("test-admin-password"),
     )
     logger = MagicMock()
     memory = MagicMock(spec=MemoryManager)

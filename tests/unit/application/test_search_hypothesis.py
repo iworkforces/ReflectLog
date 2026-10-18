@@ -40,6 +40,7 @@ def test_query_edge_cases(query: str):
     config = Config(
         workspace_id="hypothesis_test",
         openrouter_api_key=SecretString("test-key-not-real"),
+        admin_password=SecretString("test-admin-password"),
     )
     logger = create_logger(__name__, config.workspace_id, "INFO")
 
@@ -62,6 +63,7 @@ def test_add_memories_varied_count(count: int):
     config = Config(
         workspace_id="hypothesis_test",
         openrouter_api_key=SecretString("test-key-not-real"),
+        admin_password=SecretString("test-admin-password"),
     )
     logger = create_logger(__name__, config.workspace_id, "INFO")
 
@@ -83,6 +85,7 @@ def test_add_empty_memories(count: int):
     config = Config(
         workspace_id="hypothesis_test",
         openrouter_api_key=SecretString("test-key-not-real"),
+        admin_password=SecretString("test-admin-password"),
     )
     logger = create_logger(__name__, config.workspace_id, "INFO")
 
@@ -109,6 +112,7 @@ def test_add_injection_attempt(query: str):
     config = Config(
         workspace_id="hypothesis_test",
         openrouter_api_key=SecretString("test-key-not-real"),
+        admin_password=SecretString("test-admin-password"),
     )
     logger = create_logger(__name__, config.workspace_id, "INFO")
 
@@ -132,6 +136,7 @@ def test_max_memory_length(length: int):
     config = Config(
         workspace_id="hypothesis_test",
         openrouter_api_key=SecretString("test-key-not-real"),
+        admin_password=SecretString("test-admin-password"),
     )
     logger = create_logger(__name__, config.workspace_id, "INFO")
 

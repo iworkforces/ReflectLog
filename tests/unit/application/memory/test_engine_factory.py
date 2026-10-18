@@ -149,6 +149,7 @@ class TestCreateEngines:
         config = Config(
             workspace_id="factory_project",
             openrouter_api_key=SecretString("test-api-key"),
+            admin_password=SecretString("test-admin-password"),
             tantivy_index_path_template=str(external),
         )
         coordinator = PortalockerStorageCoordinator(str(tmp_path / "indexes"))
@@ -188,6 +189,7 @@ class TestCreateEngines:
         config = Config(
             workspace_id="factory_project",
             openrouter_api_key=SecretString("test-api-key"),
+            admin_password=SecretString("test-admin-password"),
             embedding_cache_enabled=False,
         )
         coordinator = PortalockerStorageCoordinator(str(tmp_path / "indexes"))
