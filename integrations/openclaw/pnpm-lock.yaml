@@ -12,8 +12,8 @@ importers:
         specifier: 2.3.1
         version: 2.3.1
       typebox:
-        specifier: 1.4.1
-        version: 1.4.1
+        specifier: 1.4.2
+        version: 1.4.2
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2139,8 +2139,8 @@ packages:
   typebox@1.3.34:
     resolution: {integrity: sha512-wbnzrXXDW8xEFHDZZs2jo1MkhaYlKAY4FRhpBc1+2LF1fZVBGCXGdLEhA/Z/NBbgzJMFfeM8m7elKPa/+KxaUQ==}
 
-  typebox@1.4.1:
-    resolution: {integrity: sha512-t3PeLDn0qJkwg0x6r9s6EuaOG7wivByLlst62TI7r6fy7eXHu/5LF/cRIeRcrT9qhJZ5VRFM6efHt1/bc7LMCg==}
+  typebox@1.4.2:
+    resolution: {integrity: sha512-eSoZzgSIyOKDtTH9MI7XMAxMaiXq7UiSFWarysN1ka66baTLDxAVdQ6WkWn6qDqsJFVrcjzvuP+CqHo9yrlQpg==}
 
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
@@ -4282,7 +4282,7 @@ snapshots:
 
   typebox@1.3.34: {}
 
-  typebox@1.4.1: {}
+  typebox@1.4.2: {}
 
   typescript@7.0.2:
     optionalDependencies:

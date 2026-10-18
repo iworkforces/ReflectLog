@@ -69,7 +69,7 @@ openclaw/
 
 - Config schema exists three times: Zod `configSchema`, `configJsonSchema` (`config.ts`), and `openclaw.plugin.json`. Manifest == `configJsonSchema` is tested, and `tests/unit/config.test.ts` differentially tests both against the pinned host validator. The JSON Schema mirrors the http(s) scheme prefix (`HTTP_URL_PREFIX_PATTERN`) and the reserved/derived override bans (`RESERVED_WORKSPACE_IDS`, `DERIVED_WORKSPACE_ID_RE`); duplicate override values and full URL parsing stay runtime-only (Zod). The JSON Schema must never narrow Zod acceptance.
 - `plugin.ts` pairs tool factories with `MEMORY_TOOL_NAMES` by index. Reorder both or neither.
-- The version literal `"0.1.0"` in `mcp-client.ts` must match `package.json`. Host pins live in `devDependencies.openclaw`, `peerDependencies`, `openclaw.build`, `openclaw.compat`, and `minimumReleaseAgeExclude`.
+- The version literal `"0.1.1"` in `mcp-client.ts` must match `package.json`. Host pins live in `devDependencies.openclaw`, `peerDependencies`, `openclaw.build`, `openclaw.compat`, and `minimumReleaseAgeExclude`.
 - Host pin changes also require reviewing `tests/compiled/support/openclaw-host.mjs`: bump `SUPPORTED_HOST_VERSION` and re-check its header seam notes. Adapter locates the internal registry chunk by content; version/seam mismatch fails closed.
 - Flush ledger lives per `MemoryService`: default 512 entries, 6 h success TTL from settlement; pending/unknown pinned. `plugin.ts` lifecycle retirement disposes it; process-local only.
 
