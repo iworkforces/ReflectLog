@@ -309,7 +309,11 @@ async def test_mcp_tool_signatures_and_public_result_shapes() -> None:
     assert search_params == ["query", "limit"]
     assert get_all_params == ["limit", "offset"]
     assert remove_params == ["ids"]
-    assert id_params == ["id"]
+    assert id_params == ["id", "include_successor"]
+    assert (
+        signature(get_by_id.get_handler()).parameters["include_successor"].default
+        is False
+    )
 
     empty_add = await add.get_handler()([])
     assert empty_add == {
