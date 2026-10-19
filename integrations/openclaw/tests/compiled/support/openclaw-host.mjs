@@ -19,7 +19,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const SUPPORTED_HOST_VERSION = "2026.10.4";
+export const SUPPORTED_HOST_VERSION = "2026.10.5";
 export const REGISTRY_FACTORY_NAME = "createPluginRegistry";
 export const REGISTRY_FACTORY_ARITY = 1;
 export const REGISTRY_CHUNK_PATTERN = /^registry-.*\.mjs$/;

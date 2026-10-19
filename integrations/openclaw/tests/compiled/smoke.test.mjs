@@ -86,8 +86,8 @@ describe("host seam guards (synthetic descriptors)", () => {
     assert.equal(assertRegistryChunk(good().chunks), "registry-a.mjs");
   });
   it("rejects any other host version, even a newer one", () => {
-    for (const version of ["2026.10.2", "2026.10.3", "2026.10.5", "2027.1.0", "not-a-version", "", null, undefined]) rejected({ ...good(), version }, /supports exactly 2026\.10\.4/);
-    assert.throws(() => assertHostVersion("2026.10.4-beta.1"), HostSeamError);
+    for (const version of ["2026.10.2", "2026.10.3", "2026.10.", "2027.1.0", "not-a-version", "", null, undefined]) rejected({ ...good(), version }, new RegExp(`supports exactly ${SUPPORTED_HOST_VERSION.replaceAll(".", "\\.")}`));
+    assert.throws(() => assertHostVersion(`${SUPPORTED_HOST_VERSION}-beta.1`), HostSeamError);
   });
   it("rejects zero registry chunks and chunks with only one marker", () => {
     rejected({ ...good(), chunks: [] }, /found 0 among 0/);
