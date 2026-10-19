@@ -47,7 +47,8 @@ FORBIDDEN_MODULES = (
 HARNESS = """
 import json, sys
 bundle, workspace = sys.argv[1:3]
-sys.argv = ["reflectlog", "salvage-verify", "--bundle", bundle, "--workspace-id", workspace]
+sys.argv = ["reflectlog", "salvage-verify", "--bundle", bundle,
+            "--workspace-id", workspace, *sys.argv[3:]]
 from reflectlog.server import main
 code = "no-exit"
 try:
@@ -84,6 +85,73 @@ def test_ready_bundle_when_exported(tmp_path: Path, empty: bool) -> None:
     assert payload["status"] == "ready"
     assert payload["record_count"] == (0 if empty else 1)
     assert payload["authenticity"] == "not_verified"
+
+
+def test_ready_when_both_installed_command_limits_are_exact(tmp_path: Path) -> None:
+    bundle = export_bundle(tmp_path, memories=[(WS, "\u00e9\u2603", None)])
+
+    completed = _cli(
+        "--bundle",
+        str(bundle),
+        "--workspace-id",
+        WS,
+        "--max-manifest-bytes",
+        str((bundle / "manifest.json").stat().st_size),
+        "--max-records-bytes",
+        str((bundle / "memories.jsonl").stat().st_size),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stderr == ""
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "ready"
+    assert payload["record_count"] == 1
+    assert payload["errors"] == []
+
+
+@pytest.mark.parametrize(
+    ("filename", "entry", "flag"),
+    [
+        ("manifest.json", "manifest", "--max-manifest-bytes"),
+        ("memories.jsonl", "records", "--max-records-bytes"),
+    ],
+)
+def test_invalid_when_installed_command_limit_is_one_byte_too_small(
+    tmp_path: Path, filename: str, entry: str, flag: str
+) -> None:
+    bundle = export_bundle(tmp_path, name=SECRET, memories=[(WS, SECRET, None)])
+
+    completed = _cli(
+        "--bundle",
+        str(bundle),
+        "--workspace-id",
+        WS,
+        flag,
+        str((bundle / filename).stat().st_size - 1),
+    )
+
+    assert completed.returncode == 1
+    assert completed.stderr == ""
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "invalid"
+    assert payload["errors"] == [
+        {"code": "file_too_large", "entry": entry, "line": None}
+    ]
+    assert SECRET not in completed.stdout
+    assert str(bundle) not in completed.stdout
+
+
+@pytest.mark.parametrize("flag", ["--max-manifest-bytes", "--max-records-bytes"])
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "text", "true"])
+def test_usage_when_installed_command_byte_budget_is_invalid(
+    flag: str, value: str
+) -> None:
+    completed = _cli("--bundle", "missing", "--workspace-id", WS, flag, value)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "usage:" in completed.stderr
+    assert flag in completed.stderr
 
 
 def test_not_ready_when_journal_pending(tmp_path: Path) -> None:
@@ -178,8 +246,9 @@ def test_usage_when_workspace_invalid(tmp_path: Path, workspace: str) -> None:
     )
 
 
+@pytest.mark.parametrize("bounded", [False, True])
 def test_dispatch_when_server_environment_broken(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bounded: bool
 ) -> None:
     bundle = export_bundle(tmp_path)
     monkeypatch.setenv("MCP_PORT", "not-a-port")
@@ -188,16 +257,37 @@ def test_dispatch_when_server_environment_broken(
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("REFLECTLOG_MCP_AUTH_TOKEN", raising=False)
-    completed = _verify(bundle)
+    completed = _cli(
+        "--bundle",
+        str(bundle),
+        "--workspace-id",
+        WS,
+        *(
+            ["--max-manifest-bytes", "10000", "--max-records-bytes", "10000"]
+            if bounded
+            else []
+        ),
+    )
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout)["status"] == "ready"
     assert completed.stderr == ""
 
 
-def test_imports_when_dispatched(tmp_path: Path) -> None:
+@pytest.mark.parametrize("state", ["default", "bounded", "oversized"])
+def test_imports_when_dispatched(tmp_path: Path, state: str) -> None:
     bundle = export_bundle(tmp_path)
+    options = (
+        [
+            "--max-manifest-bytes",
+            "10000",
+            "--max-records-bytes",
+            "1" if state == "oversized" else "10000",
+        ]
+        if state != "default"
+        else []
+    )
     completed = subprocess.run(
-        [sys.executable, "-c", HARNESS, str(bundle), WS],
+        [sys.executable, "-c", HARNESS, str(bundle), WS, *options],
         cwd=REPO,
         check=False,
         capture_output=True,
@@ -205,8 +295,10 @@ def test_imports_when_dispatched(tmp_path: Path) -> None:
     )
     assert completed.returncode == 0, completed.stderr
     lines = completed.stdout.splitlines()
-    assert json.loads(lines[0])["status"] == "ready"
-    assert lines[1] == "EXIT=0"
+    assert json.loads(lines[0])["status"] == (
+        "invalid" if state == "oversized" else "ready"
+    )
+    assert lines[1] == ("EXIT=1" if state == "oversized" else "EXIT=0")
     modules = set(json.loads(lines[2].removeprefix("MODULES=")))
     assert "reflectlog.application.salvage.verify_cli" in modules
     assert (
@@ -294,7 +386,10 @@ def test_runner_when_result_status(
     if state == "invalid":
         (bundle / "INCOMPLETE").touch()
     args = argparse.Namespace(
-        bundle=str(bundle), workspace_id="../x" if state == "usage" else WS
+        bundle=str(bundle),
+        workspace_id="../x" if state == "usage" else WS,
+        max_manifest_bytes=1024**2,
+        max_records_bytes=64 * 1024**2,
     )
     assert run(args) == code
     captured = capsys.readouterr()
@@ -315,7 +410,14 @@ def test_runner_when_unexpected_exception() -> None:
         ContentSalvageVerifier, "verify", side_effect=RuntimeError("bug")
     ):
         with pytest.raises(RuntimeError, match="bug"):
-            _ = run(argparse.Namespace(bundle="x", workspace_id=WS))
+            _ = run(
+                argparse.Namespace(
+                    bundle="x",
+                    workspace_id=WS,
+                    max_manifest_bytes=1024**2,
+                    max_records_bytes=64 * 1024**2,
+                )
+            )
 
 
 def test_dispatch_does_not_load_server_environment(
@@ -370,3 +472,35 @@ def test_help_when_requested(capsys: pytest.CaptureFixture[str]) -> None:
         _ = parse_args()
     assert exc.value.code == 0
     assert "{salvage,salvage-verify}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_parser_owns_verification_byte_budgets(bounded: bool) -> None:
+    options = (
+        ["--max-manifest-bytes", "17", "--max-records-bytes", "29"] if bounded else []
+    )
+    with patch(
+        "sys.argv",
+        [
+            "reflectlog",
+            "salvage-verify",
+            "--bundle",
+            "b",
+            "--workspace-id",
+            WS,
+            *options,
+        ],
+    ):
+        args = parse_args()
+
+    assert args.max_manifest_bytes == (17 if bounded else 1024**2)
+    assert args.max_records_bytes == (29 if bounded else 64 * 1024**2)
+
+
+def test_installed_command_help_lists_byte_budget_flags() -> None:
+    completed = _cli("--help")
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert "--max-manifest-bytes" in completed.stdout
+    assert "--max-records-bytes" in completed.stdout

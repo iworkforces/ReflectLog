@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Final, TypeGuard
 from reflectlog.core.exceptions import ValidationError
 from reflectlog.core.salvage import (
     AUTHENTICITY_NOT_VERIFIED,
+    DEFAULT_VERIFICATION_LIMITS,
     RECORDS_FILENAME,
     BundleEntry,
     JournalStatus,
@@ -44,6 +45,7 @@ from reflectlog.core.salvage import (
     UnresolvedReason,
     VerificationIssue,
     VerificationIssueCode,
+    VerificationLimits,
     VerificationResult,
     VerificationStatus,
 )
@@ -521,13 +523,15 @@ class ContentSalvageVerifier:
         self._reader = reader
 
     @classmethod
-    def from_defaults(cls) -> Self:
-        """Wire the read-only filesystem bundle reader."""
+    def from_defaults(
+        cls, limits: VerificationLimits = DEFAULT_VERIFICATION_LIMITS
+    ) -> Self:
+        """Wire the read-only reader with validated per-file input byte budgets."""
         from reflectlog.infrastructure.salvage_bundle_reader import (
             FileSystemBundleReader,
         )
 
-        return cls(FileSystemBundleReader())
+        return cls(FileSystemBundleReader(limits=limits))
 
     def verify(self, *, bundle: str, workspace_id: str) -> VerificationResult:
         """Verify ``bundle`` against the operator-supplied ``workspace_id``.

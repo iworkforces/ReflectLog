@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -262,6 +262,25 @@ class IBundlePublisher(Protocol):
 AUTHENTICITY_NOT_VERIFIED = "not_verified"
 
 
+@dataclass(frozen=True, slots=True)
+class VerificationLimits:
+    """Per-file input byte budgets, not a bound on total verifier memory."""
+
+    max_manifest_bytes: int = 1024 * 1024
+    max_records_bytes: int = 64 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("max_manifest_bytes", self.max_manifest_bytes),
+            ("max_records_bytes", self.max_records_bytes),
+        ):
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+
+DEFAULT_VERIFICATION_LIMITS: Final = VerificationLimits()
+
+
 class UnresolvedReason(StrEnum):
     """Closed set of ``unresolved_reasons`` codes the exporter can write."""
 
@@ -308,6 +327,7 @@ class VerificationIssueCode(StrEnum):
     FILE_SYMLINK = "file_symlink"
     FILE_NOT_REGULAR = "file_not_regular"
     FILE_UNREADABLE = "file_unreadable"
+    FILE_TOO_LARGE = "file_too_large"
     CHANGED_DURING_READ = "changed_during_read"
     UTF8_INVALID = "utf8_invalid"
     BOM_PRESENT = "bom_present"
@@ -380,7 +400,7 @@ class BundleCapture:
     """Result of reading a bundle directory without modifying it.
 
     ``issues`` hold filesystem-level findings. A file that was missing,
-    unsafe, unreadable, or observed to change is ``None`` and has an issue.
+    unsafe, unreadable, oversized, or observed to change is ``None`` and has an issue.
     """
 
     manifest: CapturedFile | None

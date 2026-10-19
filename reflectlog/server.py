@@ -8,6 +8,7 @@ import time
 from typing import TYPE_CHECKING
 
 from reflectlog.core.enums import TransportMode
+from reflectlog.core.salvage import DEFAULT_VERIFICATION_LIMITS
 from reflectlog.version import __version__
 
 if TYPE_CHECKING:
@@ -118,6 +119,16 @@ def warmup_numba_with_config(
         thread = threading.Thread(target=warmup_worker, daemon=is_daemon)
         thread.start()
         return thread
+
+
+def _positive_byte_limit(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
 
 
 def parse_args() -> argparse.Namespace:
@@ -234,6 +245,18 @@ Environment Variables:
     )
     _ = verify.add_argument(
         "--workspace-id", required=True, help="Expected workspace id (never inferred)"
+    )
+    _ = verify.add_argument(
+        "--max-manifest-bytes",
+        type=_positive_byte_limit,
+        default=DEFAULT_VERIFICATION_LIMITS.max_manifest_bytes,
+        help="Maximum manifest input bytes (default: %(default)s)",
+    )
+    _ = verify.add_argument(
+        "--max-records-bytes",
+        type=_positive_byte_limit,
+        default=DEFAULT_VERIFICATION_LIMITS.max_records_bytes,
+        help="Maximum records input bytes (default: %(default)s)",
     )
 
     return parser.parse_args()
