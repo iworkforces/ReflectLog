@@ -8,6 +8,7 @@ import type {
   DeleteMemoriesResult,
   ScoreKind,
   SearchMemoriesResult,
+  GetAllMemoriesRequest,
 } from "../../src/reflectlog/types.js";
 import { waitFor } from "../../src/reflectlog/wait-for.js";
 
@@ -110,6 +111,7 @@ export class FakeReflectLogClient implements ReflectLogClient {
   readonly #preDispatchFailures = new Map<Method, Error>();
   readonly #deferrals = new Map<Method, DeferredCall[]>();
   readonly #holds = new Map<Method, HeldConnect[]>();
+  readonly successorHints = new Map<string, Map<number, number>>();
 
   /**
    * Make the next call to `method` reject with `error` AFTER it was dispatched:
@@ -171,13 +173,13 @@ export class FakeReflectLogClient implements ReflectLogClient {
   }
 
   async searchMemories(
-    params: { workspaceId: string; query: string; limit: number },
+    params: { workspaceId: string; query: string; limit: number; explain?: boolean },
     options?: CallOptions,
   ): Promise<SearchMemoriesResult> {
     return this.#run("searchMemories", params, options, () => this.#search(params));
   }
 
-  #search(params: { workspaceId: string; query: string; limit: number }): SearchMemoriesResult {
+  #search(params: { workspaceId: string; query: string; limit: number; explain?: boolean }): SearchMemoriesResult {
     const queryTokens = tokens(params.query);
     const scored = this.#workspace(params.workspaceId)
       .records.map((record) => {
@@ -188,32 +190,44 @@ export class FakeReflectLogClient implements ReflectLogClient {
       .filter((record) => record.score > 0)
       .sort((left, right) => right.score - left.score || left.id - right.id)
       .slice(0, params.limit);
-    return { results: scored, scoreKind: scored.length > 0 ? this.scoreKind : "none", limit: params.limit };
+    const scoreKind = scored.length > 0 ? this.scoreKind : "none";
+    if (params.explain !== true) return { results: scored, scoreKind, limit: params.limit };
+    return { results: scored.map((record, index) => ({ ...record, explanation: {
+      semantic: { rank: index + 1, score: record.score }, fulltext: null,
+      preRerankScore: record.score, preRerankScoreKind: scoreKind, finalScoreKind: scoreKind,
+    } })), scoreKind, limit: params.limit,
+      stageOutcomes: { semantic: scored.length ? "applied" : "empty", fulltext: "disabled", reranker: "disabled" } };
   }
 
   async getMemoryById(
-    params: { workspaceId: string; id: number },
+    params: { workspaceId: string; id: number; includeSuccessor?: boolean },
     options?: CallOptions,
   ): Promise<GetMemoryByIdResult> {
     return this.#run("getMemoryById", params, options, () => {
       const records = this.#workspace(params.workspaceId).records;
-      return { record: records.find((record) => record.id === params.id) ?? null };
+      const record = records.find((record) => record.id === params.id) ?? null;
+      const successorId = this.successorHints.get(params.workspaceId)?.get(params.id);
+      return { record, ...(params.includeSuccessor === true && record === null
+        ? { successor: successorId !== undefined && records.some((item) => item.id === successorId) ? { id: successorId } : null } : {}) };
     });
   }
 
   async getAllMemories(
-    params: { workspaceId: string; limit: number; offset: number },
+    params: GetAllMemoriesRequest,
     options?: CallOptions,
   ): Promise<GetAllMemoriesResult> {
     return this.#run("getAllMemories", params, options, () => {
       const records = this.#workspace(params.workspaceId).records;
-      const page = records.slice(params.offset, params.offset + params.limit);
+      const offset = params.offset ?? 0;
+      const candidates = params.afterId !== undefined ? records.filter((record) => record.id > params.afterId) : records.slice(offset);
+      const page = candidates.slice(0, params.limit);
       return {
         records: page,
         total: records.length,
-        offset: params.offset,
+        offset,
         limit: params.limit,
-        truncated: params.offset + page.length < records.length,
+        truncated: page.length < candidates.length,
+        ...(params.afterId !== undefined ? { nextAfterId: page.at(-1)?.id ?? params.afterId } : {}),
       };
     });
   }

@@ -214,7 +214,7 @@ describe("runImport", () => {
 
   it("fails the run, without certifying anything per entry, when export verification misses an accepted text", async () => {
     await writeFile(join(dir, "MEMORY.md"), "Tea\n\nCoffee");
-    vi.spyOn(client, "getAllMemories").mockResolvedValue({ records: [], total: 0, limit: 500, offset: 0, truncated: false });
+    vi.spyOn(client, "getAllMemories").mockResolvedValue({ records: [], total: 0, limit: 500, offset: 0, truncated: false, nextAfterId: 0 });
     const result = await run();
     expect(result.ok).toBe(false);
     expect(result.verification).toEqual({
@@ -237,6 +237,41 @@ describe("runImport", () => {
     client.failNext("getAllMemories", new ReflectLogError("unavailable", "down"));
     const result = await run();
     expect(result).toMatchObject({ ok: false, verification: { status: "failed", errorCode: "unavailable" }, failure: { stage: "verification", code: "unavailable" } });
+  });
+
+  it("verifies acknowledged imports using same-workspace capped cursor pages", async () => {
+    await writeFile(join(dir, "MEMORY.md"), facts(5));
+    const original = client.getAllMemories.bind(client);
+    client.getAllMemories = (params, options) => original({ ...params, limit: 2 }, options);
+    const result = await run();
+    expect(result).toMatchObject({ ok: true, verification: { status: "all_observed", globalSnapshot: false } });
+    expect(client.callsTo("getAllMemories").map(call => call.params)).toEqual([
+      { workspaceId: scope.workspaceId, limit: 2, afterId: 0 },
+      { workspaceId: scope.workspaceId, limit: 2, afterId: 2 },
+      { workspaceId: scope.workspaceId, limit: 2, afterId: 4 },
+    ]);
+    expect(addCalls().every(call => call.allowReplace === false)).toBe(true);
+  });
+
+  it("keeps the archive incomplete when cursor verification cannot advance", async () => {
+    await writeFile(join(dir, "MEMORY.md"), "Tea");
+    const original = client.getAllMemories.bind(client);
+    client.getAllMemories = async (params, options) => ({ ...await original(params, options), nextAfterId: 0 });
+    const result = await run();
+    expect(result).toMatchObject({ ok: false, verification: { status: "failed", errorCode: "verification_inconsistent", globalSnapshot: false },
+      archive: { status: "incomplete" } });
+    expect(client.callsTo("getAllMemories")).toHaveLength(1);
+    expect(await readFile(join(dir, "MEMORY.md"), "utf8")).toBe("Tea");
+  });
+
+  it("reports feature incompatibility without replaying acknowledged import batches", async () => {
+    await writeFile(join(dir, "MEMORY.md"), "Tea");
+    client.failNext("getAllMemories", new ReflectLogError("incompatible", "missing after_id"));
+    const result = await run();
+    expect(result).toMatchObject({ ok: false, verification: { status: "failed", errorCode: "incompatible", globalSnapshot: false },
+      batches: [{ state: "acknowledged" }], archive: { status: "incomplete" } });
+    expect(client.callsTo("addMemories")).toHaveLength(1);
+    expect(client.callsTo("getAllMemories")).toHaveLength(1);
   });
 
   describe("archive publication faults", () => {

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import codecs
 from contextlib import closing
+from dataclasses import FrozenInstanceError
 import json
+import os
 from pathlib import Path
 import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
 
+from reflectlog.application.salvage import verification as verification_module
 from reflectlog.application.salvage.service import ContentSalvageService
 from reflectlog.application.salvage.verification import (
     ContentSalvageVerifier,
@@ -18,6 +21,7 @@ from reflectlog.application.salvage.verification import (
 )
 from reflectlog.core.salvage import (
     BundleEntry,
+    VerificationLimits,
 )
 from reflectlog.core.salvage import (
     VerificationIssueCode as Code,
@@ -51,6 +55,128 @@ type Issue = tuple[Code, BundleEntry, int | None]
 def _verify(bundle: Path, expected: str = WS) -> VerificationResult:
     return ContentSalvageVerifier.from_defaults().verify(
         bundle=str(bundle), workspace_id=expected
+    )
+
+
+@pytest.mark.parametrize("field", ["manifest", "records"])
+@pytest.mark.parametrize("value", [0, -1, True, False, 1.5, "2", None])
+def test_invalid_limits_fail_at_construction_before_filesystem_access(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: int
+) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("invalid limits must fail before filesystem access")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", forbidden)
+        patch.setattr(os, "lstat", forbidden)
+        with pytest.raises(ValueError, match="positive integer"):
+            limits = (
+                VerificationLimits(max_manifest_bytes=value)
+                if field == "manifest"
+                else VerificationLimits(max_records_bytes=value)
+            )
+            _ = ContentSalvageVerifier.from_defaults(limits)
+
+
+def test_programmatic_limits_accept_exact_non_ascii_byte_lengths(
+    tmp_path: Path,
+) -> None:
+    bundle = export_bundle(tmp_path, memories=[(WS, "\u00e9\u2603", None)])
+    records = (bundle / "memories.jsonl").read_bytes()
+    assert len(records) > len(records.decode("utf-8"))
+    limits = VerificationLimits(
+        max_manifest_bytes=(bundle / "manifest.json").stat().st_size,
+        max_records_bytes=len(records),
+    )
+
+    result = ContentSalvageVerifier.from_defaults(limits).verify(
+        bundle=str(bundle), workspace_id=WS
+    )
+
+    _assert_result(result, status=Status.READY)
+
+
+def test_verification_limits_are_immutable() -> None:
+    limits = VerificationLimits()
+
+    with pytest.raises(FrozenInstanceError):
+        setattr(limits, "max_records_bytes", 1)
+
+
+def test_programmatic_manifest_limit_can_be_raised_above_default(
+    tmp_path: Path,
+) -> None:
+    bundle = export_bundle(tmp_path, memories=[(WS, "kept", None)])
+    path = bundle / "manifest.json"
+    data = path.read_bytes()
+    cap = 1024**2 + 1
+    _ = path.write_bytes(data + b" " * (cap - len(data)))
+
+    result = ContentSalvageVerifier.from_defaults(
+        VerificationLimits(max_manifest_bytes=cap)
+    ).verify(bundle=str(bundle), workspace_id=WS)
+
+    _assert_result(result, status=Status.READY)
+
+
+@pytest.mark.parametrize("entry", [BundleEntry.MANIFEST, BundleEntry.RECORDS])
+def test_oversized_payload_never_reaches_semantic_parser_or_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: BundleEntry
+) -> None:
+    bundle = _bundle(tmp_path)
+    manifest_size = (bundle / "manifest.json").stat().st_size
+    records_size = (bundle / "memories.jsonl").stat().st_size
+    limits = VerificationLimits(
+        max_manifest_bytes=manifest_size - (entry == BundleEntry.MANIFEST),
+        max_records_bytes=records_size - (entry == BundleEntry.RECORDS),
+    )
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("oversized payload must not reach parser or hash")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            verification_module,
+            "_check_manifest" if entry == BundleEntry.MANIFEST else "_check_records",
+            forbidden,
+        )
+        patch.setattr(verification_module.hashlib, "sha256", forbidden)
+        result = ContentSalvageVerifier.from_defaults(limits).verify(
+            bundle=str(bundle), workspace_id=WS
+        )
+
+    _assert_result(
+        result,
+        status=Status.INVALID,
+        issues=((Code.FILE_TOO_LARGE, entry, None),),
+        count=1 if entry == BundleEntry.MANIFEST else None,
+        ready=None if entry == BundleEntry.MANIFEST else True,
+    )
+    _assert_payload(result, bundle)
+
+
+@pytest.mark.parametrize(
+    ("filename", "entry", "cap"),
+    [
+        ("manifest.json", BundleEntry.MANIFEST, 1024**2),
+        ("memories.jsonl", BundleEntry.RECORDS, 64 * 1024**2),
+    ],
+)
+def test_default_limits_reject_oversized_sparse_files(
+    tmp_path: Path, filename: str, entry: BundleEntry, cap: int
+) -> None:
+    bundle = export_bundle(tmp_path, memories=[(WS, "kept", None)])
+    with (bundle / filename).open("wb") as handle:
+        _ = handle.truncate(cap + 1)
+
+    result = _verify(bundle)
+
+    _assert_result(
+        result,
+        status=Status.INVALID,
+        issues=((Code.FILE_TOO_LARGE, entry, None),),
+        count=1 if entry == BundleEntry.MANIFEST else None,
+        ready=None if entry == BundleEntry.MANIFEST else True,
     )
 
 

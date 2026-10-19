@@ -10,6 +10,8 @@ import type {
   ReflectLogClient,
   ReflectLogRecord,
   ScoreKind,
+  SearchExplanation,
+  StageOutcomes,
 } from "./reflectlog/types.js";
 
 /**
@@ -30,7 +32,10 @@ export type MemoryEntry = Readonly<{
   createdAt: string | null;
 }>;
 
-export type MemoryHit = MemoryEntry & Readonly<{ score: number | null }>;
+export type MemoryHit = MemoryEntry & Readonly<{
+  score: number | null;
+  explanation?: SearchExplanation & Readonly<{ rawFinalScore: number }>;
+}>;
 
 export type SearchOutcome = Readonly<{
   hits: readonly MemoryHit[];
@@ -38,6 +43,7 @@ export type SearchOutcome = Readonly<{
   /** Whether `score` values are on a comparable 0..1 scale and exposed on hits. */
   scoresComparable: boolean;
   warning: string | null;
+  stageOutcomes?: StageOutcomes;
 }>;
 
 export type GetOutcome =
@@ -50,7 +56,7 @@ export type GetOutcome =
       truncated?: boolean;
       nextFrom?: number;
     }>
-  | Readonly<{ status: "not_found" }>;
+  | Readonly<{ status: "not_found"; successor?: Readonly<{ ref: string }> | null }>;
 
 export type ListOutcome = Readonly<{
   entries: readonly MemoryEntry[];
@@ -162,7 +168,7 @@ export class MemoryService {
 
   async search(
     scope: MemoryScope,
-    request: { query: string; maxResults?: number | undefined; minScore?: number | undefined },
+    request: { query: string; maxResults?: number | undefined; minScore?: number | undefined; explain?: boolean | undefined },
     guard: EffectGuard,
   ): Promise<SearchOutcome> {
     const trimmed = request.query.trim();
@@ -179,11 +185,15 @@ export class MemoryService {
 
     guard.assertCurrent();
     const result = await this.#client.searchMemories(
-      { workspaceId: scope.workspaceId, query, limit },
-      { signal: guard.signal },
+      { workspaceId: scope.workspaceId, query, limit, ...(request.explain === true ? { explain: true } : {}) },
+      { signal: guard.signal, ...(request.explain === true ? { beforeDispatch: guard.assertCurrent } : {}) },
     );
     guard.assertCurrent();
 
+    if (request.explain === true && (result.stageOutcomes === undefined ||
+      result.results.some((record) => record.explanation === undefined))) {
+      throw new ReflectLogError("malformed", "ReflectLog omitted requested search explanations");
+    }
     const scoresComparable = COMPARABLE_SCORE_KINDS.has(result.scoreKind);
     let records = result.results;
     const minScore = request.minScore;
@@ -201,16 +211,19 @@ export class MemoryService {
       hits: records.map((record) => ({
         ...toEntry(scope, record),
         score: scoresComparable ? record.score : null,
+        ...(request.explain === true && record.explanation !== undefined
+          ? { explanation: { ...record.explanation, rawFinalScore: record.score } } : {}),
       })),
       scoreKind: result.scoreKind,
       scoresComparable,
       warning: warnings.length > 0 ? warnings.join("; ") : null,
+      ...(request.explain === true && result.stageOutcomes !== undefined ? { stageOutcomes: result.stageOutcomes } : {}),
     };
   }
 
   async get(
     scope: MemoryScope,
-    reference: { ref: string; revision?: string | undefined },
+    reference: { ref: string; revision?: string | undefined; includeSuccessor?: boolean | undefined },
     bounds: { from?: number | undefined; lines?: number | undefined },
     guard: EffectGuard,
   ): Promise<GetOutcome> {
@@ -220,12 +233,16 @@ export class MemoryService {
     }
     guard.assertCurrent();
     const result = await this.#client.getMemoryById(
-      { workspaceId: scope.workspaceId, id },
-      { signal: guard.signal },
+      { workspaceId: scope.workspaceId, id, ...(reference.includeSuccessor === true ? { includeSuccessor: true } : {}) },
+      { signal: guard.signal, ...(reference.includeSuccessor === true ? { beforeDispatch: guard.assertCurrent } : {}) },
     );
     guard.assertCurrent();
     const record = result.record;
     if (record === null) {
+      if (reference.includeSuccessor === true) {
+        if (result.successor === undefined) throw new ReflectLogError("malformed", "ReflectLog omitted requested successor hint");
+        return { status: "not_found", successor: result.successor === null ? null : { ref: formatRef(scope, result.successor.id) } };
+      }
       return { status: "not_found" };
     }
     const entry = toEntry(scope, record);
@@ -266,8 +283,13 @@ export class MemoryService {
   async exportAll(scope: MemoryScope, guard: EffectGuard): Promise<readonly MemoryEntry[]> {
     const entries: MemoryEntry[] = [];
     let expectedTotal: number | null = null;
-    for (let offset = 0; ; ) {
-      const page = await this.list(scope, { limit: EXPORT_PAGE_SIZE, offset }, guard);
+    for (let afterId = 0; ; ) {
+      guard.assertCurrent();
+      const page = await this.#client.getAllMemories(
+        { workspaceId: scope.workspaceId, limit: EXPORT_PAGE_SIZE, afterId },
+        { signal: guard.signal, beforeDispatch: guard.assertCurrent },
+      );
+      guard.assertCurrent();
       if (expectedTotal === null) {
         expectedTotal = page.total;
       } else if (page.total !== expectedTotal) {
@@ -275,11 +297,22 @@ export class MemoryService {
           `workspace changed during export (total ${expectedTotal} -> ${page.total}); retry`,
         );
       }
-      entries.push(...page.entries);
-      offset += page.entries.length;
-      if (page.entries.length === 0 || offset >= expectedTotal) {
-        break;
+      let lastId = afterId;
+      for (const record of page.records) {
+        if (record.id <= lastId) throw new MemoryConsistencyError("export records are not strictly increasing; retry");
+        lastId = record.id;
       }
+      if (page.nextAfterId === undefined || page.nextAfterId !== lastId ||
+        page.records.length > page.limit || page.limit > EXPORT_PAGE_SIZE || page.offset !== 0 ||
+        (page.truncated && page.records.length === 0)) {
+        throw new MemoryConsistencyError("export returned an invalid cursor page; retry");
+      }
+      entries.push(...page.records.map((record) => toEntry(scope, record)));
+      if (entries.length > expectedTotal || page.truncated !== (entries.length < expectedTotal)) {
+        throw new MemoryConsistencyError(`export returned ${entries.length} records for a total of ${expectedTotal}; retry`);
+      }
+      if (!page.truncated) break;
+      afterId = page.nextAfterId;
     }
     if (entries.length !== expectedTotal || new Set(entries.map((entry) => entry.id)).size !== entries.length) {
       throw new MemoryConsistencyError(

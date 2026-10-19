@@ -51,6 +51,96 @@ async function run(tool: AnyAgentTool, params: unknown, signal?: AbortSignal) {
 }
 
 describe("memory tools", () => {
+  it("returns explanations only in opted-in structured hit details after filtering", async () => {
+    const { client, tool } = setup();
+    client.seed(owner.workspaceId, ["tea", "tea biscuits"]);
+    const search = tool(createMemorySearchTool);
+    expect(search.parameters).toHaveProperty("properties.explain.type", "boolean");
+    const result = await run(search, { query: "tea biscuits", minScore: 0.9, explain: true });
+    expect(result.details).toMatchObject({ count: 1, hits: [{ ref: `${owner.tag}:2`, score: 1,
+      explanation: { rawFinalScore: 1, semantic: { rank: 1, score: 1 }, fulltext: null,
+        preRerankScore: 1, preRerankScoreKind: "reranker", finalScoreKind: "reranker" } }],
+      stageOutcomes: { semantic: "applied", fulltext: "disabled", reranker: "disabled" } });
+    expect(client.callsTo("searchMemories")[0]?.params).toHaveProperty("explain", true);
+  });
+
+  it("keeps raw fusion evidence distinct from nullable comparable scores", async () => {
+    const { client, tool } = setup();
+    client.seed(owner.workspaceId, ["tea"]);
+    client.scoreKind = "rrf";
+    expect((await run(tool(createMemorySearchTool), { query: "tea", explain: true })).details)
+      .toMatchObject({ hits: [{ score: null, explanation: { rawFinalScore: 1, finalScoreKind: "rrf" } }] });
+  });
+
+  it("retains empty-server stages but omits diagnostics for local blank searches", async () => {
+    const { client, tool } = setup();
+    const search = tool(createMemorySearchTool);
+    expect((await run(search, { query: "tea", explain: true })).details)
+      .toMatchObject({ hits: [], stageOutcomes: { semantic: "empty", fulltext: "disabled", reranker: "disabled" } });
+    expect((await run(search, { query: " ", explain: true })).details).not.toHaveProperty("stageOutcomes");
+    expect(client.callsTo("searchMemories")).toHaveLength(1);
+  });
+
+  it.each([undefined, false])("omits default diagnostics and successor flags when opt-in is %s", async (flag) => {
+    const { client, tool } = setup();
+    client.seed(owner.workspaceId, ["tea"]);
+    const search = await run(tool(createMemorySearchTool), { query: "tea", explain: flag });
+    const get = await run(tool(createMemoryGetTool), { ref: `${owner.tag}:99`, includeSuccessor: flag });
+    expect(search.details).not.toHaveProperty("stageOutcomes");
+    expect(search.details).toHaveProperty("hits", [{ ref: `${owner.tag}:1`, score: 1, text: "tea" }]);
+    expect(get.details).toEqual({ status: "not_found" });
+    expect(client.callsTo("searchMemories")[0]?.params).not.toHaveProperty("explain");
+    expect(client.callsTo("getMemoryById")[0]?.params).not.toHaveProperty("includeSuccessor");
+  });
+
+  it("returns a scoped successor hint without fetching or deleting the hinted record", async () => {
+    const { client, tool } = setup();
+    client.seed(owner.workspaceId, ["old", "current"]);
+    await client.deleteMemories({ workspaceId: owner.workspaceId, ids: [1] });
+    client.successorHints.set(owner.workspaceId, new Map([[1, 2]]));
+    const get = tool(createMemoryGetTool);
+    expect(get.parameters).toHaveProperty("properties.includeSuccessor.type", "boolean");
+    expect((await run(get, { ref: `${owner.tag}:1`, includeSuccessor: true })).details)
+      .toEqual({ status: "not_found", successor: { ref: `${owner.tag}:2` } });
+    expect(client.callsTo("getMemoryById").map(call => call.params))
+      .toEqual([{ workspaceId: owner.workspaceId, id: 1, includeSuccessor: true }]);
+    expect(client.callsTo("deleteMemories")).toHaveLength(1);
+  });
+
+  it("returns explicit null when a missing original has no current successor", async () => {
+    const { tool } = setup();
+    expect((await run(tool(createMemoryGetTool), { ref: `${owner.tag}:99`, includeSuccessor: true })).details)
+      .toEqual({ status: "not_found", successor: null });
+  });
+
+  const optionalTools: readonly {
+    create: typeof createMemorySearchTool | typeof createMemoryGetTool;
+    method: "searchMemories" | "getMemoryById";
+    params: Readonly<{ query: string; explain: true }> | Readonly<{ ref: string; includeSuccessor: true }>;
+  }[] = [
+    { create: createMemorySearchTool, method: "searchMemories", params: { query: "tea", explain: true } },
+    { create: createMemoryGetTool, method: "getMemoryById", params: { ref: `${owner.tag}:99`, includeSuccessor: true } },
+  ];
+  it.each(optionalTools)("withholds optional $method metadata after authority revocation", async ({ create, method, params }) => {
+    const { client, tool } = setup();
+    const state = { current: true };
+    const pendingCall = client.deferNext(method);
+    const pending = run(tool(create, { ...ownerContext, assertMemoryAudienceCurrent() {
+      if (!state.current) throw new MemoryAccessDeniedError("revoked");
+    } }), params);
+    await pendingCall.dispatched;
+    state.current = false;
+    pendingCall.resolve();
+    await expect(pending).rejects.toThrow(MemoryAccessDeniedError);
+  });
+
+  it.each(["true", 1, null])("rejects nonboolean opt-ins %s before backend dispatch", async (flag) => {
+    const { client, tool } = setup();
+    await expect(run(tool(createMemorySearchTool), { query: "tea", explain: flag })).rejects.toThrow(MemoryInputError);
+    await expect(run(tool(createMemoryGetTool), { ref: `${owner.tag}:1`, includeSuccessor: flag })).rejects.toThrow(MemoryInputError);
+    expect(client.calls).toEqual([]);
+  });
+
   it("are offered only to an agent while this plugin owns the memory slot", () => {
     expect(setup({ ctx: { memoryAudience: { kind: "owner-private", agentId: "main" } } }).build(createMemorySearchTool)).toBeNull();
     expect(setup({ host: { plugins: { slots: { memory: "memory-core" } } } }).build(createMemorySearchTool)).toBeNull();

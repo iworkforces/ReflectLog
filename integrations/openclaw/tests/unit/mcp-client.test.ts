@@ -23,6 +23,24 @@ const RESULTS: Readonly<Record<string, unknown>> = {
 };
 
 const ok: Respond = async (name) => ({ structuredContent: RESULTS[name] });
+const FEATURE_TOOLS: readonly Tool[] = TOOLS.map((tool) => ({ ...tool, inputSchema: { properties: {
+  ...tool.inputSchema.properties,
+  ...(tool.name === "search_memories" ? { explain: { type: "boolean" } } : {}),
+  ...(tool.name === "get_memory_by_id" ? { include_successor: { type: "boolean" } } : {}),
+  ...(tool.name === "get_all_memories" ? { after_id: { type: "integer" } } : {}),
+} } }));
+const featureOk: Respond = async (name) => ({ structuredContent: {
+  ...RESULTS,
+  search_memories: { results: [], score_kind: "none", limit: 5,
+    stage_outcomes: { semantic: "empty", fulltext: "disabled", reranker: "skipped_single_hit" } },
+  get_memory_by_id: { record: null, successor: { id: 8 } },
+  get_all_memories: { records: [], total: 0, offset: 0, limit: 500, truncated: false, next_after_id: 0 },
+}[name] });
+const OPTIONAL_READS: readonly { name: string; run: (client: ReflectLogClient) => Promise<unknown> }[] = [
+  { name: "cursor", run: (client) => client.getAllMemories({ workspaceId: "w", limit: 500, afterId: 0 }) },
+  { name: "successor", run: (client) => client.getMemoryById({ workspaceId: "w", id: 4, includeSuccessor: true }) },
+  { name: "explain", run: (client) => client.searchMemories({ workspaceId: "w", query: "tea", limit: 5, explain: true }) },
+];
 const fail = (error: Error): Respond => async () => {
   throw error;
 };
@@ -91,6 +109,66 @@ const store = (client: ReflectLogClient, dryRun = false, signal?: AbortSignal) =
   );
 
 describe("ReflectLog MCP client", () => {
+  it("dispatches requested optional arguments with cursor zero and no offset", async () => {
+    const connection = new FakeConnection(featureOk, FEATURE_TOOLS);
+    const { client } = setup([connection]);
+    for (const read of OPTIONAL_READS) await read.run(client);
+    expect(connection.calls).toEqual([
+      { name: "get_all_memories", arguments: { workspace_id: "w", limit: 500, after_id: 0 } },
+      { name: "get_memory_by_id", arguments: { workspace_id: "w", id: 4, include_successor: true } },
+      { name: "search_memories", arguments: { workspace_id: "w", query: "tea", limit: 5, explain: true } },
+    ]);
+  });
+
+  it("omits explicit false flags and unsolicited diagnostics from ordinary results", async () => {
+    const connection = new FakeConnection(featureOk, FEATURE_TOOLS);
+    const { client } = setup([connection]);
+    expect(await client.getMemoryById({ workspaceId: "w", id: 4, includeSuccessor: false })).toEqual({ record: null });
+    expect(await client.searchMemories({ workspaceId: "w", query: "tea", limit: 5, explain: false })).toEqual({ results: [], scoreKind: "none", limit: 5 });
+    expect(connection.calls.map((call) => call.arguments)).toEqual([
+      { workspace_id: "w", id: 4 }, { workspace_id: "w", query: "tea", limit: 5 },
+    ]);
+  });
+
+  it.each(OPTIONAL_READS)("rejects unsupported $name without breaking adjacent default reads", async ({ run }) => {
+    const connection = new FakeConnection();
+    const { client } = setup([connection]);
+    await expect(run(client)).rejects.toMatchObject({ code: "incompatible" });
+    expect(connection.calls).toEqual([]);
+    await expect(health(client)).resolves.toHaveProperty("total", 0);
+    await expect(client.getMemoryById({ workspaceId: "w", id: 4 })).resolves.toEqual({ record: null });
+    await expect(client.searchMemories({ workspaceId: "w", query: "tea", limit: 5 })).resolves.toHaveProperty("results", []);
+  });
+
+  it.each(OPTIONAL_READS)("rechecks $name capability after safe-read reconnect", async ({ run }) => {
+    const first = new FakeConnection(fail(new Error("socket closed")), FEATURE_TOOLS);
+    const second = new FakeConnection();
+    const { client, connect } = setup([first, second]);
+    await expect(run(client)).rejects.toMatchObject({ code: "incompatible" });
+    expect(first.calls).toHaveLength(1);
+    expect(second.calls).toEqual([]);
+    await expect(health(client)).resolves.toHaveProperty("total", 0);
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(OPTIONAL_READS)("retries $name once and preserves requested arguments", async ({ run }) => {
+    const first = new FakeConnection(fail(new Error("socket closed")), FEATURE_TOOLS);
+    const second = new FakeConnection(featureOk, FEATURE_TOOLS);
+    const { client } = setup([first, second]);
+    await run(client);
+    expect(first.calls).toEqual(second.calls);
+    expect(second.calls).toHaveLength(1);
+  });
+
+  it.each(OPTIONAL_READS)("fails $name with missing requested metadata without retry", async ({ run }) => {
+    const connection = new FakeConnection(ok, FEATURE_TOOLS);
+    const { client, connect } = setup([connection]);
+    await expect(run(client)).rejects.toMatchObject({ code: "malformed" });
+    expect(connection.calls).toHaveLength(1);
+    expect(connect).toHaveBeenCalledTimes(1);
+    await expect(health(client)).resolves.toHaveProperty("total", 0);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

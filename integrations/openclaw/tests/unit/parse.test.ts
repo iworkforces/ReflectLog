@@ -7,10 +7,14 @@ import {
   parseToolResponse,
   deleteMemoriesSchema,
   searchMemoriesSchema,
+  cursorMemoriesSchema, successorMemoryByIdSchema, explainedSearchMemoriesSchema,
 } from "../../src/reflectlog/parse.js";
 import { ReflectLogError } from "../../src/reflectlog/types.js";
 
 const record = { id: 7, memory: "Prefers tea", created_at: "2026-10-10 00:00:00" };
+const evidence = { semantic: { rank: 2, score: -0.3 }, fulltext: null,
+  pre_rerank_score: 0.016, pre_rerank_score_kind: "rrf", final_score_kind: "reranker" };
+const stages = { semantic: "applied", fulltext: "empty", reranker: "degraded" };
 
 function caught(run: () => unknown): ReflectLogError {
   try {
@@ -25,6 +29,62 @@ function caught(run: () => unknown): ReflectLogError {
 }
 
 describe("ReflectLog tool results", () => {
+  it.each([0, 7])("decodes cursor continuation %i without adding it to offset pages", (cursor) => {
+    const payload = { records: [], total: 0, offset: 0, limit: 500, truncated: false, next_after_id: cursor };
+    expect(parseToolResponse({ structuredContent: payload }, cursorMemoriesSchema)).toHaveProperty("nextAfterId", cursor);
+    expect(parseToolResponse({ structuredContent: payload }, getAllMemoriesSchema)).not.toHaveProperty("nextAfterId");
+  });
+
+  it.each([undefined, null, -1, 1.5, "7", Number.MAX_SAFE_INTEGER + 1])("rejects malformed cursor %s", (cursor) => {
+    const payload = { records: [], total: 0, offset: 0, limit: 500, truncated: false, next_after_id: cursor };
+    expect(caught(() => parseToolResponse({ structuredContent: payload }, cursorMemoriesSchema)).code).toBe("malformed");
+  });
+
+  it.each([null, { id: 9 }])("decodes a requested nullable successor %s", (successor) => {
+    expect(parseToolResponse({ structuredContent: { record: null, successor } }, successorMemoryByIdSchema))
+      .toEqual({ record: null, successor });
+  });
+
+  it.each([undefined, {}, { id: 0 }, { id: -1 }, { id: 1.2 }, { id: "9" }, { id: Number.MAX_SAFE_INTEGER + 1 }])("rejects a missing or malformed requested successor %s", (successor) => {
+    expect(caught(() => parseToolResponse({ structuredContent: { record: null, successor } }, successorMemoryByIdSchema)).code).toBe("malformed");
+  });
+
+  it("accepts an existing original without successor metadata and strips unsolicited default hints", () => {
+    expect(parseToolResponse({ structuredContent: { record } }, successorMemoryByIdSchema)).toHaveProperty("record.id", 7);
+    expect(parseToolResponse({ structuredContent: { record: null, successor: { id: 9 } } }, getMemoryByIdSchema)).toEqual({ record: null });
+  });
+
+  it("preserves raw evidence and explicit absent backend contributions", () => {
+    const payload = { results: [{ ...record, score: 0.83, explanation: evidence }], score_kind: "reranker", limit: 5, stage_outcomes: stages };
+    expect(parseToolResponse({ structuredContent: payload }, explainedSearchMemoriesSchema)).toMatchObject({
+      stageOutcomes: stages, results: [{ score: 0.83, explanation: { semantic: { rank: 2, score: -0.3 }, fulltext: null,
+        preRerankScore: 0.016, preRerankScoreKind: "rrf", finalScoreKind: "reranker" } }],
+    });
+    expect(parseToolResponse({ structuredContent: payload }, searchMemoriesSchema)).not.toHaveProperty("stageOutcomes");
+    expect(parseToolResponse({ structuredContent: payload }, searchMemoriesSchema).results[0]).not.toHaveProperty("explanation");
+  });
+
+  it.each(["disabled", "failed", "unavailable", "empty", "skipped_single_hit", "applied", "degraded"])("accepts stage outcome %s even with no hits", (stage) => {
+    const stageOutcomes = { semantic: stage, fulltext: stage, reranker: stage };
+    const payload = { results: [], score_kind: "none", limit: 5, stage_outcomes: stageOutcomes };
+    expect(parseToolResponse({ structuredContent: payload }, explainedSearchMemoriesSchema)).toHaveProperty("stageOutcomes", stageOutcomes);
+  });
+
+  it.each([
+    undefined, { ...evidence, semantic: undefined }, { ...evidence, fulltext: undefined },
+    { ...evidence, semantic: { rank: 0, score: 1 } }, { ...evidence, semantic: { rank: 1.5, score: 1 } },
+    { ...evidence, fulltext: { rank: 1, score: Infinity } }, { ...evidence, pre_rerank_score: NaN },
+    { ...evidence, pre_rerank_score_kind: "bm25" }, { ...evidence, final_score_kind: "confidence" },
+  ])("rejects missing or malformed hit evidence %s", (explanation) => {
+    const payload = { results: [{ ...record, score: 0.8, explanation }], score_kind: "reranker", limit: 5, stage_outcomes: stages };
+    expect(caught(() => parseToolResponse({ structuredContent: payload }, explainedSearchMemoriesSchema)).code).toBe("malformed");
+  });
+
+  it.each([undefined, { ...stages, reranker: "skipped" }, { semantic: "applied" }])("requires complete known stages on empty responses %s", (stage_outcomes) => {
+    const payload = { results: [], score_kind: "none", limit: 5, stage_outcomes };
+    expect(caught(() => parseToolResponse({ structuredContent: payload }, explainedSearchMemoriesSchema)).code).toBe("malformed");
+  });
+
   it("maps search_memories to camelCase scored records", () => {
     const payload = { results: [{ ...record, score: 0.82 }], score_kind: "reranker", limit: 5 };
     expect(parseToolResponse({ structuredContent: payload }, searchMemoriesSchema)).toEqual({

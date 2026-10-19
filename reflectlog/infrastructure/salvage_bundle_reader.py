@@ -7,8 +7,9 @@ and ``memories.jsonl`` are examined with ``lstat`` first, so a FIFO or device
 is rejected before any ``open`` could block on it, and each file is opened
 with ``O_NOFOLLOW`` and ``O_NONBLOCK`` where the platform has them.
 
-Each required file is read exactly once into memory from a single descriptor;
-callers hash and parse those same bytes and never re-read the path.
+Each required file is captured from a single descriptor within its byte budget;
+callers hash and parse those same bytes and never re-read the path. Oversized
+files yield no payload. These input limits do not bound total verifier memory.
 
 Change detection covers *observed* changes only: the descriptor's identity,
 size and ``mtime_ns`` before and after the read, a fresh ``lstat`` of the path
@@ -28,6 +29,7 @@ import sys
 from typing import TYPE_CHECKING, Final
 
 from reflectlog.core.salvage import (
+    DEFAULT_VERIFICATION_LIMITS,
     INCOMPLETE_MARKER,
     MANIFEST_FILENAME,
     RECORDS_FILENAME,
@@ -36,6 +38,7 @@ from reflectlog.core.salvage import (
     CapturedFile,
     VerificationIssue,
     VerificationIssueCode,
+    VerificationLimits,
 )
 
 if TYPE_CHECKING:
@@ -98,13 +101,20 @@ class FileSystemBundleReader:
     """``IBundleReader`` that reads a bundle directory without modifying it.
 
     Args:
-        after_capture: Called once after every required file was read and
+        after_capture: Called once after both required-file capture attempts and
             before the change re-checks; a seam so tests can mutate the bundle
             at the exact point a concurrent writer would be observed.
+        limits: Positive per-file input byte budgets.
     """
 
-    def __init__(self, after_capture: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        after_capture: Callable[[], None] | None = None,
+        *,
+        limits: VerificationLimits = DEFAULT_VERIFICATION_LIMITS,
+    ) -> None:
         self._after_capture = after_capture
+        self._limits = limits
 
     def capture(self, bundle_dir: str) -> BundleCapture:
         root_path = _strip_trailing_separators(bundle_dir)
@@ -177,7 +187,12 @@ class FileSystemBundleReader:
     def _read(
         self, path: str, entry: BundleEntry, issues: list[VerificationIssue]
     ) -> _Read | None:
-        outcome = _read_once(path)
+        cap = (
+            self._limits.max_manifest_bytes
+            if entry == BundleEntry.MANIFEST
+            else self._limits.max_records_bytes
+        )
+        outcome = _read_once(path, cap)
         if isinstance(outcome, VerificationIssueCode):
             issues.append(VerificationIssue(outcome, entry))
             return None
@@ -236,8 +251,8 @@ class FileSystemBundleReader:
         return CapturedFile(captured.data)
 
 
-def _read_once(path: str) -> _Read | VerificationIssueCode:
-    """Read one regular file fully from one descriptor, or say why not."""
+def _read_once(path: str, cap: int) -> _Read | VerificationIssueCode:
+    """Capture one regular file within its budget, or say why not."""
     try:
         listed = os.lstat(path)
     except FileNotFoundError:
@@ -262,8 +277,14 @@ def _read_once(path: str) -> _Read | VerificationIssueCode:
             return VerificationIssueCode.FILE_NOT_REGULAR
         if not opened.same_object(_Stamp.of(listed)):
             return VerificationIssueCode.CHANGED_DURING_READ
+        if opened.size > cap:
+            return VerificationIssueCode.FILE_TOO_LARGE
         chunks: list[bytes] = []
-        while chunk := os.read(descriptor, _CHUNK):
+        received = 0
+        while chunk := os.read(descriptor, min(_CHUNK, cap + 1 - received)):
+            received += len(chunk)
+            if received > cap:
+                return VerificationIssueCode.FILE_TOO_LARGE
             chunks.append(chunk)
         closed = _Stamp.of(os.fstat(descriptor))
     except OSError:

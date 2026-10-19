@@ -18,6 +18,7 @@ from reflectlog.core.salvage import (
     BundleEntry,
     CapturedFile,
     VerificationIssue,
+    VerificationLimits,
 )
 from reflectlog.core.salvage import (
     VerificationIssueCode as Code,
@@ -488,6 +489,155 @@ def test_multiple_chunks_are_byte_exact(
     result = FileSystemBundleReader().capture(str(bundle))
 
     assert result == BundleCapture(CapturedFile(MANIFEST), CapturedFile(payload), ())
+
+
+@pytest.mark.parametrize(("filename", "entry"), REQUIRED)
+@pytest.mark.parametrize("extra", [b"", b"x"])
+def test_byte_limit_accepts_exact_cap_and_discards_cap_plus_one(
+    tmp_path: Path, filename: str, entry: BundleEntry, extra: bytes
+) -> None:
+    payload = "\u00e9\u2603".encode("utf-8")
+    bundle = _bundle(tmp_path / "bundle", payload)
+    _ = (bundle / MANIFEST_FILENAME).write_bytes(payload)
+    _ = (bundle / filename).write_bytes(payload + extra)
+    limits = VerificationLimits(
+        max_manifest_bytes=len(payload), max_records_bytes=len(payload)
+    )
+
+    result = FileSystemBundleReader(limits=limits).capture(str(bundle))
+
+    assert _issues(result) == ({(Code.FILE_TOO_LARGE, entry)} if extra else set())
+    assert result.manifest == (
+        None if extra and entry == BundleEntry.MANIFEST else CapturedFile(payload)
+    )
+    assert result.records == (
+        None if extra and entry == BundleEntry.RECORDS else CapturedFile(payload)
+    )
+
+
+@pytest.mark.parametrize("failure", ["size", "fstat", "read"])
+def test_descriptor_failure_closes_without_reading_oversized_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    bundle = _bundle(tmp_path / "bundle")
+    real_open, real_fstat, real_read = os.open, os.fstat, os.read
+    opened: list[int] = []
+    target: list[int] = []
+    reads: list[int] = []
+
+    def tracked_open(path: str, flags: int) -> int:
+        descriptor = real_open(path, flags)
+        opened.append(descriptor)
+        if path == str(bundle / RECORDS_FILENAME):
+            target.append(descriptor)
+        return descriptor
+
+    def failing_fstat(descriptor: int) -> os.stat_result:
+        if descriptor in target:
+            if failure == "fstat":
+                raise OSError("stat failed")
+            if failure == "size":
+                fields = list(real_fstat(descriptor))
+                fields[6] = len(RECORDS) + 1
+                return os.stat_result(fields)
+        return real_fstat(descriptor)
+
+    def guarded_read(descriptor: int, size: int) -> bytes:
+        if descriptor in target:
+            reads.append(size)
+            assert failure == "read", "oversized descriptors must not be read"
+            raise OSError("read failed")
+        return real_read(descriptor, size)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", tracked_open)
+        patch.setattr(os, "fstat", failing_fstat)
+        patch.setattr(os, "read", guarded_read)
+        result = FileSystemBundleReader(
+            limits=VerificationLimits(max_records_bytes=len(RECORDS))
+        ).capture(str(bundle))
+
+    expected = Code.FILE_TOO_LARGE if failure == "size" else Code.FILE_UNREADABLE
+    assert _issues(result) == {(expected, BundleEntry.RECORDS)}
+    assert result.records is None
+    assert bool(reads) == (failure == "read")
+    for descriptor in opened:
+        with pytest.raises(OSError):
+            _ = real_fstat(descriptor)
+
+
+def test_short_reads_continue_to_eof_at_exact_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"1234567"
+    bundle = _bundle(tmp_path / "bundle", payload)
+    _ = (bundle / MANIFEST_FILENAME).write_bytes(payload)
+    real_read = os.read
+    requests: list[int] = []
+
+    def short_read(descriptor: int, size: int) -> bytes:
+        requests.append(size)
+        return real_read(descriptor, min(size, 2))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(reader_module, "_CHUNK", 3)
+        patch.setattr(os, "read", short_read)
+        result = FileSystemBundleReader(
+            limits=VerificationLimits(max_manifest_bytes=7, max_records_bytes=7)
+        ).capture(str(bundle))
+
+    assert result == BundleCapture(CapturedFile(payload), CapturedFile(payload), ())
+    assert requests == [3, 3, 3, 2, 1] * 2
+
+
+@pytest.mark.parametrize("short", [1, 3])
+@pytest.mark.parametrize("extra", [b"567", b"5678more bytes never read"])
+def test_growth_is_bounded_cumulatively_and_observed_changes_are_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, short: int, extra: bytes
+) -> None:
+    bundle = _bundle(tmp_path / "bundle", b"1234")
+    records = bundle / RECORDS_FILENAME
+    real_open, real_read, real_fstat = os.open, os.read, os.fstat
+    target: list[int] = []
+    requests: list[int] = []
+    received = 0
+
+    def tracked_open(path: str, flags: int) -> int:
+        descriptor = real_open(path, flags)
+        if path == str(records):
+            target.append(descriptor)
+        return descriptor
+
+    def growing_read(descriptor: int, size: int) -> bytes:
+        nonlocal received
+        if descriptor not in target:
+            return real_read(descriptor, size)
+        if not requests:
+            with records.open("ab") as handle:
+                _ = handle.write(extra)
+        assert 0 < size <= min(3, 8 - received)
+        requests.append(size)
+        chunk = real_read(descriptor, min(size, short))
+        received += len(chunk)
+        return chunk
+
+    with monkeypatch.context() as patch:
+        patch.setattr(reader_module, "_CHUNK", 3)
+        patch.setattr(os, "open", tracked_open)
+        patch.setattr(os, "read", growing_read)
+        result = FileSystemBundleReader(
+            limits=VerificationLimits(max_records_bytes=7)
+        ).capture(str(bundle))
+
+    oversized = len(extra) > 3
+    expected = Code.FILE_TOO_LARGE if oversized else Code.CHANGED_DURING_READ
+    assert _issues(result) == {(expected, BundleEntry.RECORDS)}
+    assert result.records is None
+    assert received == (8 if oversized else 7)
+    assert requests[-1] == (2 if oversized and short == 3 else 1)
+    for descriptor in target:
+        with pytest.raises(OSError):
+            _ = real_fstat(descriptor)
 
 
 def test_reader_imports_no_mutation_database_engine_or_application_modules() -> None:

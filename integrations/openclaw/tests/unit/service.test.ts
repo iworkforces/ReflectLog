@@ -6,6 +6,7 @@ import { FlushCapacityError, FlushDisposedError } from "../../src/flush-ledger.j
 import { revisionOf } from "../../src/references.js";
 import { MemoryConsistencyError, MemoryInputError, MemoryService } from "../../src/service.js";
 import { ReflectLogError } from "../../src/reflectlog/types.js";
+import type { GetAllMemoriesResult } from "../../src/reflectlog/types.js";
 import { FakeReflectLogClient, allowAll } from "../support/fake-client.js";
 
 function setup(raw: unknown = {}, flush: { maxEntries?: number; ttlMs?: number; now?: () => number } = {}) {
@@ -21,6 +22,67 @@ function setup(raw: unknown = {}, flush: { maxEntries?: number; ttlMs?: number; 
 }
 
 describe("search", () => {
+  it("keeps explanations associated with surviving scoped hits without changing ranks", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["tea", "tea biscuits"]);
+    const original = client.searchMemories.bind(client);
+    client.searchMemories = async (params, options) => {
+      const result = await original(params, options);
+      return { ...result, results: result.results.map(record => record.explanation === undefined ? record : {
+        ...record, explanation: { ...record.explanation, semantic: { rank: record.id + 5, score: record.score } },
+      }) };
+    };
+    const result = await service.search(scope, { query: "tea biscuits", minScore: 0.9, explain: true }, allowAll);
+    expect(result.hits).toMatchObject([{ ref: `${scope.tag}:2`, score: 1,
+      explanation: { semantic: { rank: 7, score: 1 }, fulltext: null, rawFinalScore: 1 } }]);
+    expect(result.stageOutcomes).toEqual({ semantic: "applied", fulltext: "disabled", reranker: "disabled" });
+  });
+
+  it("retains raw incomparable scores and stages when thresholding removes all hits", async () => {
+    const { client, service, scope } = setup();
+    client.scoreKind = "rrf";
+    client.seed(scope.workspaceId, ["tea"]);
+    const raw = await service.search(scope, { query: "tea", explain: true }, allowAll);
+    expect(raw.hits[0]).toMatchObject({ score: null, explanation: { rawFinalScore: 1, preRerankScore: 1, preRerankScoreKind: "rrf" } });
+    const filtered = await service.search(scope, { query: "tea", explain: true, minScore: 0.1 }, allowAll);
+    expect(filtered.hits).toEqual([]);
+    expect(filtered.stageOutcomes).toEqual(raw.stageOutcomes);
+  });
+
+  it("keeps server-empty stages but omits diagnostics for blank local queries and defaults", async () => {
+    const { client, service, scope } = setup();
+    const empty = await service.search(scope, { query: "absent", explain: true }, allowAll);
+    expect(empty).toMatchObject({ hits: [], stageOutcomes: { semantic: "empty" } });
+    const blank = await service.search(scope, { query: "  ", explain: true }, allowAll);
+    expect(blank).not.toHaveProperty("stageOutcomes");
+    expect(client.callsTo("searchMemories")).toHaveLength(1);
+    const ordinary = await service.search(scope, { query: "absent" }, allowAll);
+    expect(ordinary).not.toHaveProperty("stageOutcomes");
+    expect(client.callsTo("searchMemories")[1]?.params).not.toHaveProperty("explain");
+  });
+
+  it("isolates explanation evidence across concurrent searches resolving in reverse order", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["tea", "coffee"]);
+    const first = client.deferNext("searchMemories");
+    const second = client.deferNext("searchMemories");
+    const tea = service.search(scope, { query: "tea", explain: true }, allowAll);
+    const coffee = service.search(scope, { query: "coffee", explain: true }, allowAll);
+    await Promise.all([first.dispatched, second.dispatched]);
+    second.resolve();
+    expect((await coffee).hits).toMatchObject([{ ref: `${scope.tag}:2`, explanation: { rawFinalScore: 1 } }]);
+    first.resolve();
+    expect((await tea).hits).toMatchObject([{ ref: `${scope.tag}:1`, explanation: { rawFinalScore: 1 } }]);
+  });
+
+  it("withholds requested diagnostics when authority is revoked during dispatch", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["tea"]);
+    const guard = { assertCurrent() { if (client.calls.length) throw new Error("revoked"); } };
+    await expect(service.search(scope, { query: "tea", explain: true }, guard)).rejects.toThrow("revoked");
+    expect(client.callsTo("searchMemories")).toHaveLength(1);
+  });
+
   it("returns scope-bound references and comparable scores", async () => {
     const { client, service, scope } = setup();
     client.seed(scope.workspaceId, ["prefers tea over coffee", "lives in Hanoi"]);
@@ -91,6 +153,49 @@ describe("search", () => {
 });
 
 describe("get", () => {
+  it("returns only a scoped successor hint for a missing original without following or redirecting deletion", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["old", "replacement"]);
+    await client.deleteMemories({ workspaceId: scope.workspaceId, ids: [1] });
+    client.successorHints.set(scope.workspaceId, new Map([[1, 2]]));
+    const result = await service.get(scope, { ref: `${scope.tag}:1`, includeSuccessor: true }, {}, allowAll);
+    expect(result).toEqual({ status: "not_found", successor: { ref: `${scope.tag}:2` } });
+    expect(client.callsTo("getMemoryById")).toHaveLength(1);
+    expect(await service.forget(scope, [`${scope.tag}:1`], allowAll)).toEqual({ removed: [], missing: [`${scope.tag}:1`] });
+    expect(client.records(scope.workspaceId).map((record) => record.id)).toEqual([2]);
+  });
+
+  it("distinguishes no current successor from a re-added matching record's current identity", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["old", "matching content"]);
+    await client.deleteMemories({ workspaceId: scope.workspaceId, ids: [1, 2] });
+    client.successorHints.set(scope.workspaceId, new Map([[1, 2]]));
+    expect(await service.get(scope, { ref: `${scope.tag}:1`, includeSuccessor: true }, {}, allowAll))
+      .toEqual({ status: "not_found", successor: null });
+    client.seed(scope.workspaceId, ["matching content"]);
+    client.successorHints.set(scope.workspaceId, new Map([[1, 3]]));
+    expect(await service.get(scope, { ref: `${scope.tag}:1`, includeSuccessor: true }, {}, allowAll))
+      .toEqual({ status: "not_found", successor: { ref: `${scope.tag}:3` } });
+  });
+
+  it("leaves stale revisions and foreign refs as plain not-found even when hints are requested", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["original"]);
+    expect(await service.get(scope, { ref: `${scope.tag}:1`, revision: revisionOf("stale"), includeSuccessor: true }, {}, allowAll))
+      .toEqual({ status: "not_found" });
+    const calls = client.calls.length;
+    expect(await service.get(scope, { ref: "0123456789:1", includeSuccessor: true }, {}, allowAll)).toEqual({ status: "not_found" });
+    expect(client.calls).toHaveLength(calls);
+  });
+
+  it("withholds a returned successor after authority revocation", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["target"]);
+    client.successorHints.set(scope.workspaceId, new Map([[9, 1]]));
+    const guard = { assertCurrent() { if (client.calls.length) throw new Error("revoked"); } };
+    await expect(service.get(scope, { ref: `${scope.tag}:9`, includeSuccessor: true }, {}, guard)).rejects.toThrow("revoked");
+  });
+
   it("resolves a reference and slices lines", async () => {
     const { client, service, scope } = setup();
     client.seed(scope.workspaceId, ["one\ntwo\nthree"]);
@@ -201,6 +306,83 @@ describe("store and forget", () => {
 });
 
 describe("export", () => {
+  it("starts cursor zero and follows server-capped pages without offset traversal", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, ["one", "two", "three"]);
+    const original = client.getAllMemories.bind(client);
+    client.getAllMemories = (params, options) => original({ ...params, limit: 2 }, options);
+    expect((await service.exportAll(scope, allowAll)).map((entry) => entry.id)).toEqual([1, 2, 3]);
+    expect(client.callsTo("getAllMemories").map((call) => call.params)).toEqual([
+      { workspaceId: scope.workspaceId, limit: 2, afterId: 0 },
+      { workspaceId: scope.workspaceId, limit: 2, afterId: 2 },
+    ]);
+  });
+
+  const firstRecord = { id: 1, memory: "one", createdAt: null };
+  const badPages: readonly { name: string; page: Partial<GetAllMemoriesResult> }[] = [
+    { name: "repeated cursor", page: { nextAfterId: 0 } },
+    { name: "regressing cursor", page: { nextAfterId: -1 } },
+    { name: "cursor beyond last record", page: { nextAfterId: 2 } },
+    { name: "empty truncated", page: { records: [], nextAfterId: 0, truncated: true } },
+    { name: "empty terminal with nonzero total", page: { records: [], nextAfterId: 0 } },
+    { name: "early terminal", page: { total: 2 } },
+    { name: "truncated at total", page: { truncated: true } },
+    { name: "excess count", page: { total: 0 } },
+    { name: "duplicate identities", page: { records: [firstRecord, firstRecord], total: 2 } },
+    { name: "unordered identities", page: { records: [{ ...firstRecord, id: 2 }, firstRecord], total: 2 } },
+    { name: "record beyond page limit", page: { limit: 0 } },
+    { name: "offset page", page: { offset: 1 } },
+  ];
+  it.each(badPages)("rejects $name without falling back or looping", async ({ page }) => {
+    const { client, service, scope } = setup();
+    client.getAllMemories = async () => ({ records: [firstRecord], total: 1, offset: 0, limit: 500,
+      truncated: false, nextAfterId: 1, ...page });
+    await expect(service.exportAll(scope, allowAll)).rejects.toBeInstanceOf(MemoryConsistencyError);
+  });
+
+  it("rejects missing cursor metadata without an offset fallback", async () => {
+    const { client, service, scope } = setup();
+    client.getAllMemories = async () => ({ records: [firstRecord], total: 1, offset: 0, limit: 500, truncated: false });
+    await expect(service.exportAll(scope, allowAll)).rejects.toBeInstanceOf(MemoryConsistencyError);
+  });
+
+  it("rejects duplicate identities across page boundaries", async () => {
+    const { client, service, scope } = setup();
+    client.getAllMemories = async (params) => ({ records: [firstRecord], total: 2, offset: 0,
+      limit: 1, truncated: params.afterId === 0, nextAfterId: 1 });
+    await expect(service.exportAll(scope, allowAll)).rejects.toBeInstanceOf(MemoryConsistencyError);
+  });
+
+  it("accepts an empty terminal page at cursor zero", async () => {
+    const { client, service, scope } = setup();
+    expect(await service.exportAll(scope, allowAll)).toEqual([]);
+    expect(client.callsTo("getAllMemories")[0]?.params).toEqual({ workspaceId: scope.workspaceId, limit: 500, afterId: 0 });
+  });
+
+  it("detects lower-ID deletion conservatively while requesting the same keyset continuation", async () => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, Array.from({ length: 503 }, (_, index) => `memory ${index}`));
+    const original = client.getAllMemories.bind(client);
+    client.getAllMemories = async (params, options) => {
+      if (params.afterId === 500) await client.deleteMemories({ workspaceId: scope.workspaceId, ids: [1] });
+      return original(params, options);
+    };
+    await expect(service.exportAll(scope, allowAll)).rejects.toBeInstanceOf(MemoryConsistencyError);
+    expect(client.callsTo("getAllMemories")[1]?.params).toHaveProperty("afterId", 500);
+  });
+
+  it.each(["before-next-page", "after-page"])("withholds exports when revoked %s", async (when) => {
+    const { client, service, scope } = setup();
+    client.seed(scope.workspaceId, Array.from({ length: 503 }, (_, index) => `memory ${index}`));
+    let checks = 0;
+    const guard = { assertCurrent() {
+      checks++;
+      if (checks === (when === "after-page" ? 3 : 4)) throw new Error("revoked");
+    } };
+    await expect(service.exportAll(scope, guard)).rejects.toThrow("revoked");
+    expect(client.callsTo("getAllMemories")).toHaveLength(1);
+  });
+
   it("collects every page", async () => {
     const { client, service, scope } = setup();
     client.seed(scope.workspaceId, Array.from({ length: 1203 }, (_, index) => `memory ${index}`));

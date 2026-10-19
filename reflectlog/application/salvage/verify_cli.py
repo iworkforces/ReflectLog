@@ -10,15 +10,23 @@ from reflectlog.application.salvage.verification import (
     ContentSalvageVerifier,
     result_payload,
 )
-from reflectlog.core.salvage import VerificationIssueCode, VerificationStatus
+from reflectlog.core.salvage import (
+    VerificationIssueCode,
+    VerificationLimits,
+    VerificationStatus,
+)
 
 if TYPE_CHECKING:
     import argparse
 
 
 def run(args: argparse.Namespace) -> int:
-    """Verify with default wiring and emit only the content-free result."""
-    result = ContentSalvageVerifier.from_defaults().verify(
+    """Verify with the parsed byte budgets and emit only the content-free result."""
+    limits = VerificationLimits(
+        max_manifest_bytes=args.max_manifest_bytes,
+        max_records_bytes=args.max_records_bytes,
+    )
+    result = ContentSalvageVerifier.from_defaults(limits).verify(
         bundle=str(args.bundle), workspace_id=str(args.workspace_id)
     )
     if any(
