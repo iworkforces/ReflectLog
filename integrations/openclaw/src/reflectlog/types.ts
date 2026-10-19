@@ -7,16 +7,30 @@ export type ReflectLogRecord = {
   readonly createdAt: string | null;
 };
 
-export type ScoredRecord = ReflectLogRecord & { readonly score: number };
+export type StageOutcome = "disabled" | "failed" | "unavailable" | "empty" | "skipped_single_hit" | "applied" | "degraded";
+export type StageOutcomes = Readonly<{ semantic: StageOutcome; fulltext: StageOutcome; reranker: StageOutcome }>;
+export type SearchExplanation = Readonly<{
+  semantic: Readonly<{ rank: number; score: number }> | null;
+  fulltext: Readonly<{ rank: number; score: number }> | null;
+  preRerankScore: number;
+  preRerankScoreKind: ScoreKind;
+  finalScoreKind: ScoreKind;
+}>;
+export type ScoredRecord = ReflectLogRecord & {
+  readonly score: number;
+  readonly explanation?: SearchExplanation;
+};
 
 export type SearchMemoriesResult = {
   readonly results: readonly ScoredRecord[];
   readonly scoreKind: ScoreKind;
   readonly limit: number;
+  readonly stageOutcomes?: StageOutcomes;
 };
 
 export type GetMemoryByIdResult = {
   readonly record: ReflectLogRecord | null;
+  readonly successor?: Readonly<{ id: number }> | null;
 };
 
 export type GetAllMemoriesResult = {
@@ -25,7 +39,13 @@ export type GetAllMemoriesResult = {
   readonly offset: number;
   readonly limit: number;
   readonly truncated: boolean;
+  readonly nextAfterId?: number;
 };
+
+export type GetAllMemoriesRequest = Readonly<{ workspaceId: string; limit: number }> & (
+  | Readonly<{ offset: number; afterId?: never }>
+  | Readonly<{ afterId: number; offset?: never }>
+);
 
 export type DeleteMemoriesResult = {
   readonly removed: readonly number[];
@@ -67,15 +87,15 @@ export type CallOptions = {
  */
 export interface ReflectLogClient {
   searchMemories(
-    params: { workspaceId: string; query: string; limit: number },
+    params: { workspaceId: string; query: string; limit: number; explain?: boolean },
     options?: CallOptions,
   ): Promise<SearchMemoriesResult>;
   getMemoryById(
-    params: { workspaceId: string; id: number },
+    params: { workspaceId: string; id: number; includeSuccessor?: boolean },
     options?: CallOptions,
   ): Promise<GetMemoryByIdResult>;
   getAllMemories(
-    params: { workspaceId: string; limit: number; offset: number },
+    params: GetAllMemoriesRequest,
     options?: CallOptions,
   ): Promise<GetAllMemoriesResult>;
   /** Mutation: never retried after the request may have reached the server. */

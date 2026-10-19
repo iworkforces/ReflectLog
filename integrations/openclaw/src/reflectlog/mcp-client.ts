@@ -7,6 +7,7 @@ import type { ReflectLogPluginConfig } from "../config.js";
 import {
   addMemoriesSchema, getMemoryByIdSchema, getAllMemoriesSchema,
   parseToolResponse, deleteMemoriesSchema, searchMemoriesSchema,
+  cursorMemoriesSchema, successorMemoryByIdSchema, explainedSearchMemoriesSchema,
 } from "./parse.js";
 import type { ToolResponse } from "./parse.js";
 import { ReflectLogError, REQUIRED_REFLECTLOG_TOOLS } from "./types.js";
@@ -48,7 +49,8 @@ const connectSdk: ConnectFn = async (config, options) => {
   }
 };
 
-type Live = { readonly generation: number; readonly connection: McpConnection };
+type Live = { readonly generation: number; readonly connection: McpConnection;
+  readonly tools: Awaited<ReturnType<McpConnection["listTools"]>>["tools"] };
 
 export function createReflectLogClient(
   config: ReflectLogPluginConfig, deps: ReflectLogClientDeps = {},
@@ -104,7 +106,7 @@ export function createReflectLogClient(
           `ReflectLog is missing: ${missing.join(", ")}`, { cause: tools });
         abort.signal.throwIfAborted();
         if (current !== generation) throw new SdkError(SdkErrorCode.ConnectionClosed, "Connection closed");
-        live = { generation: current, connection };
+        live = { generation: current, connection, tools };
         return live;
       } catch (cause) {
         await Promise.allSettled([connection.close()]);
@@ -121,6 +123,7 @@ export function createReflectLogClient(
   async function invoke<T>(request: {
     readonly name: string; readonly args: Record<string, unknown>;
     readonly mutation?: boolean; readonly schema: z.ZodType<T>;
+    readonly capability?: string;
   }, options?: CallOptions): Promise<T> {
     for (let attempt = 0; attempt < 2; attempt++) {
       let sent = false;
@@ -133,6 +136,10 @@ export function createReflectLogClient(
         const acquired = await waitFor(acquiring, options?.signal);
         current = acquired.generation;
         options?.signal?.throwIfAborted();
+        const properties = acquired.tools.find((tool) => tool.name === request.name)?.inputSchema.properties;
+        if (request.capability && (!properties || !Object.hasOwn(properties, request.capability))) {
+          throw new ReflectLogError("incompatible", `ReflectLog is missing: ${request.name}.${request.capability}`);
+        }
         try {
           options?.beforeDispatch?.();
         } catch (error) {
@@ -177,12 +184,21 @@ export function createReflectLogClient(
   }
 
   return {
-    searchMemories: (p, o) => invoke({ name: "search_memories", schema: searchMemoriesSchema,
-      args: { workspace_id: p.workspaceId, query: p.query, limit: p.limit } }, o),
-    getMemoryById: (p, o) => invoke({ name: "get_memory_by_id", schema: getMemoryByIdSchema,
-      args: { workspace_id: p.workspaceId, id: p.id } }, o),
-    getAllMemories: (p, o) => invoke({ name: "get_all_memories", schema: getAllMemoriesSchema,
-      args: { workspace_id: p.workspaceId, limit: p.limit, offset: p.offset } }, o),
+    searchMemories: (p, o) => invoke({ name: "search_memories",
+      schema: p.explain === true ? explainedSearchMemoriesSchema : searchMemoriesSchema,
+      ...(p.explain === true ? { capability: "explain" } : {}),
+      args: { workspace_id: p.workspaceId, query: p.query, limit: p.limit,
+        ...(p.explain === true ? { explain: true } : {}) } }, o),
+    getMemoryById: (p, o) => invoke({ name: "get_memory_by_id",
+      schema: p.includeSuccessor === true ? successorMemoryByIdSchema : getMemoryByIdSchema,
+      ...(p.includeSuccessor === true ? { capability: "include_successor" } : {}),
+      args: { workspace_id: p.workspaceId, id: p.id,
+        ...(p.includeSuccessor === true ? { include_successor: true } : {}) } }, o),
+    getAllMemories: (p, o) => invoke({ name: "get_all_memories",
+      schema: p.afterId !== undefined ? cursorMemoriesSchema : getAllMemoriesSchema,
+      ...(p.afterId !== undefined ? { capability: "after_id" } : {}),
+      args: { workspace_id: p.workspaceId, limit: p.limit,
+        ...(p.afterId !== undefined ? { after_id: p.afterId } : { offset: p.offset }) } }, o),
     deleteMemories: (p, o) => invoke({ name: "delete_memories", schema: deleteMemoriesSchema,
       mutation: true, args: { workspace_id: p.workspaceId, ids: p.ids } }, o),
     addMemories: (p, o) => invoke({ name: "add_memories", schema: addMemoriesSchema, mutation: !p.dryRun,

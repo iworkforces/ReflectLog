@@ -130,6 +130,40 @@ describe("operator CLI", () => {
     expect(records).toHaveLength(503);
     expect(records[502]).toEqual({ ref: `${owner.tag}:503`, id: 503, text: "record 502", revision: expect.any(String), createdAt: "2026-10-10 00:00:00" });
     expect((await stat(out)).mode & 0o777).toBe(0o600);
+    expect(client.callsTo("getAllMemories").map(call => call.params)).toEqual([
+      { workspaceId: owner.workspaceId, limit: 500, afterId: 0 },
+      { workspaceId: owner.workspaceId, limit: 500, afterId: 500 },
+    ]);
+  });
+  it("leaves an existing output untouched when a cursor continuation is malformed", async () => {
+    const { run, client } = await setup();
+    client.seed(owner.workspaceId, Array.from({ length: 503 }, (_, index) => `record ${index}`));
+    const original = client.getAllMemories.bind(client);
+    client.getAllMemories = async (params, options) => {
+      const page = await original(params, options);
+      return params.afterId === 500 ? { ...page, nextAfterId: 500 } : page;
+    };
+    const out = join(dir, "export.jsonl");
+    await writeFile(out, "keep existing output");
+    await run(["export", "--out", out]);
+    expect(process.exitCode).toBe(1);
+    expect(await readFile(out, "utf8")).toBe("keep existing output");
+    expect(client.callsTo("getAllMemories")).toHaveLength(2);
+  });
+  it("fails unsupported export without disabling ordinary listing or health", async () => {
+    const { run, client } = await setup();
+    client.failNext("getAllMemories", new ReflectLogError("incompatible", "missing after_id"));
+    await run(["export", "--out", join(dir, "unsupported.jsonl")]);
+    expect(process.exitCode).toBe(1);
+    expect(await readdir(dir)).toEqual([]);
+    process.exitCode = undefined;
+    await run(["list", "--json"]);
+    await run(["status", "--json"]);
+    expect(process.exitCode).toBeUndefined();
+    expect(client.callsTo("getAllMemories").slice(1).map(call => call.params)).toEqual([
+      { workspaceId: owner.workspaceId, limit: 100, offset: 0 },
+      { workspaceId: owner.workspaceId, limit: 0, offset: 0 },
+    ]);
   });
   it("exports JSON Lines to stdout when no output file is given", async () => {
     const { run, client } = await setup(); client.seed(owner.workspaceId, ["first", "second"]);
@@ -244,7 +278,7 @@ describe("operator CLI", () => {
   });
   it("fails and keeps the archive incomplete when export verification finds a missing imported text", async () => {
     const { run, client } = await setup(); await writeFile(join(dir, "MEMORY.md"), "Tea");
-    vi.spyOn(client, "getAllMemories").mockResolvedValue({ records: [], total: 0, limit: 500, offset: 0, truncated: false });
+    vi.spyOn(client, "getAllMemories").mockResolvedValue({ records: [], total: 0, limit: 500, offset: 0, truncated: false, nextAfterId: 0 });
     await run(["import", "--workspace-dir", dir, "--archive", "--json"]);
     expect(process.exitCode).toBe(1); expect(await readFile(join(dir, "MEMORY.md"), "utf8")).toBe("Tea");
     expect(summary()).toMatchObject({
