@@ -18,9 +18,9 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
 ]
 dependencies = [
-    "fastmcp==4.1.1",
+    "fastmcp==4.1.3",
     "pydantic==2.14.1",
-    "fastapi[standard]>=0.146.0",
+    "fastapi[standard]>=0.157.0",
     "uvicorn[standard]>=0.54.0",
     "asyncer>=0.0.18",
     "anyio>=4.15.1",
@@ -48,13 +48,13 @@ dependencies = [
     "llvmlite==0.50.0",
     "h2>=4.4.1",
     "hpack>=4.2.0",
-    "sentence-transformers==6.1.0",
+    "sentence-transformers==6.2.0",
     "flagembedding>=1.4.2",
-    "transformers==5.20.1",
+    "transformers==5.20.2",
     "qwen-vl-utils[decord]==0.0.14; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "qwen-vl-utils==0.0.14; sys_platform != 'linux' or platform_machine != 'x86_64'",
     "accelerate>=1.15.0",
-    "claude-agent-sdk>=0.2.168",
+    "claude-agent-sdk>=0.2.170",
     "pydantic-core==2.50.1",
     "torchvision>=0.29.1",
     "flash-linear-attention>=0.5.2",
@@ -86,7 +86,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.8.0",
-    "ty>=0.0.89",
+    "ty>=0.0.90",
     "pyright>=1.1.414",
 ]
 
