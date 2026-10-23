@@ -25,16 +25,16 @@
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "zod": "4.6.7"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.5"
+    "openclaw": ">=2026.10.6"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "commander": "15.0.0",
-    "openclaw": "2026.10.5",
+    "openclaw": "2026.10.6",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   },
@@ -45,14 +45,14 @@
     "install": {
       "npmSpec": "@iworkforces/openclaw-memory-reflectlog",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.10.5"
+      "minHostVersion": ">=2026.10.6"
     },
     "compat": {
-      "pluginApi": ">=2026.10.5",
-      "minGatewayVersion": "2026.10.5"
+      "pluginApi": ">=2026.10.6",
+      "minGatewayVersion": "2026.10.6"
     },
     "build": {
-      "openclawVersion": "2026.10.5"
+      "openclawVersion": "2026.10.6"
     }
   }
 }
