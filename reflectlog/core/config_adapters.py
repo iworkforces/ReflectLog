@@ -281,7 +281,7 @@ class ConfigAdapter(IAppConfig):
 
     @property
     def llm_provider(self) -> LlmProvider:
-        """LLM provider: openai or anthropic."""
+        """LLM provider for smart replacement."""
         return self._config.llm_provider
 
     @property

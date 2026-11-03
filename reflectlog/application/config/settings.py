@@ -355,7 +355,7 @@ class Config:
     smart_replace_retry_delay: float = (
         1.0  # Base delay (seconds) for exponential backoff
     )
-    llm_provider: LlmProvider = LlmProvider.ANTHROPIC
+    llm_provider: LlmProvider = LlmProvider.OPENAI
 
     # Concurrency settings
     add_max_concurrency: int = 4  # Max concurrent memory additions
@@ -547,7 +547,7 @@ class Config:
         )
         llm_provider = parse_str_enum(
             LlmProvider,
-            os.environ.get("LLM_PROVIDER", LlmProvider.ANTHROPIC),
+            os.environ.get("LLM_PROVIDER", LlmProvider.OPENAI),
             field="LLM_PROVIDER",
         )
 

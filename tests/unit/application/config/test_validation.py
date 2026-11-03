@@ -414,16 +414,17 @@ class TestValidateRerankerEngine:
 class TestValidateLlmProvider:
     """Tests for ConfigurationValidator.validate_llm_provider."""
 
-    @pytest.mark.parametrize("provider", ["openai", "anthropic"])
+    @pytest.mark.parametrize("provider", ["openai"])
     def test_valid_providers(self, provider: str) -> None:
         """All valid LLM providers are accepted."""
         v = ConfigurationValidator()
         assert v.validate_llm_provider(provider) is True
 
-    def test_invalid_provider(self):
+    @pytest.mark.parametrize("provider", ["google", "anthropic"])
+    def test_invalid_provider(self, provider: str):
         """Unknown provider is rejected."""
         v = ConfigurationValidator()
-        assert v.validate_llm_provider("google") is False
+        assert v.validate_llm_provider(provider) is False
         assert "Must be one of" in v.errors[0].message
 
 

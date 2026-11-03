@@ -21,7 +21,7 @@ reflectlog/
 │   ├── embedding_identity.py  # provider/model/dims sidecar
 │   └── storage_coordinator.py  # Portalocker + generation sidecar
 ├── plugins/             # discovery/registry/loading; unwired
-└── utility/             # HttpClientFactory, Numba scoring, retry, OS credentials
+└── utility/             # HttpClientFactory, Numba scoring, retry, workspace validation
 ```
 
 ## WHERE TO LOOK
@@ -45,7 +45,7 @@ reflectlog/
 
 ## CONVENTIONS
 
-- Two utility layers: `utility/` = HTTP/scoring/retry/credentials; `application/utils/` = logging/`SecretString`/validation.
+- Two utility layers: `utility/` = HTTP/scoring/retry/workspace validation; `application/utils/` = logging/`SecretString`/validation.
 - Factories: `from_config()` (not `from_app_config()`).
 - Offline export/verify use `ContentSalvageService.from_defaults()` / `ContentSalvageVerifier.from_defaults()`, not config-driven startup. No manager, `MemoryStore`, engines, journal replay, or models; verification opens no SQLite and creates no files.
 - Lock order: Portalocker lease → `_write_lock` → `_lock`. `threading.RLock`.

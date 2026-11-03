@@ -17,8 +17,7 @@ scripts/
 ├── benchmark_remediation.py
 ├── complexity-analysis.sh      # BROKEN: fails `bash -n`
 ├── profile-server.sh           # BROKEN: zsh `print`; flags unparsed
-├── test_anthropic_*.py         # Manual live scripts; not pytest-collected
-├── test_cats_dogs.py
+├── test_cats_dogs.py           # Manual OpenAI/OpenRouter replacement demo
 └── git-hooks/
     ├── pre-push                # typecheck + lint --all; no pytest
     └── README.md
@@ -64,4 +63,4 @@ scripts/
 
 `cd.yml` runs via `workflow_run` after `pr-quality` and `platform-storage` succeed on a `main` push. It tags `v<pyproject version>` and creates a release; it exits 1 if that tag already points at a different SHA, so bump `pyproject.toml` before merging.
 
-`test_cats_dogs.py` and `test_anthropic_add_flow.py` `shutil.rmtree` a relative `indexes/<workspace>` before and after. `test_anthropic_provider.py` takes credentials from the OS keychain. Default pytest never collects `scripts/`; `pytest scripts/` would.
+`test_cats_dogs.py` removes its relative `indexes/<workspace>` before and after its manual run. It uses OpenAI/OpenRouter configuration. Default pytest never collects `scripts/`; `pytest scripts/` would.

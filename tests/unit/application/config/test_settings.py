@@ -195,6 +195,7 @@ class TestConfigDefaults:
     def test_smart_replace_defaults(self):
         cfg = self._make_config()
         assert cfg.enable_smart_replace is True
+        assert cfg.llm_provider == "openai"
         assert cfg.smart_replace_threshold == 0.7
         assert cfg.smart_replace_min_similarity == 0.9
         assert cfg.smart_replace_candidate_limit == 3
@@ -603,6 +604,11 @@ class TestFromEnvironmentOverrides:
 
     def test_llm_provider_openai(self, monkeypatch: pytest.MonkeyPatch):
         cfg = self._with_env(monkeypatch, LLM_PROVIDER="openai")
+        assert cfg.llm_provider == "openai"
+
+    def test_llm_provider_default(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("LLM_PROVIDER", raising=False)
+        cfg = self._with_env(monkeypatch)
         assert cfg.llm_provider == "openai"
 
     def test_llm_provider_invalid(self, monkeypatch: pytest.MonkeyPatch):
@@ -1037,10 +1043,10 @@ class TestStaticParseMethods:
 
     def test_parse_reranker_config_valid(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("RERANKER_ENGINE", "cross_encoder")
-        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+        monkeypatch.setenv("LLM_PROVIDER", "openai")
         result = Config._parse_reranker_config()
         assert result["reranker_engine"] == "cross_encoder"
-        assert result["llm_provider"] == "anthropic"
+        assert result["llm_provider"] == "openai"
 
     def test_parse_reranker_config_invalid_engine_raises(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1053,7 +1059,7 @@ class TestStaticParseMethods:
         self, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setenv("RERANKER_ENGINE", "cross_encoder")
-        monkeypatch.setenv("LLM_PROVIDER", "google")
+        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
         with pytest.raises(ConfigurationError, match="Invalid LLM_PROVIDER"):
             Config._parse_reranker_config()
 

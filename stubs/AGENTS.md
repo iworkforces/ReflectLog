@@ -19,8 +19,7 @@ stubs/
 ├── numba/
 ├── sentence_transformers/
 ├── hypothesis/
-├── flagembedding/
-└── claude_agent_sdk/
+└── flagembedding/
 ```
 
 ## WHERE TO LOOK
