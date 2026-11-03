@@ -18,7 +18,7 @@ Python 3.14 MCP memory server, served over HTTP only (`http`, `streamable-http`;
 │   ├── core/            # Protocols, StrEnums, adapters, leases
 │   ├── infrastructure/  # Engines FLAT; embeddings/ is the only full child
 │   ├── plugins/         # Present; not wired at startup
-│   └── utility/         # HTTP pool, Numba scoring, OS credentials
+│   └── utility/         # HTTP pool, Numba scoring, workspace validation
 ├── tests/               # unit/ mirrors package; integration uses real engines
 ├── integrations/openclaw/  # TypeScript plugin: pnpm + vitest + compiled smoke; scoped CI, no root script
 |-- integrations/hermes/    # Python memory provider: uv + pytest; scoped CI, no root script
@@ -136,6 +136,6 @@ uv run --project integrations/hermes/dev --locked pytest -c integrations/hermes/
 ## GUIDANCE HIERARCHY
 
 Children: `reflectlog/{application,core,infrastructure,plugins,utility}`, `integrations/openclaw` (TypeScript, own toolchain), `integrations/hermes` (Python, own uv project), and `tests/` mirrors.
-Deep: `memory/fusion`, `memory/reranking` (pointer), `utility/platforms`, `infrastructure/embeddings`, `infrastructure/search` (marker).
+Deep: `memory/fusion`, `memory/reranking` (pointer), `infrastructure/embeddings`, `infrastructure/search` (marker).
 `workspace_registry.py` and `embedding_identity.py` stay in their parent guides.
 No guides on empty `infrastructure/{llm,memory,reranking}`.

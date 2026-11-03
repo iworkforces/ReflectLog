@@ -307,18 +307,9 @@ class TestCanonicalPipelineIdentity:
         """Old barrel imports must fail instead of silently returning."""
         import reflectlog
         import reflectlog.application.tools as tools_pkg
-        from reflectlog.utility import utility as utility_mod
 
         assert not hasattr(reflectlog, "main")
         assert not hasattr(tools_pkg, "SearchTool")
-        for name in (
-            "AssistantMessage",
-            "ClaudeAgentOptions",
-            "ResultMessage",
-            "TextBlock",
-        ):
-            assert name not in utility_mod.__all__
-            assert not hasattr(utility_mod, name)
 
     def test_manager_wires_strategies_pipeline(self, tmp_path: Path) -> None:
         """MemoryManager._init_pipelines() uses search_strategies.SearchPipeline."""

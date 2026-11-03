@@ -1,13 +1,10 @@
 """Unit tests for SmartReplacer and replacement providers."""
 
-import asyncio
-from collections.abc import AsyncGenerator
 import json
 import traceback
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import claude_agent_sdk as claude
 from openai import AsyncOpenAI
 import pytest
 
@@ -15,7 +12,6 @@ from reflectlog.application.utils.logging import StructuredLogger
 from reflectlog.core.logging import IStructuredLogger
 from reflectlog.infrastructure.memory_store import MemoryStore
 from reflectlog.infrastructure.smart_replacer import (
-    AnthropicReplacementProvider,
     OpenAIReplacementProvider,
     ReplacementDecision,
     SmartReplacer,
@@ -71,7 +67,6 @@ class RecordingLogger:
         return True
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "anthropic"])
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -91,32 +86,18 @@ class RecordingLogger:
         *(("reason", value) for value in [123, None, ["x"]]),
     ],
 )
-async def test_providers_reject_malformed_decisions(
-    provider_name: str, field: str, value: object
-) -> None:
+async def test_providers_reject_malformed_decisions(field: str, value: object) -> None:
     decision = {"should_replace": True, "confidence": 0.9, "reason": "private reply"}
     decision[field] = value
     logger = RecordingLogger()
-    with patch("reflectlog.utility.utility.init_credentials", autospec=True):
-        provider = (
-            OpenAIReplacementProvider(
-                "key", "https://example.com", "model", logger=logger
-            )
-            if provider_name == "openai"
-            else AnthropicReplacementProvider(logger=logger)
-        )
-    with (
-        patch.object(
-            OpenAIReplacementProvider,
-            "_call_llm_with_structured_output",
-            autospec=True,
-            return_value=decision,
-        ),
-        patch(
-            "reflectlog.utility.utility.generate_content",
-            autospec=True,
-            return_value=json.dumps(decision),
-        ),
+    provider = OpenAIReplacementProvider(
+        "key", "https://example.com", "model", logger=logger
+    )
+    with patch.object(
+        OpenAIReplacementProvider,
+        "_call_llm_with_structured_output",
+        autospec=True,
+        return_value=decision,
     ):
         result = await provider.detect_replacement("private memory", 2, 0)
     assert result[:2] == (False, 0.0)
@@ -125,7 +106,6 @@ async def test_providers_reject_malformed_decisions(
     assert len(logger.records) >= 2
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "anthropic"])
 @pytest.mark.parametrize(
     ("decision", "expected"),
     [
@@ -149,54 +129,27 @@ async def test_providers_reject_malformed_decisions(
     ],
 )
 async def test_providers_preserve_valid_decisions(
-    provider_name: str, decision: dict[str, object], expected: tuple[bool, float, str]
+    decision: dict[str, object], expected: tuple[bool, float, str]
 ) -> None:
-    with patch("reflectlog.utility.utility.init_credentials", autospec=True):
-        provider = (
-            OpenAIReplacementProvider("key", "https://example.com", "model")
-            if provider_name == "openai"
-            else AnthropicReplacementProvider()
-        )
-    with (
-        patch.object(
-            OpenAIReplacementProvider,
-            "_call_llm_with_structured_output",
-            autospec=True,
-            return_value=decision,
-        ),
-        patch(
-            "reflectlog.utility.utility.generate_content",
-            autospec=True,
-            return_value=json.dumps(decision),
-        ),
+    provider = OpenAIReplacementProvider("key", "https://example.com", "model")
+    with patch.object(
+        OpenAIReplacementProvider,
+        "_call_llm_with_structured_output",
+        autospec=True,
+        return_value=decision,
     ):
         result = await provider.detect_replacement("prompt", 1, 0)
     assert result == expected
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "anthropic"])
 @pytest.mark.parametrize("raw", [[], None, "model reply"])
-async def test_providers_reject_non_object_root(
-    provider_name: str, raw: object
-) -> None:
-    with patch("reflectlog.utility.utility.init_credentials", autospec=True):
-        provider = (
-            OpenAIReplacementProvider("key", "https://example.com", "model")
-            if provider_name == "openai"
-            else AnthropicReplacementProvider()
-        )
-    with (
-        patch.object(
-            OpenAIReplacementProvider,
-            "_call_llm_with_structured_output",
-            autospec=True,
-            return_value=raw,
-        ),
-        patch(
-            "reflectlog.utility.utility.generate_content",
-            autospec=True,
-            return_value=json.dumps(raw),
-        ),
+async def test_providers_reject_non_object_root(raw: object) -> None:
+    provider = OpenAIReplacementProvider("key", "https://example.com", "model")
+    with patch.object(
+        OpenAIReplacementProvider,
+        "_call_llm_with_structured_output",
+        autospec=True,
+        return_value=raw,
     ):
         result = await provider.detect_replacement("prompt", 1, 0)
     assert result[:2] == (False, 0.0)
@@ -204,10 +157,9 @@ async def test_providers_reject_non_object_root(
     assert "model reply" not in result[2]
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "anthropic"])
 @pytest.mark.parametrize("scenario", ["accepted", "rejected", "invalid", "json", "sdk"])
 async def test_replacement_flow_keeps_text_private(
-    provider_name: str, scenario: str, tmp_path: Path
+    scenario: str, tmp_path: Path
 ) -> None:
     sentinel = "PRIVATE_SENTINEL_MODEL_MEMORY"
     logger = RecordingLogger()
@@ -223,14 +175,9 @@ async def test_replacement_flow_keeps_text_private(
         if scenario == "json"
         else RuntimeError(sentinel)
     )
-    with patch("reflectlog.utility.utility.init_credentials", autospec=True):
-        provider = (
-            OpenAIReplacementProvider(
-                "key", "https://example.com", "model", logger=logger
-            )
-            if provider_name == "openai"
-            else AnthropicReplacementProvider(logger=logger)
-        )
+    provider = OpenAIReplacementProvider(
+        "key", "https://example.com", "model", logger=logger
+    )
     with patch(
         "reflectlog.infrastructure.smart_replacer.create_replacement_provider",
         autospec=True,
@@ -247,20 +194,12 @@ async def test_replacement_flow_keeps_text_private(
             ),
             logger=logger,
         )
-    with (
-        patch.object(
-            OpenAIReplacementProvider,
-            "_call_llm_with_structured_output",
-            autospec=True,
-            return_value=decision,
-            side_effect=error if scenario in {"json", "sdk"} else None,
-        ),
-        patch(
-            "reflectlog.utility.utility.generate_content",
-            autospec=True,
-            return_value=sentinel if scenario == "json" else json.dumps(decision),
-            side_effect=error if scenario == "sdk" else None,
-        ),
+    with patch.object(
+        OpenAIReplacementProvider,
+        "_call_llm_with_structured_output",
+        autospec=True,
+        return_value=decision,
+        side_effect=error if scenario in {"json", "sdk"} else None,
     ):
         result = await replacer.check_replacement(sentinel, sentinel)
     assert logger.records
@@ -444,7 +383,7 @@ class TestSmartReplacerConfig:
             threshold=0.8,
             enabled=False,
             timeout=60.0,
-            provider="anthropic",
+            provider="openai",
         )
 
         assert config.api_key == "test-key"
@@ -453,7 +392,7 @@ class TestSmartReplacerConfig:
         assert config.threshold == 0.8
         assert config.enabled is False
         assert config.timeout == 60.0
-        assert config.provider == "anthropic"
+        assert config.provider == "openai"
 
     def test_from_app_config(self) -> None:
         """Test factory method from application config."""
@@ -476,40 +415,9 @@ class TestSmartReplacerConfig:
         assert config.enabled is True
         assert config.provider == "openai"
 
-    def test_from_app_config_anthropic_provider(self) -> None:
-        """Test factory method with anthropic provider."""
-        mock_app_config = MagicMock()
-        mock_app_config.llm_api_key = "api-key"
-        mock_app_config.llm_api_base_url = "https://openrouter.ai/api/v1"
-        mock_app_config.llm_model = "claude-sonnet-4-20250514"
-        mock_app_config.smart_replace_threshold = 0.7
-        mock_app_config.enable_smart_replace = True
-        mock_app_config.smart_replace_max_retries = 3
-        mock_app_config.smart_replace_retry_delay = 1.0
-        mock_app_config.llm_provider = "anthropic"
-
-        config = SmartReplacerConfig.from_config(mock_app_config)
-
-        assert config.provider == "anthropic"
-        assert config.model == "claude-sonnet-4-20250514"
-
 
 class TestCreateReplacementProvider:
     """Test create_replacement_provider factory function."""
-
-    def test_forwards_anthropic_timeout(self) -> None:
-        config = SmartReplacerConfig(
-            "key", "url", "model", timeout=0.125, provider="anthropic"
-        )
-        with (
-            patch("reflectlog.utility.utility.init_credentials"),
-            patch(
-                "reflectlog.infrastructure.smart_replacer.AnthropicReplacementProvider",
-                autospec=True,
-            ) as constructor,
-        ):
-            create_replacement_provider(config)
-        constructor.assert_called_once_with(model="model", timeout=0.125, logger=None)
 
     def test_create_openai_provider(self) -> None:
         """Test creating OpenAI provider."""
@@ -527,21 +435,6 @@ class TestCreateReplacementProvider:
 
             assert isinstance(provider, OpenAIReplacementProvider)
             mock_async_client.assert_not_called()
-
-    def test_create_anthropic_provider(self) -> None:
-        """Test creating Anthropic provider."""
-        config = SmartReplacerConfig(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api/v1",
-            model="claude-sonnet-4-20250514",
-            provider="anthropic",
-        )
-
-        with patch("reflectlog.utility.utility.init_credentials") as mock_init:
-            provider = create_replacement_provider(config)
-
-            assert isinstance(provider, AnthropicReplacementProvider)
-            mock_init.assert_called_once_with(verbose=False)
 
     def test_create_invalid_provider_raises_error(self) -> None:
         """Test that invalid provider raises ValueError."""
@@ -724,300 +617,6 @@ class TestOpenAIReplacementProvider:
         assert "Error" in reason
 
 
-class TestAnthropicReplacementProvider:
-    """Test AnthropicReplacementProvider."""
-
-    @pytest.mark.parametrize("max_retries", [2, 3])
-    async def test_stalled_stream_times_out_every_attempt(
-        self, monkeypatch: pytest.MonkeyPatch, max_retries: int
-    ) -> None:
-        attempts = 0
-        closed = 0
-        delays: list[float] = []
-
-        async def query(
-            *, prompt: str, options: claude.ClaudeAgentOptions
-        ) -> AsyncGenerator[claude.Message]:
-            nonlocal attempts, closed
-            attempts += 1
-            try:
-                yield claude.SystemMessage("init", {})
-                await asyncio.Event().wait()
-            finally:
-                closed += 1
-
-        async def sleep(delay: float) -> None:
-            delays.append(delay)
-
-        monkeypatch.setattr("reflectlog.utility.utility._claude.query", query)
-        monkeypatch.setattr(
-            "reflectlog.infrastructure.smart_replacer.asyncio.sleep", sleep
-        )
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(timeout=0.05)
-        result = await asyncio.wait_for(
-            provider.detect_replacement("Test", max_retries, 1.0), timeout=2.0
-        )
-        assert result == (
-            False,
-            0.0,
-            "Error: replacement detection failed (TimeoutError)",
-        )
-        assert attempts == closed == max_retries
-        assert delays == [float(2**i) for i in range(max_retries - 1)]
-
-    async def test_timeout_then_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        attempts = 0
-        closed = 0
-
-        async def query(
-            *, prompt: str, options: claude.ClaudeAgentOptions
-        ) -> AsyncGenerator[claude.Message]:
-            nonlocal attempts, closed
-            attempts += 1
-            try:
-                yield claude.SystemMessage("init", {})
-                if attempts == 1:
-                    await asyncio.Event().wait()
-                yield claude.AssistantMessage(
-                    [
-                        claude.TextBlock(
-                            '{"should_replace": true, "confidence": 0.9, "reason": "Updated"}'
-                        )
-                    ],
-                    "test-model",
-                )
-            finally:
-                closed += 1
-
-        monkeypatch.setattr("reflectlog.utility.utility._claude.query", query)
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(timeout=0.05)
-        result = await asyncio.wait_for(
-            provider.detect_replacement("Test", 2, 0.0), timeout=2.0
-        )
-        assert result == (True, 0.9, "Updated")
-        assert attempts == closed == 2
-
-    async def test_external_cancellation_is_not_retried(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        entered = asyncio.Event()
-        attempts = 0
-        closed = 0
-        delays: list[float] = []
-
-        async def query(
-            *, prompt: str, options: claude.ClaudeAgentOptions
-        ) -> AsyncGenerator[claude.Message]:
-            nonlocal attempts, closed
-            attempts += 1
-            try:
-                yield claude.SystemMessage("init", {})
-                entered.set()
-                await asyncio.Event().wait()
-            finally:
-                closed += 1
-
-        async def sleep(delay: float) -> None:
-            delays.append(delay)
-
-        monkeypatch.setattr("reflectlog.utility.utility._claude.query", query)
-        monkeypatch.setattr(
-            "reflectlog.infrastructure.smart_replacer.asyncio.sleep", sleep
-        )
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(timeout=30.0)
-        task = asyncio.create_task(provider.detect_replacement("Test", 3, 1.0))
-        await asyncio.wait_for(entered.wait(), timeout=1.0)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert attempts == closed == 1
-        assert delays == []
-
-    def test_extract_json_pure_json(self) -> None:
-        """Test extracting pure JSON from response."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        result = provider._extract_json_from_response(
-            '{"should_replace": true, "confidence": 0.9, "reason": "Test"}'
-        )
-
-        assert result["should_replace"] is True
-        assert result["confidence"] == 0.9
-        assert result["reason"] == "Test"
-
-    def test_extract_json_markdown_code_block(self) -> None:
-        """Test extracting JSON from markdown code block."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        response = """Here's the analysis:
-
-```json
-{"should_replace": true, "confidence": 0.85, "reason": "Updated preference"}
-```
-
-That's my assessment."""
-
-        result = provider._extract_json_from_response(response)
-
-        assert result["should_replace"] is True
-        assert result["confidence"] == 0.85
-
-    def test_extract_json_embedded_json(self) -> None:
-        """Test extracting embedded JSON from text."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        response = 'Result: {"should_replace": false, "confidence": 0.3} done.'
-
-        result = provider._extract_json_from_response(response)
-
-        assert result["should_replace"] is False
-        assert result["confidence"] == 0.3
-
-    def test_extract_json_markdown_block_invalid_json_falls_through(self) -> None:
-        """Test markdown code block with invalid JSON falls through to embedded strategy."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        response = """Here's my analysis:
-
-```json
-{not valid json at all!!!}
-```
-
-But the result is {"should_replace": true, "confidence": 0.8, "reason": "Updated"}"""
-
-        result = provider._extract_json_from_response(response)
-
-        assert result["should_replace"] is True
-        assert result["confidence"] == 0.8
-
-    def test_extract_json_markdown_block_invalid_json_no_fallback(self) -> None:
-        """Test markdown code block with invalid JSON and no valid embedded JSON raises."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        response = """Here's my analysis:
-
-```json
-{this is not valid json}
-```
-
-No valid JSON anywhere else either."""
-
-        with pytest.raises(ValueError, match="Could not extract JSON"):
-            provider._extract_json_from_response(response)
-
-    def test_extract_json_embedded_invalid_json_continues(self) -> None:
-        """Test embedded JSON patterns with invalid JSON continue to next match."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        response = 'Result: {invalid json} but also {"should_replace": false, "confidence": 0.4, "reason": "No match"}'
-
-        result = provider._extract_json_from_response(response)
-
-        assert result["should_replace"] is False
-        assert result["confidence"] == 0.4
-
-    def test_extract_json_all_embedded_invalid_raises(self) -> None:
-        """Test all embedded JSON patterns invalid raises ValueError."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        response = "Result: {bad json} and also {more bad} end"
-
-        with pytest.raises(ValueError, match="Could not extract JSON"):
-            provider._extract_json_from_response(response)
-
-    def test_extract_json_fails_raises_error(self) -> None:
-        """Test that extraction failure raises ValueError."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        with pytest.raises(ValueError, match="Could not extract JSON"):
-            provider._extract_json_from_response("No JSON here at all!")
-
-    @pytest.mark.asyncio
-    async def test_detect_replacement_success(self) -> None:
-        """Test successful replacement detection with Anthropic."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        with patch("reflectlog.utility.utility.generate_content") as mock_generate:
-            mock_generate.return_value = json.dumps(
-                {
-                    "should_replace": True,
-                    "confidence": 0.88,
-                    "reason": "Same topic updated",
-                }
-            )
-
-            should_replace, confidence, reason = await provider.detect_replacement(
-                prompt="test prompt",
-                max_retries=3,
-                retry_delay=1.0,
-            )
-
-            assert should_replace is True
-            assert confidence == 0.88
-            assert reason == "Same topic updated"
-            mock_generate.assert_called_once_with(
-                prompt="test prompt",
-                model="claude-sonnet-4-20250514",
-                allowed_tools=[],
-            )
-
-    @pytest.mark.asyncio
-    async def test_detect_replacement_with_markdown_response(self) -> None:
-        """Test replacement detection with markdown-wrapped response."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        with patch("reflectlog.utility.utility.generate_content") as mock_generate:
-            mock_generate.return_value = """Analysis complete:
-
-```json
-{"should_replace": true, "confidence": 0.92, "reason": "Preference changed"}
-```"""
-
-            should_replace, confidence, _reason = await provider.detect_replacement(
-                prompt="test prompt",
-                max_retries=3,
-                retry_delay=1.0,
-            )
-
-            assert should_replace is True
-            assert confidence == 0.92
-
-    @pytest.mark.asyncio
-    async def test_all_retries_exhausted_returns_safe_defaults(self) -> None:
-        """Test that exhausted retries return safe defaults."""
-        with patch("reflectlog.utility.utility.init_credentials"):
-            provider = AnthropicReplacementProvider(model="claude-sonnet-4-20250514")
-
-        with patch("reflectlog.utility.utility.generate_content") as mock_generate:
-            mock_generate.side_effect = Exception("API Error")
-
-            mock_logger = create_mock_logger()
-            provider._logger = mock_logger
-
-            should_replace, confidence, reason = await provider.detect_replacement(
-                prompt="test prompt",
-                max_retries=2,
-                retry_delay=0.01,
-            )
-
-            assert should_replace is False
-            assert confidence == 0.0
-            assert "Error" in reason
-
-
 class TestSmartReplacerInitialization:
     """Test SmartReplacer initialization."""
 
@@ -1039,23 +638,6 @@ class TestSmartReplacerInitialization:
             mock_async_client.assert_not_called()
             assert replacer._provider is not None
             assert isinstance(replacer._provider, OpenAIReplacementProvider)
-
-    def test_initialization_creates_anthropic_provider_when_enabled(self) -> None:
-        """Test that initialization creates Anthropic provider when enabled."""
-        config = SmartReplacerConfig(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api/v1",
-            model="claude-sonnet-4-20250514",
-            enabled=True,
-            provider="anthropic",
-        )
-
-        with patch("reflectlog.utility.utility.init_credentials") as mock_init:
-            replacer = SmartReplacer(config=config)
-
-            mock_init.assert_called_once_with(verbose=False)
-            assert replacer._provider is not None
-            assert isinstance(replacer._provider, AnthropicReplacementProvider)
 
     def test_initialization_no_provider_when_disabled(self) -> None:
         """Test that no provider is created when disabled."""
@@ -1367,38 +949,6 @@ class TestSmartReplacerIntegration:
             assert should_replace is True
             assert confidence == 0.9
             assert "Updated preference" in reason
-
-    @pytest.mark.asyncio
-    async def test_full_replacement_flow_anthropic_replace(self) -> None:
-        """Test complete replacement flow with Anthropic provider."""
-        config = SmartReplacerConfig(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api/v1",
-            model="claude-sonnet-4-20250514",
-            threshold=0.7,
-            provider="anthropic",
-        )
-
-        with patch("reflectlog.utility.utility.init_credentials"):
-            replacer = SmartReplacer(config=config, logger=create_mock_logger())
-
-            with patch("reflectlog.utility.utility.generate_content") as mock_generate:
-                mock_generate.return_value = json.dumps(
-                    {
-                        "should_replace": True,
-                        "confidence": 0.85,
-                        "reason": "Updated location",
-                    }
-                )
-
-                should_replace, confidence, reason = await replacer.check_replacement(
-                    new_memory="I moved to San Francisco",
-                    existing_memory="I live in New York",
-                )
-
-                assert should_replace is True
-                assert confidence == 0.85
-                assert "Updated location" in reason
 
     @pytest.mark.asyncio
     async def test_full_replacement_flow_no_replace(self) -> None:

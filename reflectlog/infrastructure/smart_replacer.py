@@ -3,8 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 import json
-import re
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
@@ -47,18 +46,6 @@ class ReplacementDecision(BaseModel):
     )
 
 
-class AnthropicReplacementResponse(TypedDict, total=False):
-    should_replace: bool
-    confidence: float
-    reason: str
-
-
-def _as_replacement_response(raw: object) -> AnthropicReplacementResponse:
-    if not isinstance(raw, dict):
-        raise ValueError("Replacement response is not a JSON object")
-    return cast("AnthropicReplacementResponse", raw)
-
-
 @dataclass(frozen=True)
 class SmartReplacerConfig:
     """Configuration for SmartReplacer.
@@ -69,12 +56,10 @@ class SmartReplacerConfig:
         model: LLM model identifier (e.g., 'x-ai/grok-4.1-fast').
         threshold: Minimum confidence score to trigger replacement (0.0-1.0).
         enabled: Whether smart replacement is enabled.
-        timeout: Per-attempt timeout in seconds for replacement detection:
-            OpenAI request timeout; Anthropic full SDK exchange including
-            stream consumption.
+        timeout: Per-attempt timeout in seconds for replacement detection.
         max_retries: Maximum number of retry attempts for LLM calls.
         retry_delay: Base delay in seconds for exponential backoff.
-        provider: LLM provider ('openai' or 'anthropic').
+        provider: LLM provider ('openai').
     """
 
     api_key: str
@@ -85,7 +70,7 @@ class SmartReplacerConfig:
     timeout: float = 30.0
     max_retries: int = 3
     retry_delay: float = 1.0
-    provider: str = "openai"  # Provider: "openai" or "anthropic"
+    provider: str = "openai"
 
     @classmethod
     def from_config(cls, config: IAppConfig) -> SmartReplacerConfig:
@@ -213,145 +198,6 @@ class OpenAIReplacementProvider(BaseOpenAIProvider):
         return (False, 0.0, f"Error: replacement detection failed ({error_type})")
 
 
-class AnthropicReplacementProvider:
-    """Anthropic Claude-based replacement detection provider.
-
-    Uses Claude Agent SDK via utility module for LLM calls.
-    Parses JSON from plain text responses with multiple fallback strategies.
-    """
-
-    def __init__(
-        self,
-        model: str | None = None,
-        timeout: float = 30.0,
-        logger: IStructuredLogger | None = None,
-    ) -> None:
-        """Initialize Anthropic replacement provider.
-
-        Calls init_credentials() to set up OAuth credentials.
-
-        Args:
-            model: LLM model identifier (passed to generate_content).
-            timeout: Per-attempt timeout for the full SDK exchange and parsing.
-            logger: Optional structured logger.
-        """
-        super().__init__()
-
-        # Lazy import to avoid dependency issues
-        from reflectlog.utility.utility import init_credentials
-
-        _ = init_credentials(verbose=False)
-        self._model = model
-        self._timeout = timeout
-        self._logger = logger
-
-    def _extract_json_from_response(
-        self, response_text: str
-    ) -> AnthropicReplacementResponse:
-        """Extract JSON from plain text response.
-
-        Handles multiple response formats:
-        1. Pure JSON
-        2. Markdown code blocks (```json ... ```)
-        3. Embedded JSON in text
-
-        Args:
-            response_text: Raw response text from LLM.
-
-        Returns:
-            Parsed JSON dictionary.
-
-        Raises:
-            ValueError: If JSON extraction fails.
-        """
-        text = response_text.strip()
-
-        # Strategy 1: Direct JSON parse
-        try:
-            return _as_replacement_response(json.loads(text))
-        except json.JSONDecodeError:
-            pass
-
-        # Strategy 2: Markdown code block
-        code_block_pattern = r"```(?:json)?\s*\n?([\s\S]*?)\n?```"
-        match = re.search(code_block_pattern, text)
-        if match:
-            try:
-                return _as_replacement_response(json.loads(match.group(1).strip()))
-            except json.JSONDecodeError:
-                pass
-
-        # Strategy 3: Find embedded JSON object
-        json_pattern = r"\{[\s\S]*?\}"
-        matches = list(re.finditer(json_pattern, text))
-        for match in matches:
-            try:
-                return _as_replacement_response(json.loads(match.group(0)))
-            except json.JSONDecodeError:
-                continue
-
-        raise ValueError("Could not extract JSON from response")
-
-    async def detect_replacement(
-        self,
-        prompt: str,
-        max_retries: int,
-        retry_delay: float,
-    ) -> tuple[bool, float, str]:
-        """Detect if replacement should occur using Anthropic Claude.
-
-        Args:
-            prompt: The formatted replacement detection prompt.
-            max_retries: Maximum number of retry attempts.
-            retry_delay: Base delay in seconds for exponential backoff.
-
-        Returns:
-            Tuple of (should_replace, confidence, reason).
-        """
-        # Lazy import to avoid dependency issues
-        from reflectlog.utility.utility import generate_content
-
-        last_exception: Exception | None = None
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                async with asyncio.timeout(self._timeout):
-                    response_text = await generate_content(
-                        prompt=prompt,
-                        model=self._model,
-                        allowed_tools=[],
-                    )
-                    result = self._extract_json_from_response(response_text)
-                    return parse_replacement_decision(result)
-
-            except Exception as e:
-                last_exception = e
-
-                if self._logger:
-                    self._logger.warning(
-                        f"Anthropic replacement detection failed "
-                        f"(attempt {attempt}/{max_retries})",
-                        extra={
-                            "attempt": attempt,
-                            "max_retries": max_retries,
-                            "exception_type": type(e).__name__,
-                        },
-                    )
-
-                if attempt < max_retries:
-                    delay = retry_delay * (2 ** (attempt - 1))
-                    if self._logger:
-                        self._logger.debug(
-                            f"Retrying in {delay:.1f}s",
-                            extra={"delay": delay, "next_attempt": attempt + 1},
-                        )
-                    await asyncio.sleep(delay)
-
-        # All retries exhausted - return safe defaults
-        error_type = type(last_exception).__name__ if last_exception else "Unknown"
-        return (False, 0.0, f"Error: replacement detection failed ({error_type})")
-
-
 def create_replacement_provider(
     config: SmartReplacerConfig,
     logger: IStructuredLogger | None = None,
@@ -379,16 +225,9 @@ def create_replacement_provider(
             timeout=config.timeout,
             logger=logger,
         )
-    elif config.provider == "anthropic":
-        return AnthropicReplacementProvider(
-            model=config.model,
-            timeout=config.timeout,
-            logger=logger,
-        )
     else:
         raise ValueError(
-            f"Unsupported provider: '{config.provider}'. "
-            f"Valid options: 'openai', 'anthropic'"
+            f"Unsupported provider: '{config.provider}'. Valid options: 'openai'"
         )
 
 
@@ -398,9 +237,7 @@ class SmartReplacer(BaseModel):
     This class determines if a new memory should replace an existing one
     by analyzing semantic similarity and contextual updates using an LLM.
 
-    Supports multiple LLM providers via the provider abstraction:
-    - 'openai': OpenRouter/OpenAI API with structured JSON output
-    - 'anthropic': Claude Agent SDK via utility module
+    Uses the OpenRouter/OpenAI API with structured JSON output.
 
     Attributes:
         config: SmartReplacerConfig with API credentials and settings.

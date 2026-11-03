@@ -135,7 +135,6 @@ class TestSmartReplacerAPI:
     def test_exports_exist(self) -> None:
         """SmartReplacer, SmartReplacerConfig, ReplacementDecision are importable."""
         from reflectlog.infrastructure.smart_replacer import (
-            AnthropicReplacementProvider,
             OpenAIReplacementProvider,
             ReplacementDecision,
             SmartReplacer,
@@ -148,7 +147,6 @@ class TestSmartReplacerAPI:
         assert SmartReplacerConfig is not None
         assert ReplacementDecision is not None
         assert OpenAIReplacementProvider is not None
-        assert AnthropicReplacementProvider is not None
 
     def test_smart_replacer_has_check_replacement(self) -> None:
         """SmartReplacer must expose check_replacement method."""

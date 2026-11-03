@@ -27,8 +27,7 @@ async def main() -> int:
 
     # Set environment variables
     os.environ["WORKSPACE_ID"] = workspace_id
-    os.environ["LLM_PROVIDER"] = "anthropic"
-    os.environ["LLM_MODEL"] = "claude-sonnet-4-5"
+    os.environ["LLM_PROVIDER"] = "openai"
     os.environ["ENABLE_SMART_REPLACE"] = "true"
     os.environ["SMART_REPLACE_THRESHOLD"] = "0.7"
     os.environ["SMART_REPLACE_MIN_SIMILARITY"] = "0.5"  # Default threshold
@@ -87,18 +86,13 @@ async def main() -> int:
             print("   Let's check the similarity score...")
 
             # Check similarity manually
+            from reflectlog.core.config_adapters import ConfigAdapter
             from reflectlog.infrastructure.smart_replacer import (
                 SmartReplacer,
                 SmartReplacerConfig,
             )
 
-            sr_config = SmartReplacerConfig(
-                api_key="not-used",
-                base_url="not-used",
-                model="claude-sonnet-4-5",
-                threshold=0.7,
-                provider="anthropic",
-            )
+            sr_config = SmartReplacerConfig.from_config(ConfigAdapter(config))
             replacer = SmartReplacer(config=sr_config, logger=None)
 
             print()

@@ -103,7 +103,6 @@ class LlmProvider(StrEnum):
     """LLM vendor used by smart replacement."""
 
     OPENAI = "openai"
-    ANTHROPIC = "anthropic"
 
 
 class CrossEncoderDevice(StrEnum):

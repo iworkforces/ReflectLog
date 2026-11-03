@@ -202,7 +202,7 @@ class IRerankerConfig(Protocol):
 
     @property
     def llm_provider(self) -> LlmProvider:
-        """LLM provider: openai or anthropic."""
+        """LLM provider for smart replacement."""
         ...
 
     @property
